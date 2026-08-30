@@ -1014,7 +1014,7 @@ main(int argc, char* argv[])
         DEFAULT_SIMULATION_TIME;
 
     std::string telemetryFileName =
-        "ndt_telemetry.csv";
+        "../ndt/data/telemetry.csv";
 
     cmd.AddValue(
         "simulationTime",
