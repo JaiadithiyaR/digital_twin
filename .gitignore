@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Data / artifacts (generated at runtime — schemas live in code, not the blobs)
+data/bootstrap/*
+data/telemetry/*
+data/evaluation/*
+data/artifacts/*
+!data/bootstrap/.gitkeep
+!data/telemetry/.gitkeep
+!data/evaluation/.gitkeep
+!data/artifacts/.gitkeep
+
+# RAG persistent vector store
+rag_data/chroma/
+rag_data/**/*.chroma
+
+# Model registry artifacts (large binaries — tracked via registry metadata, not git)
+data/models/
+
+# Candidate sandbox workspaces
+sandbox_workspaces/
+/tmp_candidates/
+
+# Vendored ns-3-dev + contrib/nr (5G-LENA) source trees are an external build
+# dependency fetched by scripts/setup_ns3.sh (pinned tags recorded in ns3_sim/README.md),
+# not project-authored code — excluded the same way a compiler toolchain would be.
+# Our own scenario source lives directly under ns3_sim/ and IS tracked.
+ns3_sim/ns-3-dev/
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Zone.Identifier files from Windows downloads
+*:Zone.Identifier

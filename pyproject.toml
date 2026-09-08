@@ -1,0 +1,18 @@
+[project]
+name = "ai-self-adaptive-digital-twin"
+version = "0.1.0"
+description = "AI-Driven Self-Adaptive Network Digital Twin platform (NS-3/5G-LENA telemetry, dynamic DT, PPO-driven adaptation, LLM-assisted regeneration/expand-scope, agentic verification, RAG, lifecycle management)."
+requires-python = ">=3.12"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

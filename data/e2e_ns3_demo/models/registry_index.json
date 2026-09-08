@@ -1,0 +1,232 @@
+{
+  "throughput": [
+    {
+      "component": "throughput",
+      "version_id": "throughput-v1",
+      "model_class": "ThroughputModel",
+      "artifact_path": "throughput/throughput-v1.joblib",
+      "source_path": null,
+      "dependencies": [],
+      "feature_schema": [
+        "offered_load_mbps",
+        "prb_utilization_pct",
+        "sinr_db",
+        "rsrp_dbm",
+        "rsrq_db",
+        "ue_count",
+        "ue_speed_mps"
+      ],
+      "output_field": "throughput_mbps_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-09-07T17:53:58.260868Z",
+      "training_window": {
+        "n_rows": 1200,
+        "provenance": "bootstrap"
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 0.3278499050981266,
+        "mae": 0.23968619584046286
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    }
+  ],
+  "packet_loss": [
+    {
+      "component": "packet_loss",
+      "version_id": "packet_loss-v1",
+      "model_class": "PacketLossModel",
+      "artifact_path": "packet_loss/packet_loss-v1.joblib",
+      "source_path": null,
+      "dependencies": [],
+      "feature_schema": [
+        "sinr_db",
+        "rsrp_dbm",
+        "rsrq_db",
+        "prb_utilization_pct",
+        "ue_count",
+        "offered_load_mbps"
+      ],
+      "output_field": "packet_loss_pct_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-09-07T17:53:58.757988Z",
+      "training_window": {
+        "n_rows": 1200,
+        "provenance": "bootstrap"
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 0.09216985751808764,
+        "mae": 0.06688591238429265
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    }
+  ],
+  "latency": [
+    {
+      "component": "latency",
+      "version_id": "latency-v1",
+      "model_class": "LatencyModel",
+      "artifact_path": "latency/latency-v1.joblib",
+      "source_path": null,
+      "dependencies": [
+        "throughput"
+      ],
+      "feature_schema": [
+        "offered_load_mbps",
+        "prb_utilization_pct",
+        "ue_count",
+        "packet_loss_pct",
+        "sinr_db"
+      ],
+      "output_field": "latency_ms_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-09-07T17:53:59.216074Z",
+      "training_window": {
+        "n_rows": 1200,
+        "provenance": "bootstrap"
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 0.730218448457251,
+        "mae": 0.5449677574985047
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    }
+  ],
+  "prb_utilization": [
+    {
+      "component": "prb_utilization",
+      "version_id": "prb_utilization-v1",
+      "model_class": "PrbUtilizationModel",
+      "artifact_path": "prb_utilization/prb_utilization-v1.joblib",
+      "source_path": null,
+      "dependencies": [
+        "throughput"
+      ],
+      "feature_schema": [
+        "offered_load_mbps",
+        "ue_count",
+        "cell_id",
+        "timestamp"
+      ],
+      "output_field": "prb_utilization_pct_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-09-07T17:54:00.212324Z",
+      "training_window": {
+        "n_rows": 1200,
+        "provenance": "bootstrap"
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 4.387276925575692,
+        "mae": 3.56678789324466
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    }
+  ],
+  "jitter": [
+    {
+      "component": "jitter",
+      "version_id": "jitter-v1",
+      "model_class": "JitterModel",
+      "artifact_path": "jitter/jitter-v1.joblib",
+      "source_path": null,
+      "dependencies": [
+        "throughput",
+        "latency",
+        "packet_loss"
+      ],
+      "feature_schema": [
+        "offered_load_mbps",
+        "ue_count"
+      ],
+      "output_field": "jitter_ms_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-09-07T17:54:00.303890Z",
+      "training_window": {
+        "n_rows": 1200,
+        "provenance": "bootstrap"
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 1.157646652989754,
+        "mae": 0.9711387929515236
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    },
+    {
+      "component": "jitter",
+      "version_id": "jitter-v2",
+      "model_class": "JitterModel",
+      "artifact_path": "jitter/jitter-v2.joblib",
+      "source_path": null,
+      "dependencies": [
+        "throughput",
+        "latency",
+        "packet_loss"
+      ],
+      "feature_schema": [
+        "offered_load_mbps",
+        "ue_count"
+      ],
+      "output_field": "jitter_ms_pred",
+      "adaptation_type": "recalibrate",
+      "parent_version_id": "jitter-v1",
+      "created_at": "2026-09-07T17:55:33.063808Z",
+      "training_window": {
+        "start": "2026-09-07T17:53:54.339775+00:00",
+        "end": "2026-09-07T17:54:00.139775+00:00",
+        "n_rows": 352,
+        "window_hours": 24.0,
+        "provenance": "d1_history",
+        "ue_id": null,
+        "cell_id": null
+      },
+      "evaluation_window": {
+        "start": "2026-09-07T17:54:00.139775+00:00",
+        "end": "2026-09-07T17:55:25.718910+00:00",
+        "n_rows": 88,
+        "provenance": "d1_history"
+      },
+      "evaluation_metrics": {
+        "rmse": 0.10982091564871024,
+        "mae": 0.05507800674624741
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "rejected",
+      "llm_metadata": null
+    }
+  ]
+}

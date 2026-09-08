@@ -1,0 +1,277 @@
+# Central configuration for the AI-Driven Self-Adaptive Network Digital Twin.
+#
+# Secrets (e.g. ANTHROPIC_API_KEY) are NEVER stored here — see .env.example.
+# Every tunable referenced anywhere in src/ must be sourced from this file (via
+# src/common/config.py) rather than hardcoded. See CLAUDE.md for the module map.
+
+environment: demo # "demo" | "live" — selects mock vs real telemetry/drift sources at startup
+
+# ---------------------------------------------------------------------------
+# Module 1/2 — Telemetry source & preprocessing
+# ---------------------------------------------------------------------------
+telemetry:
+  source: mock # "mock" | "zmq" — real NS-3/5G-LENA telemetry arrives over zmq
+  mock:
+    seed: 42
+    emit_interval_seconds: 1.0
+    num_ues: 20
+    num_cells: 3
+    # Injected imperfections so the mock source exercises the same missing-value/flagging paths
+    # real telemetry would — a demo run must exercise the same pipeline as live (prompt.md §48).
+    missing_field_rate: 0.03
+    out_of_range_rate: 0.02
+  zmq:
+    endpoint: "tcp://127.0.0.1:5556"
+    topic: "ns3.telemetry"
+    recv_timeout_ms: 2000
+    high_water_mark: 10000
+  preprocessing:
+    # Required fields a raw telemetry record must contain to be accepted.
+    required_fields:
+      - timestamp
+      - ue_id
+      - cell_id
+      - throughput_mbps
+      - offered_load_mbps
+      - latency_ms
+      - jitter_ms
+      - packet_loss_pct
+      - prb_utilization_pct
+      - sinr_db
+      - rsrp_dbm
+      - rsrq_db
+      - ue_count
+      - ue_speed_mps
+    # Physically plausible ranges used to flag (not silently drop) invalid records. sinr_db's
+    # upper bound was widened from an initial 40.0 guess (made before any real producer existed)
+    # to 65.0 after validating against ns3_sim/nr_5g_telemetry_sim.cc end-to-end: a UE very close
+    # to the gNB in an interference-free single-cell scenario genuinely reaches ~63 dB SINR (real
+    # DlDataSinr trace values, not a bug) — the old 40.0 cap was flagging real, valid records as
+    # out_of_range purely because the mock generator never happened to produce anything that high.
+    valid_ranges:
+      throughput_mbps: [0.0, 10000.0]
+      offered_load_mbps: [0.0, 10000.0]
+      latency_ms: [0.0, 5000.0]
+      jitter_ms: [0.0, 2000.0]
+      packet_loss_pct: [0.0, 100.0]
+      prb_utilization_pct: [0.0, 100.0]
+      sinr_db: [-20.0, 65.0]
+      rsrp_dbm: [-140.0, -40.0]
+      rsrq_db: [-30.0, 0.0]
+      ue_speed_mps: [0.0, 100.0]
+    feature_window_size: 50 # rows per constructed feature window
+    max_missing_ratio: 0.2 # above this, a window is flagged low-quality rather than used
+
+# ---------------------------------------------------------------------------
+# Module 3 — Continuous synchronization (telemetry -> D1, no manual sync step)
+# ---------------------------------------------------------------------------
+synchronization:
+  batch_size: 20 # flush a batch into D1 after this many raw records accumulate...
+  batch_timeout_seconds: 2.0 # ...or after this much time has elapsed, whichever comes first
+
+# ---------------------------------------------------------------------------
+# Module 3/4 — Synchronization & D1 state/history store
+# ---------------------------------------------------------------------------
+storage:
+  root_dir: "data"
+  bootstrap_dir: "data/bootstrap"
+  telemetry_dir: "data/telemetry"
+  evaluation_dir: "data/evaluation"
+  artifacts_dir: "data/artifacts"
+  models_dir: "data/models" # versioned model registry artifacts (gitignored)
+  d1_current_state_path: "data/artifacts/d1_current_state.parquet"
+  d1_history_path: "data/artifacts/d1_history.parquet"
+  d1_quarantine_path: "data/artifacts/d1_quarantine.parquet"
+  history_retention_rows: 500000 # oldest rows pruned beyond this (historical analysis window)
+
+# ---------------------------------------------------------------------------
+# Module 5–10 — DT functional model / prediction components
+# ---------------------------------------------------------------------------
+dt_models:
+  enable_prb_model: true # PRB-utilization is independently toggleable; rest of system must not break if false
+  bootstrap_min_rows: 200 # minimum bootstrap rows required before initial training
+  throughput:
+    model_type: xgboost
+    params: { n_estimators: 300, max_depth: 6, learning_rate: 0.05, random_state: 42 }
+  packet_loss:
+    model_type: xgboost
+    params: { n_estimators: 300, max_depth: 6, learning_rate: 0.05, random_state: 42 }
+  latency:
+    model_type: xgboost
+    params: { n_estimators: 300, max_depth: 6, learning_rate: 0.05, random_state: 42 }
+  prb_utilization:
+    model_type: random_forest
+    params: { n_estimators: 200, max_depth: 10, random_state: 42 }
+  jitter:
+    model_type: xgboost
+    # Shallower/fewer trees than the other components' shared default (300/depth-6): jitter's
+    # relationship to its inputs is comparatively subtle and noisy (mostly latency scaled by an
+    # independent random factor per the mock generator), so the general-purpose default badly
+    # overfits on a bootstrap-sized dataset (~1000 rows) — observed train RMSE 0.47 vs held-out
+    # RMSE 1.29, a classic overfitting signature, discovered validating Module 10. This
+    # regularized configuration (shallow trees, subsampling) was empirically the best of several
+    # tested against real held-out bootstrap data — see IMPLEMENTATION_STATUS.md Module 10 entry.
+    params: { n_estimators: 80, max_depth: 2, learning_rate: 0.1, subsample: 0.9, random_state: 42 }
+
+# ---------------------------------------------------------------------------
+# Module 12 — Fidelity engine (deterministic; see CLAUDE.md formula)
+# ---------------------------------------------------------------------------
+fidelity:
+  epsilon: 1.0e-8 # denominator stabilizer in min-max normalization — never hardcode elsewhere
+  rolling_window_length: 200 # number of historical evaluation points used for min-max reference
+  min_history_for_normalization: 10 # below this, normalization is treated as insufficient-history (explicit handling, no fabricated score)
+  metrics: [rmse, mae, wasserstein, mk_mmd]
+  mk_mmd:
+    kernel: rbf
+    gamma: null # null => median-heuristic bandwidth
+
+# ---------------------------------------------------------------------------
+# Module 11 — Drift detection interface (algorithm itself is external, prompt.md §0.19)
+# ---------------------------------------------------------------------------
+drift:
+  source: mock # "mock" | "external" — external adapter connects a real detector later
+  # DT scopes an incoming drift event may name; must match src/dt_models/*.py COMPONENT_NAME
+  # values (Module 5's DTModelRegistry) so drift_detector.py can actually route an event to a
+  # real, adaptable component instead of an unknown/stale name. Shared by both the mock source
+  # and the interface's own validation — a real external detector's events are checked against
+  # this exact same list.
+  valid_components: [throughput, latency, packet_loss, prb_utilization, jitter]
+  severity_range: [0.0, 1.0] # inclusive bounds a drift event's severity must fall within
+  mock:
+    seed: 7
+    emit_interval_seconds: 30.0
+    # Fraction of mock events deliberately malformed (unknown component / out-of-range severity /
+    # missing timestamp / non-dict metadata), so the interface's quarantine path is genuinely
+    # exercised in testing — mirrors telemetry.mock.missing_field_rate/out_of_range_rate. Never
+    # present in a real external detector's feed; this knob exists only for this mock source.
+    invalid_event_rate: 0.05
+
+# ---------------------------------------------------------------------------
+# Module 13 — PPO RL decision agent
+# ---------------------------------------------------------------------------
+ppo:
+  policy_path: "data/models/ppo/policy.zip"
+  action_mapping: { 0: recalibrate, 1: regenerate, 2: expand_scope }
+  training:
+    total_timesteps: 200000
+    n_envs: 4
+    learning_rate: 3.0e-4
+    n_steps: 256
+    batch_size: 64
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    seed: 42
+  reward:
+    adaptation_cost_penalty: { recalibrate: 0.02, regenerate: 0.08, expand_scope: 0.12 }
+  # Tunables for the TRAINING ENVIRONMENT's simulated adaptation-outcome dynamics
+  # (src/adaptation/rl_env.py:AdaptationEnv) — a documented stand-in "world model" for what
+  # happens to a component's fidelity when an action is applied, needed because the real
+  # adaptation agents (Modules 14-16) don't exist yet to produce real outcomes. Config-driven
+  # exactly like everything else, never hardcoded in the env's own code. NOT PPO's own algorithm
+  # hyperparameters (see `training:` above) and NOT a decision-making heuristic (prompt.md §0.21/
+  # §70 rule 18) — PPO still picks the action; this only defines how the simulated world reacts
+  # to whichever action PPO picks, exactly like CartPole's physics define how a pole reacts to a
+  # push, not which push to apply.
+  env:
+    max_attempts_per_incident: 4 # episode ends (truncated) if an incident isn't resolved by then
+    resolved_fidelity_threshold: 0.85 # episode ends (terminated) once the affected component's fidelity reaches this
+    fidelity_sample_size: 24 # size of the synthetic (y_true, y_pred) arrays fed into the real Module 12 FidelityEvaluator each step
+    healthy_noise_std: 0.05 # prediction-error noise std for an undrifted/healthy component
+    drift_error_scale: 3.0 # multiplies drift severity into an initial prediction-error magnitude for the affected component
+    # Efficacy = fraction of the current prediction-error magnitude an action removes per attempt.
+    # recalibrate's efficacy is scaled by (1 - severity) in rl_env.py — retraining the existing
+    # model on recent data genuinely helps for a modest distribution shift, but cannot fix a
+    # severe/structural one no matter how many times it's retried.
+    recalibrate_efficacy: 0.65 # cheap, reasonably effective on a fresh LOW-severity incident...
+    attempt_diminishing_factor: 0.35 # ...but efficacy decays by this factor per repeated recalibrate attempt on the SAME incident (recalibration alone cannot fix a structurally wrong model — this is what should make PPO learn to escalate)
+    regenerate_efficacy: 0.85 # costlier (see adaptation_cost_penalty above) but stays effective across most of the severity range
+    regenerate_severity_sensitivity: 0.3 # regenerate's efficacy is scaled by (1 - this*severity) — a much gentler severity penalty than recalibrate's, since an LLM-rebuilt model handles structural drift far better than a retrained one
+    expand_scope_efficacy: 0.90 # only genuinely effective once expand_scope_min_prior_attempts have already failed this incident (models "this needs a new capability, not a fix to the existing one")
+    expand_scope_min_prior_attempts: 2
+    expand_scope_premature_factor: 0.1 # fraction of expand_scope_efficacy actually achieved when used before expand_scope_min_prior_attempts have failed (the "wrong tool for a fresh incident" case)
+    network_state_pool_size: 500 # number of real D1-derived network-state summaries precomputed once for episodes to sample from (see rl_env.py:build_network_state_pool)
+    network_state_sample_rows: 20 # rows aggregated per pool entry
+    reward_clip: 2.0 # clips the previous-reward observation feature into a stable Box range (does not clip the actual training reward signal)
+  fallback:
+    # Deterministic fallback used ONLY if the trained policy fails to load/predict at runtime.
+    # Every use must be logged (see CLAUDE.md §6) — never a silent substitute for PPO.
+    enabled: true
+    default_action: recalibrate
+
+# ---------------------------------------------------------------------------
+# Modules 14–16 — Adaptation agents / concurrency
+# ---------------------------------------------------------------------------
+adaptation:
+  lock_policy: queue # "queue" | "coalesce" | "defer" for a second drift event on a locked component
+  recalibration:
+    training_window_hours: 24
+    min_training_rows: 200
+  regeneration:
+    max_llm_iterations: 2 # LLM generates -> sandbox rejects -> LLM retries with the rejection reason as feedback, up to this many attempts
+    training_window_hours: 48 # wider than recalibration's default — rebuilding a pipeline from scratch reasonably wants more history than a lightweight refit
+    min_training_rows: 200
+  expand_scope:
+    max_llm_iterations: 2 # shared retry budget for BOTH the design-proposal step (invalid name/target/dependencies) and the implementation-generation step (sandbox rejection)
+    training_window_hours: 48 # a brand-new component has no prior deployment to lean on, same "wants more history" reasoning as regeneration
+    min_training_rows: 200
+  verification_delta: 0.01 # δ in FidelityScore_new > FidelityScore_old + δ — never hardcode elsewhere
+
+# ---------------------------------------------------------------------------
+# Module 45 — Sandbox execution
+# ---------------------------------------------------------------------------
+sandbox:
+  workspace_root: "data/artifacts/sandbox"
+  timeout_seconds: 120
+  max_output_bytes: 1000000
+
+# ---------------------------------------------------------------------------
+# Module 18 (D2) — RAG knowledge base
+# ---------------------------------------------------------------------------
+rag:
+  chroma_path: "rag_data/chroma"
+  collection_name: "dt_knowledge_base"
+  corpus_dirs:
+    oran: "rag_data/oran"
+    digital_twin: "rag_data/digital_twin"
+    policies: "rag_data/policies"
+    history: "rag_data/history"
+  chunk_size: 800
+  chunk_overlap: 100
+  top_k: 5
+  embedding_model: "all-MiniLM-L6-v2"
+
+# ---------------------------------------------------------------------------
+# LLM (Anthropic direct API) — module name/version only; key lives in .env. Read via
+# src/llm/anthropic_client.py:AnthropicClient — never hardcode a model ID or key in agent code.
+# ---------------------------------------------------------------------------
+llm:
+  model: "claude-sonnet-5" # never a hardcoded deprecated model ID — this is the ONLY place it's set
+  max_tokens: 8000
+  # The installed Anthropic API version has NO temperature/top_p/top_k sampling-randomness
+  # control (verified directly against anthropic-sdk-python's real MessageCreateParams, not
+  # assumed from older docs) — `effort` (reasoning depth) is the closest available knob and is
+  # NOT a determinism control. See src/llm/anthropic_client.py's module docstring for the full
+  # explanation. null disables sending output_config.effort entirely (API default).
+  effort: medium
+  timeout_seconds: 90
+  max_retries: 3 # shared budget: this client's own transport retry loop AND its structured-output validation retry loop
+  retry_backoff_seconds: 1.0 # base for this client's own exponential backoff (capped at 30s internally); the SDK's own internal retry is disabled (max_retries=0) so this is the only retry/backoff path
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: INFO
+  format: json # "json" | "text"
+  log_dir: "logs"
+
+# ---------------------------------------------------------------------------
+# Module 19 — Lifecycle management / evaluation
+# ---------------------------------------------------------------------------
+lifecycle:
+  records_path: "data/artifacts/lifecycle_records.jsonl"
+  reports_dir: "data/artifacts/maintenance_reports"
+
+evaluation:
+  window_size: 200 # comparable evaluation window (rows) used for before/after fidelity comparison
