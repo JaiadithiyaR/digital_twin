@@ -157,55 +157,19 @@ drift:
 # ---------------------------------------------------------------------------
 # Module 13 — PPO RL decision agent
 # ---------------------------------------------------------------------------
-ppo:
-  policy_path: "data/models/ppo/policy.zip"
-  action_mapping: { 0: recalibrate, 1: regenerate, 2: expand_scope }
-  training:
-    total_timesteps: 200000
-    n_envs: 4
-    learning_rate: 3.0e-4
-    n_steps: 256
-    batch_size: 64
-    gamma: 0.99
-    gae_lambda: 0.95
-    clip_range: 0.2
-    seed: 42
-  reward:
-    adaptation_cost_penalty: { recalibrate: 0.02, regenerate: 0.08, expand_scope: 0.12 }
-  # Tunables for the TRAINING ENVIRONMENT's simulated adaptation-outcome dynamics
-  # (src/adaptation/rl_env.py:AdaptationEnv) — a documented stand-in "world model" for what
-  # happens to a component's fidelity when an action is applied, needed because the real
-  # adaptation agents (Modules 14-16) don't exist yet to produce real outcomes. Config-driven
-  # exactly like everything else, never hardcoded in the env's own code. NOT PPO's own algorithm
-  # hyperparameters (see `training:` above) and NOT a decision-making heuristic (prompt.md §0.21/
-  # §70 rule 18) — PPO still picks the action; this only defines how the simulated world reacts
-  # to whichever action PPO picks, exactly like CartPole's physics define how a pole reacts to a
-  # push, not which push to apply.
-  env:
-    max_attempts_per_incident: 4 # episode ends (truncated) if an incident isn't resolved by then
-    resolved_fidelity_threshold: 0.85 # episode ends (terminated) once the affected component's fidelity reaches this
-    fidelity_sample_size: 24 # size of the synthetic (y_true, y_pred) arrays fed into the real Module 12 FidelityEvaluator each step
-    healthy_noise_std: 0.05 # prediction-error noise std for an undrifted/healthy component
-    drift_error_scale: 3.0 # multiplies drift severity into an initial prediction-error magnitude for the affected component
-    # Efficacy = fraction of the current prediction-error magnitude an action removes per attempt.
-    # recalibrate's efficacy is scaled by (1 - severity) in rl_env.py — retraining the existing
-    # model on recent data genuinely helps for a modest distribution shift, but cannot fix a
-    # severe/structural one no matter how many times it's retried.
-    recalibrate_efficacy: 0.65 # cheap, reasonably effective on a fresh LOW-severity incident...
-    attempt_diminishing_factor: 0.35 # ...but efficacy decays by this factor per repeated recalibrate attempt on the SAME incident (recalibration alone cannot fix a structurally wrong model — this is what should make PPO learn to escalate)
-    regenerate_efficacy: 0.85 # costlier (see adaptation_cost_penalty above) but stays effective across most of the severity range
-    regenerate_severity_sensitivity: 0.3 # regenerate's efficacy is scaled by (1 - this*severity) — a much gentler severity penalty than recalibrate's, since an LLM-rebuilt model handles structural drift far better than a retrained one
-    expand_scope_efficacy: 0.90 # only genuinely effective once expand_scope_min_prior_attempts have already failed this incident (models "this needs a new capability, not a fix to the existing one")
-    expand_scope_min_prior_attempts: 2
-    expand_scope_premature_factor: 0.1 # fraction of expand_scope_efficacy actually achieved when used before expand_scope_min_prior_attempts have failed (the "wrong tool for a fresh incident" case)
-    network_state_pool_size: 500 # number of real D1-derived network-state summaries precomputed once for episodes to sample from (see rl_env.py:build_network_state_pool)
-    network_state_sample_rows: 20 # rows aggregated per pool entry
-    reward_clip: 2.0 # clips the previous-reward observation feature into a stable Box range (does not clip the actual training reward signal)
+# ---------------------------------------------------------------------------
+# Module 13 — Decision & Root-Cause Analysis Agent (design pivot: replaces the deleted PPO RL
+# policy's `ppo:` block — see CLAUDE.md §12's design-pivot notice). No training hyperparameters
+# here — this is a direct, genuine LLM call on every trigger, never a trained policy.
+# ---------------------------------------------------------------------------
+decision_agent:
+  action_mapping: { 0: recalibrate, 1: regenerate, 2: expand_scope } # the fixed 3-strategy enum (prompt.md §19) — never a 4th/5th
   fallback:
-    # Deterministic fallback used ONLY if the trained policy fails to load/predict at runtime.
-    # Every use must be logged (see CLAUDE.md §6) — never a silent substitute for PPO.
+    # Deterministic fallback used ONLY on genuine decision-agent infrastructure failure (LLM
+    # transport failure, or structured-output schema validation exhausting its retries) — never a
+    # routine substitute for a genuine LLM call. Every use must be logged (CLAUDE.md §6).
     enabled: true
-    default_action: recalibrate
+    default_strategy: recalibrate
 
 # ---------------------------------------------------------------------------
 # Modules 14–16 — Adaptation agents / concurrency

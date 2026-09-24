@@ -65,9 +65,9 @@ def test_real_oran_content_is_retrievable_and_attributed_to_a_real_source(ingest
 
 def test_real_digital_twin_content_describes_this_actual_system(ingested_kb):
     kb, _ = ingested_kb
-    results = kb.retrieve("what does PPO decide in this system", category="digital_twin", top_k=3)
+    results = kb.retrieve("what does the decision agent decide in this system", category="digital_twin", top_k=3)
     assert results
-    assert any("ppo" in r.text.lower() for r in results)
+    assert any("decision & root-cause analysis agent" in r.text.lower() for r in results)
 
 
 def test_real_policies_content_contains_real_enforced_values(ingested_kb):

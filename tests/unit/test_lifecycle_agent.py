@@ -1,12 +1,13 @@
 """Unit tests for Module 19 — Lifecycle Management Agent (Agent 6; prompt.md §37-38).
 
 Fast, fully-controlled tests using directly-constructed (not registry-produced) instances of the
-real `DriftEvent`/`ModelVersionMetadata`/`RecalibrationResult`/`RegenerationResult`/
-`ExpandScopeResult`/`VerificationResult` types — every one of these is a plain pydantic model or
-frozen dataclass with no hidden validation against live state, so constructing them directly here
-is a legitimate, fast way to exercise every field-mapping path in `record_adaptation_event()`
-without needing a full trained model/sandboxed subprocess for every test. The REQUIRED real,
-end-to-end "run one full cycle" proof lives in `tests/integration/test_lifecycle_agent.py`.
+real `AdaptationTrigger`/`DecisionOutput`/`ModelVersionMetadata`/`RecalibrationResult`/
+`RegenerationResult`/`ExpandScopeResult`/`VerificationResult` types — every one of these is a
+plain pydantic model or frozen dataclass with no hidden validation against live state, so
+constructing them directly here is a legitimate, fast way to exercise every field-mapping path in
+`record_adaptation_event()` without needing a full trained model/sandboxed subprocess for every
+test. The REQUIRED real, end-to-end "run one full cycle" proof lives in
+`tests/integration/test_lifecycle_agent.py`.
 """
 
 from __future__ import annotations
@@ -16,13 +17,14 @@ from pathlib import Path
 
 import pytest
 
+from src.adaptation.decision_agent import DecisionOutput
 from src.adaptation.expand_scope_agent import ExpandScopeResult, _ProposedComponentDesign
 from src.adaptation.lifecycle_agent import LifecycleAgent, LifecycleError
 from src.adaptation.recalibration_agent import RecalibrationResult
 from src.adaptation.regeneration_agent import RegenerationResult
 from src.adaptation.verification_agent import DeterministicCheckResult, VerificationResult
 from src.common.config import load_settings
-from src.drift.schema import DriftEvent
+from src.fidelity.trigger import AdaptationTrigger
 from src.llm.google_client import LLMResponse, LLMUsage
 from src.rag.rag_kb import RetrievedChunk
 from src.registry.model_registry import ModelVersionMetadata
@@ -31,15 +33,23 @@ from src.sandbox.executor import SandboxResult
 SETTINGS = load_settings()
 
 
-def _drift_event(component: str = "throughput", severity: float = 0.62) -> DriftEvent:
-    now = datetime.now(UTC)
-    return DriftEvent(
+def _trigger(component: str = "throughput", severity: float = 0.62, trigger_type: str = "external_drift") -> AdaptationTrigger:
+    return AdaptationTrigger(
         component=component,
         severity=severity,
-        timestamp=now,
-        metadata={"reason": "unit-test synthetic drift"},
-        source="MOCK",
-        received_at=now,
+        timestamp=datetime.now(UTC),
+        trigger_type=trigger_type,
+        metadata={"reason": "unit-test synthetic trigger"},
+    )
+
+
+def _decision(strategy: str = "recalibrate", confidence: float = 0.8) -> DecisionOutput:
+    return DecisionOutput(
+        strategy=strategy,
+        root_cause_analysis="Synthetic root-cause analysis for a unit test.",
+        confidence=confidence,
+        rationale="Synthetic rationale for a unit test.",
+        knowledge_refs=["policies/adaptation_policies.md"],
     )
 
 
@@ -150,7 +160,7 @@ class _FakeLLMClient:
         self.calls.append(prompt)
         if self._text is None:
             return None
-        return LLMResponse(text=self._text, model="claude-sonnet-5", usage=LLMUsage(10, 10), stop_reason="end_turn", attempts=1)
+        return LLMResponse(text=self._text, model="gemini-2.5-flash", usage=LLMUsage(10, 10), stop_reason="STOP", attempts=1)
 
 
 class _FakeRagKb:
@@ -169,23 +179,27 @@ class _FakeRagKb:
 
 def test_record_captures_every_prompt_md_37_field(tmp_path):
     agent = _agent(tmp_path)
-    drift_event = _drift_event()
+    trigger = _trigger()
     version = _version()
     agent_result = _recalibration_result(version)
     verification_result = _verification_result(version, decision="ACCEPT")
 
     record = agent.record_adaptation_event(
-        drift_event=drift_event, rl_observation=[0.1, 0.2, 0.3], rl_action="recalibrate",
+        trigger=trigger, decision=_decision(strategy="recalibrate", confidence=0.75),
         agent_result=agent_result, verification_result=verification_result,
     )
 
     assert record.event_id
     assert record.timestamp is not None
-    assert record.drift_event["component"] == "throughput"
+    assert record.trigger["component"] == "throughput"
     assert record.affected_component == "throughput"
-    assert record.drift_severity == pytest.approx(0.62)
-    assert record.rl_observation == [0.1, 0.2, 0.3]
-    assert record.rl_action == "recalibrate"
+    assert record.trigger_severity == pytest.approx(0.62)
+    assert record.trigger_type == "external_drift"
+    assert record.decision_strategy == "recalibrate"
+    assert record.root_cause_analysis
+    assert record.decision_confidence == pytest.approx(0.75)
+    assert record.decision_rationale
+    assert record.knowledge_refs == ["policies/adaptation_policies.md"]
     assert record.agent_action["adaptation_type"] == "recalibrate"
     assert record.production_version_before == "throughput-v1"  # == candidate's parent_version_id
     assert record.candidate_version == "throughput-v2"
@@ -201,6 +215,16 @@ def test_record_captures_every_prompt_md_37_field(tmp_path):
     assert record.final_status == "promoted"
 
 
+def test_record_captures_fidelity_based_trigger_type_too(tmp_path):
+    agent = _agent(tmp_path)
+    version = _version()
+    record = agent.record_adaptation_event(
+        trigger=_trigger(trigger_type="fidelity_degradation"), decision=_decision(),
+        agent_result=_recalibration_result(version), verification_result=_verification_result(version),
+    )
+    assert record.trigger_type == "fidelity_degradation"
+
+
 def test_final_status_rejected_when_verification_rejects(tmp_path):
     agent = _agent(tmp_path)
     version = _version(parent_version_id="throughput-v3")
@@ -208,7 +232,7 @@ def test_final_status_rejected_when_verification_rejects(tmp_path):
     verification_result = _verification_result(version, decision="REJECT", explanation="no improvement")
 
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=agent_result, verification_result=verification_result,
     )
     assert record.verification_result == "REJECT"
@@ -223,7 +247,7 @@ def test_no_parent_version_reported_as_none_for_expand_scope(tmp_path):
     verification_result = _verification_result(version, decision="ACCEPT")
 
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(component="throughput"), rl_observation=[0.0], rl_action="expand_scope",
+        trigger=_trigger(component="throughput"), decision=_decision(strategy="expand_scope"),
         agent_result=agent_result, verification_result=verification_result,
     )
     assert record.production_version_before is None
@@ -236,7 +260,7 @@ def test_agent_action_summary_is_generic_across_all_three_agent_types(tmp_path):
 
     recal_version = _version(version_id="v-recal", adaptation_type="recalibrate")
     recal_record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(strategy="recalibrate"),
         agent_result=_recalibration_result(recal_version), verification_result=_verification_result(recal_version),
     )
     assert "evaluation_metrics" in recal_record.agent_action
@@ -244,7 +268,7 @@ def test_agent_action_summary_is_generic_across_all_three_agent_types(tmp_path):
 
     regen_version = _version(version_id="v-regen", adaptation_type="regenerate")
     regen_record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="regenerate",
+        trigger=_trigger(), decision=_decision(strategy="regenerate"),
         agent_result=_regeneration_result(regen_version), verification_result=_verification_result(regen_version),
     )
     assert regen_record.agent_action["sandbox_stage"] == "ok"
@@ -253,7 +277,7 @@ def test_agent_action_summary_is_generic_across_all_three_agent_types(tmp_path):
 
     expand_version = _version(component="sinr_quality", version_id="v-expand", parent_version_id=None, adaptation_type="expand_scope")
     expand_record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="expand_scope",
+        trigger=_trigger(), decision=_decision(strategy="expand_scope"),
         agent_result=_expand_scope_result(expand_version), verification_result=_verification_result(expand_version),
     )
     assert expand_record.agent_action["design_attempts"] == 1
@@ -262,13 +286,13 @@ def test_agent_action_summary_is_generic_across_all_three_agent_types(tmp_path):
 
 def test_llm_metadata_carried_from_the_updated_registry_version(tmp_path):
     agent = _agent(tmp_path)
-    version = _version(llm_metadata={"model": "claude-sonnet-5", "reasoning": "rebuilt pipeline"})
+    version = _version(llm_metadata={"model": "gemini-2.5-flash", "reasoning": "rebuilt pipeline"})
     verification_result = _verification_result(version, decision="ACCEPT")
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=verification_result,
     )
-    assert record.llm_metadata == {"model": "claude-sonnet-5", "reasoning": "rebuilt pipeline"}
+    assert record.llm_metadata == {"model": "gemini-2.5-flash", "reasoning": "rebuilt pipeline"}
 
 
 # --- persistence / auditability -------------------------------------------------------------------
@@ -278,7 +302,7 @@ def test_records_persist_and_are_readable_by_a_fresh_agent_instance(tmp_path):
     agent = _agent(tmp_path)
     version = _version()
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.1], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=_verification_result(version),
     )
 
@@ -292,11 +316,11 @@ def test_multiple_events_append_without_overwriting(tmp_path):
     version_a = _version(version_id="v-a")
     version_b = _version(version_id="v-b")
     record_a = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version_a), verification_result=_verification_result(version_a),
     )
     record_b = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version_b), verification_result=_verification_result(version_b),
     )
     records = agent.list_records()
@@ -314,6 +338,40 @@ def test_list_records_on_a_fresh_path_is_empty(tmp_path):
     assert agent.list_records() == []
 
 
+def test_list_records_skips_lines_from_a_superseded_schema_without_crashing(tmp_path, caplog):
+    """A real compatibility scenario this project actually hit: a pre-existing records file
+    containing a line written by the old PPO-era schema (`drift_event`/`rl_observation`/
+    `rl_action` instead of `trigger`/`decision_strategy`/...) must never crash `list_records()` —
+    it should be logged and skipped, and every genuinely current-schema record still returned."""
+    agent = _agent(tmp_path)
+    version = _version()
+    good_record = agent.record_adaptation_event(
+        trigger=_trigger(), decision=_decision(),
+        agent_result=_recalibration_result(version), verification_result=_verification_result(version),
+    )
+
+    stale_line = (
+        '{"event_id": "old-1", "timestamp": "2026-01-01T00:00:00Z", "drift_event": {}, '
+        '"affected_component": "throughput", "drift_severity": 0.5, "rl_observation": [0.1], '
+        '"rl_action": "recalibrate", "agent_action": {}, "production_version_before": null, '
+        '"candidate_version": "v1", "fidelity_before": null, "fidelity_after": null, '
+        '"verification_result": "ACCEPT", "verification_explanation": "x", "training_window": {}, '
+        '"evaluation_window": {}, "model_metadata": {}, "llm_metadata": null, '
+        '"final_status": "promoted"}\n'
+    )
+    records_path = tmp_path / "records.jsonl"
+    with records_path.open("a", encoding="utf-8") as f:
+        f.write(stale_line)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        records = agent.list_records()
+
+    assert [r.event_id for r in records] == [good_record.event_id]
+    assert any("superseded schema" in r.message for r in caplog.records)
+
+
 # --- maintenance report (prompt.md §38) -------------------------------------------------------------
 
 
@@ -321,7 +379,7 @@ def test_deterministic_report_generated_without_llm_covers_every_required_topic(
     agent = _agent(tmp_path)
     version = _version()
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=_verification_result(version, decision="ACCEPT"),
     )
     report = agent.generate_maintenance_report(record)
@@ -338,7 +396,7 @@ def test_llm_report_is_used_verbatim_when_available(tmp_path):
     agent = _agent(tmp_path, llm_client=llm)
     version = _version()
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=_verification_result(version),
     )
     report = agent.generate_maintenance_report(record)
@@ -353,7 +411,7 @@ def test_llm_failure_falls_back_to_deterministic_report(tmp_path):
     agent = _agent(tmp_path, llm_client=llm)
     version = _version()
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=_verification_result(version),
     )
     report = agent.generate_maintenance_report(record)
@@ -372,7 +430,7 @@ def test_rag_context_is_retrieved_and_reaches_the_llm_prompt(tmp_path):
     agent = _agent(tmp_path, llm_client=llm)
     version = _version()
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=_verification_result(version),
     )
     agent.generate_maintenance_report(record, rag_knowledge_base=rag_kb)
@@ -384,7 +442,7 @@ def test_no_rag_knowledge_base_reports_not_available_and_never_crashes(tmp_path)
     agent = _agent(tmp_path)
     version = _version()
     record = agent.record_adaptation_event(
-        drift_event=_drift_event(), rl_observation=[0.0], rl_action="recalibrate",
+        trigger=_trigger(), decision=_decision(),
         agent_result=_recalibration_result(version), verification_result=_verification_result(version),
     )
     report = agent.generate_maintenance_report(record, rag_knowledge_base=None)

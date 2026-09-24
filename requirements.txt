@@ -8,11 +8,8 @@ pyarrow>=17.0
 scikit-learn>=1.5
 xgboost>=2.1
 
-# RL (PPO decision agent)
-torch>=2.4
-gymnasium>=0.29
-stable-baselines3>=2.3
-matplotlib>=3.8  # PPO training reward-curve reporting only, not used in any deterministic module
+# Charting (scripts/visualize_metrics.py only, not used in any deterministic module)
+matplotlib>=3.8
 
 # LLM (decision & root-cause analysis / regeneration / expand-scope / verification / lifecycle reasoning)
 google-genai>=1.0

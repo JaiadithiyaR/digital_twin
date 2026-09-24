@@ -121,58 +121,22 @@ class DriftConfig(BaseModel):
     mock: MockDriftConfig
 
 
-class PpoTrainingConfig(BaseModel):
-    total_timesteps: int
-    n_envs: int
-    learning_rate: float
-    n_steps: int
-    batch_size: int
-    gamma: float
-    gae_lambda: float
-    clip_range: float
-    seed: int
-
-
-class PpoRewardConfig(BaseModel):
-    adaptation_cost_penalty: dict[str, float]
-
-
-class PpoFallbackConfig(BaseModel):
+class DecisionAgentFallbackConfig(BaseModel):
+    # Deterministic fallback used ONLY on genuine decision-agent infrastructure failure (LLM
+    # transport failure, or structured-output schema validation exhausting its retries) — never a
+    # routine substitute for a genuine LLM call (prompt.md §21, CLAUDE.md §6). Every use is
+    # logged.
     enabled: bool
-    default_action: str
+    default_strategy: Literal["recalibrate", "regenerate", "expand_scope"]
 
 
-class PpoEnvConfig(BaseModel):
-    """Tunables for `AdaptationEnv`'s SIMULATED adaptation-outcome dynamics (the training
-    environment's "world model") — NOT PPO's own algorithm hyperparameters (those live in
-    `PpoTrainingConfig`) and NOT real adaptation-agent behavior (Modules 14-16 don't exist yet;
-    when they do, this env's dynamics are replaced/supplemented by real outcomes, not this
-    config). See `src/adaptation/rl_env.py` module docstring for the full rationale."""
+class DecisionAgentConfig(BaseModel):
+    """Module 13 — Decision & Root-Cause Analysis Agent (design pivot: replaces the deleted PPO
+    RL policy's `PpoConfig`; see CLAUDE.md §12's design-pivot notice). No training
+    hyperparameters here — this is a direct LLM call, not a trained policy (prompt.md §21)."""
 
-    max_attempts_per_incident: int
-    resolved_fidelity_threshold: float
-    fidelity_sample_size: int
-    healthy_noise_std: float
-    drift_error_scale: float
-    recalibrate_efficacy: float
-    regenerate_efficacy: float
-    regenerate_severity_sensitivity: float
-    expand_scope_efficacy: float
-    expand_scope_min_prior_attempts: int
-    expand_scope_premature_factor: float
-    attempt_diminishing_factor: float
-    network_state_pool_size: int
-    network_state_sample_rows: int
-    reward_clip: float
-
-
-class PpoConfig(BaseModel):
-    policy_path: str
-    action_mapping: dict[int, str]
-    training: PpoTrainingConfig
-    reward: PpoRewardConfig
-    env: PpoEnvConfig
-    fallback: PpoFallbackConfig
+    action_mapping: dict[int, str]  # the fixed 3-strategy enum (prompt.md §19), never a 4th/5th
+    fallback: DecisionAgentFallbackConfig
 
 
 class RecalibrationConfig(BaseModel):
@@ -258,7 +222,7 @@ class Settings(BaseModel):
     dt_models: DtModelsConfig
     fidelity: FidelityConfig
     drift: DriftConfig
-    ppo: PpoConfig
+    decision_agent: DecisionAgentConfig
     adaptation: AdaptationConfig
     sandbox: SandboxConfig
     rag: RagConfig

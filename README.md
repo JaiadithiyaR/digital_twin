@@ -1,12 +1,14 @@
 # AI-Driven Self-Adaptive Network Digital Twin
 
 A production-quality, modular Digital Twin platform for a simulated 5G network: continuously
-synchronized DT state, dependency-aware prediction components, deterministic fidelity evaluation,
-a PPO-trained decision agent, LLM-assisted (Anthropic Claude) regeneration/expand-scope adaptation
-agents, sandboxed candidate verification, and full lifecycle auditability.
+synchronized DT state, dependency-aware prediction components, deterministic fidelity evaluation
+(including a unified fidelity score and an internal fidelity-based adaptation trigger), a
+knowledge-based (RAG-grounded) Decision & Root-Cause Analysis Agent, LLM-assisted (Google AI/
+Gemini) regeneration/expand-scope adaptation agents, sandboxed candidate verification, and full
+lifecycle auditability.
 
 See **`CLAUDE.md`** for the full architecture (19-module map + D1/D2), agent responsibilities, the
-fidelity formula, PPO action mapping, and adaptation safety rules — read it before making changes.
+fidelity formula, decision-strategy enum, and adaptation safety rules — read it before making changes.
 See **`IMPLEMENTATION_STATUS.md`** for current per-module build/test status and the next task.
 `prompt.md` is the original authoritative specification.
 
@@ -16,7 +18,7 @@ See **`IMPLEMENTATION_STATUS.md`** for current per-module build/test status and 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in ANTHROPIC_API_KEY
+cp .env.example .env   # fill in GOOGLE_API_KEY (or GEMINI_API_KEY)
 ```
 
 NS-3 / 5G-LENA (Module 1 ground-truth simulator):
@@ -55,5 +57,5 @@ src/           application source — see CLAUDE.md for the module -> package ma
 data/          bootstrap / telemetry / evaluation / artifacts (generated, gitignored)
 rag_data/      RAG corpus (O-RAN specs, DT docs, policies, adaptation history)
 tests/         unit / integration / e2e
-scripts/       setup, PPO training, RAG ingestion, demo runner
+scripts/       setup, RAG ingestion, demo runners, metrics visualization
 ```

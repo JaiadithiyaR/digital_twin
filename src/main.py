@@ -4,46 +4,55 @@ already-built module together into one real, continuously-running system.
 
 **This file is integration only** — it constructs already-tested components (D1Store,
 DTModelRegistry/DTOrchestrator, FidelityEvaluator, ContinuousSynchronizer, DriftDetectorInterface,
-the PPO runtime, Modules 14/15/16's agents, VerificationAgent, LifecycleAgent, RagKnowledgeBase,
-GoogleClient) and calls their already-tested public methods in exactly the order prompt.md §39
-specifies. No new model, fidelity, verification, or agent logic is written here.
+the Decision & Root-Cause Analysis Agent, Modules 14/15/16's agents, VerificationAgent,
+LifecycleAgent, RagKnowledgeBase, GoogleClient) and calls their already-tested public methods in
+exactly the order prompt.md §39 specifies. No new model, fidelity, verification, or agent logic is
+written here.
 
 Canonical loop (CLAUDE.md §2):
     NS-3/mock telemetry -> Module 2 (preprocess) -> Module 3 (continuous sync) -> D1 (Module 4)
-    -> Modules 5-10 (dependency-aware DT prediction) -> Module 12 (fidelity)
-    -> Module 11 (drift) -> Module 13 (PPO) -> Module 14/15/16 (execution)
-    -> Module 17 (verification) -> Module 19 (lifecycle record) -> continue.
+    -> Modules 5-10 (dependency-aware DT prediction) -> Module 12 (fidelity + unified score/trigger)
+    -> Module 11 (drift) -> Module 13 (Decision & Root-Cause Analysis Agent) -> Module 14/15/16
+    (execution) -> Module 17 (verification) -> Module 19 (lifecycle record) -> continue.
 
 **The one hard non-negotiable this file exists to prove** (prompt.md §0.6/§0.8, CLAUDE.md §8
 "continuous operation"): telemetry ingestion/D1 synchronization must NEVER stop or block while an
 adaptation cycle (which can include an LLM call and/or a sandboxed subprocess training run) is in
 progress. This is a STRUCTURAL guarantee, not a sequencing accident: `ContinuousSynchronizer` runs
 on its own background daemon thread (started once at `start()`, exactly as Module 3 already
-guarantees — nothing in this file's own loop ever calls into it again), and the drift ->
-PPO -> agent -> verification -> lifecycle cycle runs entirely in the orchestrator's own foreground
-loop thread, so a slow adaptation cycle can only ever delay the NEXT drift event/prediction cycle,
+guarantees — nothing in this file's own loop ever calls into it again), and the trigger ->
+decision agent -> agent -> verification -> lifecycle cycle runs entirely in the orchestrator's own
+foreground loop thread, so a slow adaptation cycle can only ever delay the NEXT trigger/prediction cycle,
 never a telemetry batch sync. `scripts/run_orchestrator_demo.py` is the permanent, repo-tracked
 validation script that proves this concretely with a real sampler thread — see that script and
 CLAUDE.md's own Phase 11 entry for the actual observed numbers from a real run.
 
-**PPO's runtime observation** (`_build_runtime_observation`) uses the EXACT same vector schema
-`src.adaptation.rl_env.AdaptationEnv._build_observation()` was trained against — [fidelity vector,
-affected-component one-hot, drift severity, previous-action one-hot, previous reward, network-
-state summary] — but populated from genuinely REAL sources instead of that module's synthetic
-training-time simulation: real per-component `FidelityEvaluator` scores from Modules 5-10's own
-live predictions against real D1 ground truth (Module 12), the real drift event's own
-component/severity, this orchestrator's own tracked previous action/reward (from the last REAL
-adaptation cycle's REAL verified fidelity delta), and a real D1-history-derived network-state
-summary (normalized the same self-referential min-max way `build_network_state_pool` already
-does, adapted for a live/streaming window instead of a precomputed pool). Reusing `AdaptationEnv`
-itself for this would be WRONG — it always fabricates synthetic prediction fidelity internally
-for training purposes, which would silently ignore the real system's actual fidelity.
+**Design pivot** (see CLAUDE.md §12's design-pivot notice): Module 13 is no longer a locally-run,
+pre-trained PPO policy — it is the knowledge-based Decision & Root-Cause Analysis Agent
+(`src.adaptation.decision_agent.DecisionAgent`), making a genuine LLM call on every single
+trigger. There is no observation vector or trained policy artifact anymore; `_build_decision_
+context()` (thin glue around `src.adaptation.decision_context.build_decision_context`) assembles
+a bounded, structured snapshot instead — real per-component `FidelityEvaluator` scores, the real
+Unified Fidelity Score (Module 12, §16a), the real trigger's component/severity/type, this
+orchestrator's own tracked previous outcome PER COMPONENT (from the last REAL verified fidelity
+delta for that component), real RAG-retrieved context, and a real D1-history-derived network-state
+summary.
 
-**LLM availability**: no real `GOOGLE_API_KEY` is configured in this development environment.
-This orchestrator constructs a real `GoogleClient` when a key IS configured; when PPO selects
-`regenerate`/`expand_scope` and no client is available, the cycle is skipped with a clear WARNING
-(never a silent substitute, never a fabricated LLM response) — telemetry ingestion and the next
-drift event are entirely unaffected. `recalibrate` never needs an LLM at all.
+**Two trigger sources, normalized uniformly** (prompt.md §16a): an external `DriftEvent` (Module
+11) and this orchestrator's own periodic fidelity-based trigger check (`FidelityEvaluator.
+check_fidelity_trigger()`, Module 12) both funnel into the SAME `AdaptationTrigger` queue and the
+SAME dispatch path — the Decision & Root-Cause Analysis Agent never needs to know which one fired.
+
+**LLM availability**: no real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured in this development
+environment. This orchestrator constructs a real `GoogleClient` when a key IS configured (even a
+placeholder counts as "configured" from this code's perspective — the actual live call is what
+fails, gracefully, not construction). Unlike the old PPO design, the DECISION itself now requires
+a genuine LLM call every time — `DecisionAgent.decide_safe()` degrades to the configured
+deterministic fallback strategy on any LLM infrastructure failure (never a silent substitute,
+never a fabricated response), logged at WARNING every time it happens. If the resulting strategy
+is `regenerate`/`expand_scope` and no LLM client is available to actually EXECUTE it, that cycle
+is separately skipped with its own clear WARNING — telemetry ingestion and the next trigger are
+entirely unaffected either way. `recalibrate` never needs an LLM to execute.
 """
 
 from __future__ import annotations
@@ -56,16 +65,15 @@ import threading
 import time
 from typing import TYPE_CHECKING, Callable
 
-import numpy as np
 import pandas as pd
 
 from src.adaptation.data_selection import select_recent_window, time_split, with_dependency_ground_truth
+from src.adaptation.decision_agent import DecisionAgent, DecisionOutput
+from src.adaptation.decision_context import PreviousOutcome, build_decision_context
 from src.adaptation.expand_scope_agent import ExpandScopeAgent, ExpandScopeError
 from src.adaptation.lifecycle_agent import LifecycleAgent
 from src.adaptation.recalibration_agent import RecalibrationAgent, RecalibrationError
 from src.adaptation.regeneration_agent import RegenerationAgent, RegenerationError
-from src.adaptation.rl_agent import decide_adaptation_strategy_safe, load_ppo_agent
-from src.adaptation.rl_env import NETWORK_STATE_FEATURES, _FIDELITY_SCORE_CLIP
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import Settings, load_secrets, load_settings
 from src.common.logging import setup_logging
@@ -81,6 +89,7 @@ from src.dt_models.throughput import ThroughputModel
 from src.drift.drift_detector import DriftDetectorInterface
 from src.drift.mock_drift_source import MockDriftSource
 from src.fidelity.evaluator import FidelityEvaluator
+from src.fidelity.trigger import AdaptationTrigger, trigger_from_drift_event
 from src.llm.google_client import GoogleClient
 from src.rag.rag_kb import RagKnowledgeBase
 from src.registry.model_registry import ModelRegistry
@@ -92,7 +101,6 @@ from src.telemetry.zmq_source import ZmqTelemetrySource
 
 if TYPE_CHECKING:
     from src.common.config import Secrets
-    from src.drift.schema import DriftEvent
 
 logger = logging.getLogger(__name__)
 
@@ -141,10 +149,17 @@ class ContinuousOrchestrator:
         self._drift_severity_range_override = drift_severity_range_override
 
         self._stop_event = threading.Event()
-        self._drift_queue: "queue.Queue[DriftEvent]" = queue.Queue()
+        # Both canonical trigger sources (external DriftEvent, normalized; and the internal
+        # fidelity-based trigger) funnel into this ONE queue as AdaptationTrigger instances
+        # (prompt.md §16a) — the dispatch path in run() never needs to know which one fired.
+        self._trigger_queue: "queue.Queue[AdaptationTrigger]" = queue.Queue()
         self._latest_fidelity: dict[str, float | None] = {}
-        self._prev_action_idx: int | None = None
-        self._prev_reward: float = 0.0
+        # Per-component previous-outcome tracking for the Decision & Root-Cause Analysis Agent's
+        # context (prompt.md §18 "previous action taken for this component/incident and its
+        # outcome, where available") — replaces the old PPO design's single scalar
+        # previous-action-index/previous-reward, since there is no fixed-size observation vector
+        # to populate anymore, and outcomes are naturally per-component, not global.
+        self._previous_outcome_by_component: dict[str, PreviousOutcome] = {}
 
         # Set by _handle_drift_event around the adaptation cycle's own wall-clock window — the
         # public hook the validation script reads to bracket its telemetry-growth sampler,
@@ -169,21 +184,18 @@ class ContinuousOrchestrator:
         except RuntimeError as exc:
             self.llm_client = None
             logger.warning(
-                "no GOOGLE_API_KEY configured — regenerate/expand_scope adaptation cycles "
-                "will be skipped (with a clear warning) if PPO ever selects them; recalibrate is "
-                "unaffected",
+                "no GOOGLE_API_KEY/GEMINI_API_KEY configured — the Decision & Root-Cause Analysis "
+                "Agent will use its configured deterministic fallback strategy for every trigger "
+                "until a real key is set, and regenerate/expand_scope adaptation cycles will be "
+                "skipped (with a clear warning) if that strategy is ever selected; recalibrate "
+                "execution is unaffected",
                 extra={"component": "main", "error": str(exc)},
             )
-
-        try:
-            self.ppo_model = load_ppo_agent(settings)
-        except FileNotFoundError as exc:
-            self.ppo_model = None
-            logger.warning(
-                "no trained PPO policy found — decide_adaptation_strategy_safe will use the "
-                "configured deterministic fallback for every drift event until one is trained",
-                extra={"component": "main", "error": str(exc)},
-            )
+        # No training phase, unlike the PPO policy this replaces (prompt.md §21) — the decision
+        # agent is a direct LLM call, always constructed the same way regardless of whether a real
+        # key is configured (DecisionAgent accepts llm_client=None and degrades via decide_safe()
+        # exactly as if a configured client's call had failed).
+        self.decision_agent = DecisionAgent.from_settings(settings, self.llm_client)
 
         self._bootstrap_dt_models()
 
@@ -217,7 +229,6 @@ class ContinuousOrchestrator:
                 "environment": settings.environment,
                 "telemetry_source": settings.telemetry.source,
                 "llm_available": self.llm_client is not None,
-                "ppo_available": self.ppo_model is not None,
                 "rag_available": self.rag_kb.is_available,
             },
         )
@@ -319,18 +330,20 @@ class ContinuousOrchestrator:
         for event in self.drift_detector.process_stream(self.drift_source):
             if self._stop_event.is_set():
                 break
-            self._drift_queue.put(event)
+            self._trigger_queue.put(trigger_from_drift_event(event))
 
     # --- the continuous loop itself (prompt.md §39) ---------------------------------------------
 
     def run(self, max_drift_events: int | None = None, prediction_interval_seconds: float = 5.0) -> None:
         """The foreground orchestration loop: periodically run DT prediction + fidelity
-        evaluation, and dispatch every drift event through the full PPO -> agent -> verification
-        -> lifecycle cycle. Runs until `stop()` is called, or (for demo/validation runs only)
-        until `max_drift_events` adaptation cycles have completed — production/live usage passes
-        `max_drift_events=None` and never stops on its own (prompt.md §39: "must not stop after
-        one adaptation event"). Telemetry ingestion (started separately, in `start()`) is
-        completely unaffected by anything this loop does — see this module's own docstring."""
+        evaluation (which may itself enqueue a fidelity-based trigger), and dispatch every queued
+        trigger — external drift or fidelity-based, both already normalized to the same
+        `AdaptationTrigger` shape — through the full Decision & Root-Cause Analysis Agent -> agent
+        -> verification -> lifecycle cycle. Runs until `stop()` is called, or (for demo/validation
+        runs only) until `max_drift_events` adaptation cycles have completed — production/live
+        usage passes `max_drift_events=None` and never stops on its own (prompt.md §39: "must not
+        stop after one adaptation event"). Telemetry ingestion (started separately, in `start()`)
+        is completely unaffected by anything this loop does — see this module's own docstring."""
         handled = 0
         last_prediction = 0.0
         while not self._stop_event.is_set():
@@ -339,10 +352,10 @@ class ContinuousOrchestrator:
                 self.run_prediction_and_fidelity_cycle()
                 last_prediction = now
             try:
-                event = self._drift_queue.get(timeout=0.5)
+                trigger = self._trigger_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
-            self._handle_drift_event(event)
+            self._handle_trigger(trigger)
             handled += 1
             if max_drift_events is not None and handled >= max_drift_events:
                 logger.info(
@@ -356,12 +369,12 @@ class ContinuousOrchestrator:
         """Modules 5-10 (dependency-aware prediction) -> Module 12 (fidelity), against the real,
         live-growing D1 state — the SAME `DTOrchestrator`/`FidelityEvaluator` used throughout this
         orchestrator's lifetime, so fidelity windows genuinely accumulate real history over time.
-        Public (not `_`-prefixed): `run()` calls this periodically on its own, but a caller (e.g.
-        a validation/demo script) may also call it directly to let real fidelity history
-        accumulate past `config.fidelity.min_history_for_normalization` before triggering an
-        adaptation cycle — exactly the same "warm the rolling window with real evaluations before
-        relying on it" discipline `AdaptationEnv._prewarm_fidelity_windows()` already established
-        for training, applied here with genuinely live data instead of a synthetic simulation."""
+        Also checks Module 12's internal fidelity-based trigger (prompt.md §16a) after every
+        update and enqueues it exactly like an external drift event if it fires — the SECOND of
+        the two canonical trigger sources. Public (not `_`-prefixed): `run()` calls this
+        periodically on its own, but a caller (e.g. a validation/demo script) may also call it
+        directly to let real fidelity history accumulate past
+        `config.fidelity.min_history_for_normalization` before triggering an adaptation cycle."""
         history = self.d1_store.get_history()
         if len(history) < self._settings.dt_models.bootstrap_min_rows:
             return {}
@@ -380,80 +393,61 @@ class ContinuousOrchestrator:
             "prediction + fidelity cycle complete",
             extra={"component": "main", "rows": len(recent), "fidelity": dict(self._latest_fidelity)},
         )
+
+        fidelity_trigger = self.fidelity_evaluator.check_fidelity_trigger(self._latest_fidelity)
+        if fidelity_trigger is not None:
+            self._trigger_queue.put(fidelity_trigger)
+
         return dict(self._latest_fidelity)
 
-    # --- runtime PPO observation (see module docstring for why this is NOT AdaptationEnv) -------
+    # --- the full adaptation cycle: Decision & Root-Cause Analysis Agent -> agent -> verification
+    # -> lifecycle -------------------------------------------------------------------------------
 
-    def _build_runtime_observation(self, event: "DriftEvent") -> np.ndarray:
-        settings = self._settings
-        components = tuple(settings.drift.valid_components)
-        fidelity_vec = np.array(
-            [
-                float(np.clip(self._latest_fidelity.get(c) or 0.0, *_FIDELITY_SCORE_CLIP))
-                for c in components
-            ],
-            dtype=np.float32,
-        )
-        affected_onehot = np.zeros(len(components), dtype=np.float32)
-        if event.component in components:
-            affected_onehot[components.index(event.component)] = 1.0
-        lo, hi = settings.drift.severity_range
-        severity_norm = np.array([(event.severity - lo) / max(hi - lo, 1e-9)], dtype=np.float32)
-        n_actions = len(settings.ppo.action_mapping)
-        prev_action_onehot = np.zeros(n_actions, dtype=np.float32)
-        if self._prev_action_idx is not None:
-            prev_action_onehot[self._prev_action_idx] = 1.0
-        reward_clip = settings.ppo.env.reward_clip
-        prev_reward = np.array([np.clip(self._prev_reward, -reward_clip, reward_clip)], dtype=np.float32)
-        network_state = self._compute_network_state_summary()
-        obs = np.concatenate([fidelity_vec, affected_onehot, severity_norm, prev_action_onehot, prev_reward, network_state])
-        return np.clip(obs, -2.0, 2.0).astype(np.float32)
-
-    def _compute_network_state_summary(self) -> np.ndarray:
-        history = self.d1_store.get_history()
-        if len(history) == 0:
-            return np.zeros(len(NETWORK_STATE_FEATURES), dtype=np.float32)
-        recent = history.tail(500)
-        values = recent[list(NETWORK_STATE_FEATURES)].to_numpy(dtype=np.float64)
-        mean_vec = values.mean(axis=0)
-        feature_min = values.min(axis=0)
-        feature_max = values.max(axis=0)
-        span = np.where(feature_max - feature_min > 1e-9, feature_max - feature_min, 1.0)
-        normalized = (mean_vec - feature_min) / span
-        return normalized.astype(np.float32)
-
-    # --- the full adaptation cycle: PPO -> agent -> verification -> lifecycle -------------------
-
-    def _handle_drift_event(self, event: "DriftEvent") -> None:
+    def _handle_trigger(self, trigger: AdaptationTrigger) -> None:
         self.last_adaptation_started_at = time.monotonic()
         try:
-            self._run_adaptation_cycle(event)
+            self._run_adaptation_cycle(trigger)
         finally:
             self.last_adaptation_finished_at = time.monotonic()
 
-    def _run_adaptation_cycle(self, event: "DriftEvent") -> None:
+    def _previous_outcome_for(self, component: str) -> PreviousOutcome:
+        return self._previous_outcome_by_component.get(component, PreviousOutcome())
+
+    def _run_adaptation_cycle(self, trigger: AdaptationTrigger) -> None:
         settings = self._settings
-        component = event.component
+        component = trigger.component
         if component not in _DT_COMPONENT_CLASSES:
-            logger.warning("drift event names an unknown component, skipping", extra={"component": "main", "affected_component": component})
+            logger.warning("trigger names an unknown component, skipping", extra={"component": "main", "affected_component": component})
             return
 
-        observation = self._build_runtime_observation(event)
-        action_idx, action_name = decide_adaptation_strategy_safe(self.ppo_model, observation, settings)
+        context = build_decision_context(
+            trigger,
+            self._latest_fidelity,
+            self.fidelity_evaluator.compute_unified_score(self._latest_fidelity).unified_score,
+            self._previous_outcome_for(component),
+            self.d1_store.get_history(),
+            self.rag_kb,
+        )
+        decision: DecisionOutput = self.decision_agent.decide_safe(context)
+        action_name = decision.strategy
         logger.info(
-            "PPO decision", extra={"component": "main", "affected_component": component, "severity": event.severity, "action": action_name}
+            "decision agent selected a strategy",
+            extra={
+                "component": "main", "affected_component": component, "trigger_type": trigger.trigger_type,
+                "severity": trigger.severity, "strategy": action_name, "confidence": decision.confidence,
+            },
         )
 
         component_cls = _DT_COMPONENT_CLASSES[component]
         target_column = _TARGET_COLUMNS[component]
         component_factory: Callable[[], DTComponent] = lambda cls=component_cls: cls.from_settings(settings)  # noqa: E731
-        drift_context = f"drift on {component!r} at severity {event.severity:.3f} (source={event.source})"
+        drift_context = f"{trigger.trigger_type} on {component!r} at severity {trigger.severity:.3f}"
 
         if action_name in ("regenerate", "expand_scope") and self.llm_client is None:
             logger.warning(
-                "PPO selected an LLM-driven strategy but no GOOGLE_API_KEY is configured — "
-                "skipping this adaptation cycle (telemetry ingestion and the next drift event are "
-                "entirely unaffected)",
+                "the decision agent selected an LLM-driven strategy but no GOOGLE_API_KEY is "
+                "configured — skipping this adaptation cycle (telemetry ingestion and the next "
+                "trigger are entirely unaffected)",
                 extra={"component": "main", "action": action_name, "affected_component": component},
             )
             return
@@ -524,17 +518,20 @@ class ContinuousOrchestrator:
 
         # Module 19: record + report.
         record = self.lifecycle_agent.record_adaptation_event(
-            drift_event=event, rl_observation=observation, rl_action=action_name, agent_result=agent_result, verification_result=verification_result,
+            trigger=trigger, decision=decision, agent_result=agent_result, verification_result=verification_result,
         )
         self.lifecycle_agent.generate_maintenance_report(record, rag_knowledge_base=self.rag_kb)
 
-        # Feed this cycle's REAL outcome into the NEXT observation's previous-action/previous-
-        # reward slots — the same reward formula CLAUDE.md §6 specifies system-wide.
-        fidelity_before = verification_result.fidelity_before or 0.0
-        fidelity_after = verification_result.fidelity_after or 0.0
-        cost_penalty = settings.ppo.reward.adaptation_cost_penalty.get(action_name, 0.0)
-        self._prev_action_idx = action_idx
-        self._prev_reward = (fidelity_after - fidelity_before) - cost_penalty
+        # Feed this cycle's REAL outcome into the NEXT decision context's previous-outcome slot
+        # for THIS component (prompt.md §18 "previous action taken for this component/incident and
+        # its outcome, where available") — per-component now, not a single global scalar, since
+        # there is no fixed-size observation vector to populate anymore.
+        self._previous_outcome_by_component[component] = PreviousOutcome(
+            action=action_name,
+            verification_result=verification_result.decision,
+            fidelity_before=verification_result.fidelity_before,
+            fidelity_after=verification_result.fidelity_after,
+        )
 
         logger.info(
             "adaptation cycle complete",

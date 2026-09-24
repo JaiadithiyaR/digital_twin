@@ -739,7 +739,43 @@ that this same clamping behavior is intentional and tested with synthetic data t
   source (alongside the existing external-drift path) — tracked under the Module 13 rebuild /
   Phase 11 rewiring entries below, not done as part of this Module 12 addendum itself.
 
-## Module 13 — RL Decision Agent (Agent 1: PPO)
+## Module 13 — Decision & Root-Cause Analysis Agent (Agent 1) — REBUILT this revision
+- [x] **Design pivot complete**: rebuilt from a Stable-Baselines3 PPO RL policy into a
+  knowledge-based LLM agent (CLAUDE.md §12's design-pivot notice, §6). `src/adaptation/
+  {rl_env.py,rl_agent.py}`, `data/models/ppo/policy.zip`, `scripts/train_ppo.py`, and the
+  `gymnasium`/`stable-baselines3`/`torch` dependencies are genuinely DELETED (confirmed via a
+  repo-wide grep sweep before deletion that nothing else imported them, and again after deletion
+  that no live import remains). New files: `src/adaptation/decision_context.py` (builds a
+  bounded, structured `DecisionContext` from real per-component `FidelityEvaluator` scores + the
+  real `UnifiedFidelityScore`, the real `AdaptationTrigger`, a per-component `PreviousOutcome`,
+  real `D1Store`-derived network-state summary, and real RAG retrieval via
+  `RagKnowledgeBase` — degrading to an empty list, never fabricated, when unavailable) and
+  `src/adaptation/decision_agent.py` (`DecisionAgent.decide()`/`decide_safe()` — one genuine
+  `GoogleClient.complete_structured()` call per trigger against `DecisionOutput`, a schema
+  structurally enforcing the closed `{"recalibrate","regenerate","expand_scope"}` strategy enum
+  plus `root_cause_analysis`/`confidence`/`rationale`/`knowledge_refs` per prompt.md §20;
+  `decide_safe()` degrades to `config.decision_agent.fallback.default_strategy` on any genuine
+  LLM infrastructure failure — including `llm_client=None` — logged at WARNING every time, never
+  a routine substitute). No training phase, no saved policy artifact, no observation vector — full
+  design rationale is in `CLAUDE.md`'s Module 13 entry; read that before touching either file.
+- [x] Tests: 23 new tests, all passing — `tests/unit/test_decision_context.py` (10) and
+  `tests/unit/test_decision_agent.py` (13); see CLAUDE.md's Module 13 entry for the full
+  breakdown. The required real "run one full cycle" proof is
+  `tests/integration/test_lifecycle_agent.py` (re-run against the rebuilt agent — see Module 19's
+  entry below for the real observed result) plus a second, independent real proof via
+  `tests/integration/test_main_orchestrator.py`/`scripts/run_orchestrator_demo.py` (see Phase
+  11's entry below — this one genuinely hit Google's live servers and received a real
+  `400 API_KEY_INVALID` response, correctly classified and gracefully degraded).
+- Known blockers: none for the rebuild itself. Live-API *success* validation (a real key
+  returning a real completion, never yet observed) remains genuinely pending — see Overall Next
+  Task.
+- Last verified command: `.venv/bin/python -m pytest tests/unit/test_decision_context.py
+  tests/unit/test_decision_agent.py -v` → `23 passed`.
+
+<details>
+<summary>Prior PPO implementation (STALE — retained for history only; the files themselves no
+longer exist in this repo — do not cite these numbers as current behavior)</summary>
+
 - [x] Implementation status: `src/adaptation/{rl_env.py,rl_agent.py}`. `AdaptationEnv(gym.Env)`
   — `Discrete(3)` action space (0=Recalibrate/1=Regenerate/2=Expand Scope, from
   `config.ppo.action_mapping`, prompt.md §19), 23-dim `Box` observation
@@ -805,6 +841,8 @@ that this same clamping behavior is intentional and tested with synthetic data t
   Module 17 (Agentic Verification) is eventually built, wire it to reuse `FidelityEvaluator.
   evaluate(..., update_window=False)` on the same evaluator instance production uses (flagged by
   Module 12, still not done).
+
+</details>
 
 ## Module 14 — Recalibration Agent (Agent 2)
 - [x] Implementation status: `src/adaptation/recalibration_agent.py` (`RecalibrationAgent`) +
@@ -1216,74 +1254,60 @@ that this same clamping behavior is intentional and tested with synthetic data t
   "RAG context: not available" placeholder — a natural, low-risk follow-up now that D2 exists,
   deliberately left undone here to respect this turn's stated scope.
 
-## Module 19 — Lifecycle Management Agent (Agent 6)
+## Module 19 — Lifecycle Management Agent (Agent 6) — field schema updated this revision (LLM/RL pivot)
 - [x] Implementation status: `src/adaptation/lifecycle_agent.py` (`LifecycleAgent`) — the last of
   the six agents; it decides nothing, it RECORDS and EXPLAINS what every other agent already
-  decided. `LifecycleRecord` (pydantic, frozen) carries every field prompt.md §37 lists — event
-  ID, timestamp, drift event, affected component/scope, drift severity, RL observation/context,
-  RL action, agent action, production version before, candidate version, fidelity before,
-  fidelity after, verification result, verification explanation, training window, evaluation
-  window, model metadata, LLM metadata if used, final status — every one read verbatim from the
-  real upstream object, nothing re-derived. `production_version_before` is simply the candidate's
-  own `parent_version_id`; `fidelity_before`/`fidelity_after`/`verification_result`/
-  `verification_explanation` all come from Module 17's independently-recomputed
-  `VerificationResult`, never an agent's own self-reported values. `agent_action` is built by a
-  small duck-typed `_summarize_agent_action()` helper since Modules 14/15/16's result types
-  deliberately share no common base class. Persistence is a genuinely append-only JSON-Lines log
-  (`config.lifecycle.records_path`) — every event permanently identified by its own
-  `event_id`/timestamp, satisfying "produces a versioned adaptation record" without a separate
-  log-versioning mechanism, since every field already embeds the real component/candidate VERSION
-  IDs Modules 14-17 produced. The maintenance report (`generate_maintenance_report()`, prompt.md
-  §38) is generated automatically from the ALREADY-RECORDED `LifecycleRecord`: a deterministic
-  template is ALWAYS produced first and used whenever no LLM is configured or the LLM call fails
-  (reusing `AnthropicClient.complete_safe`'s existing graceful-degradation convention verbatim,
-  no new fallback logic); when an LLM is supplied, it's asked to write better prose FROM the same
-  facts (never to invent new ones or change the already-final verification result), with D2's
-  `RagKnowledgeBase` consulted for contextual knowledge exactly like Module 17's own RAG
-  consultation. Full design rationale is in `CLAUDE.md`'s Module 19 entry.
-- [x] Tests: 15 new tests (463 -> 478 total, 1 still skipped [live LLM smoke test, unrelated]):
-  `tests/unit/test_lifecycle_agent.py` (14 — every `LifecycleRecord` field correctly populated;
-  `final_status`/`production_version_before` correct for both ACCEPT and REJECT; `None`
-  `production_version_before` correct for an expand-scope-shaped candidate; the agent-action
-  summary proven distinct across all three real result types in one test; `llm_metadata` carried
-  from the registry's updated version; persistence readable by a fresh instance; multiple events
-  append in order without overwriting; unknown `event_id` raises; empty log returns `[]`; the
-  deterministic report covers every required topic with no LLM configured; an LLM-authored report
-  is used verbatim when available; LLM failure falls back to the deterministic report; RAG context
-  genuinely retrieved and reaching the LLM prompt when supplied; no knowledge base degrades to
-  `"not available"` and never crashes) and, **the key deliverable**,
+  decided. `LifecycleRecord` (pydantic, frozen) carries every field prompt.md §37 lists PLUS the
+  richer §20 decision-output fields — event ID, timestamp, **`trigger`** (was `drift_event`),
+  affected component/scope, **`trigger_severity`/`trigger_type`** (was `drift_severity`),
+  **`decision_strategy`/`root_cause_analysis`/`decision_confidence`/`decision_rationale`/
+  `knowledge_refs`** (was `rl_observation`/`rl_action`), agent action, production version before,
+  candidate version, fidelity before, fidelity after, verification result, verification
+  explanation, training window, evaluation window, model metadata, LLM metadata if used, final
+  status — every one read verbatim from the real upstream object, nothing re-derived.
+  `production_version_before` is simply the candidate's own `parent_version_id`;
+  `fidelity_before`/`fidelity_after`/`verification_result`/`verification_explanation` all come
+  from Module 17's independently-recomputed `VerificationResult`, never an agent's own
+  self-reported values. `agent_action` is built by a small duck-typed `_summarize_agent_action()`
+  helper since Modules 14/15/16's result types deliberately share no common base class.
+  Persistence is a genuinely append-only JSON-Lines log (`config.lifecycle.records_path`) —
+  `list_records()` now also skips-and-logs (never crashes on) any line written by a superseded
+  schema version, a real necessity discovered running the real end-to-end demo against this
+  repo's own pre-pivot `lifecycle_records.jsonl` (see Phase 11's entry). The maintenance report
+  (`generate_maintenance_report()`, prompt.md §38) is generated automatically from the
+  ALREADY-RECORDED `LifecycleRecord`: a deterministic template is ALWAYS produced first and used
+  whenever no LLM is configured or the LLM call fails (reusing `GoogleClient.complete_safe`'s
+  graceful-degradation convention verbatim); when an LLM is supplied, it's asked to write better
+  prose FROM the same facts, with D2's `RagKnowledgeBase` consulted for contextual knowledge.
+  Full design rationale is in `CLAUDE.md`'s Module 19 entry.
+- [x] Tests: 16 (`tests/unit/test_lifecycle_agent.py`, all passing, including the new
+  schema-migration-resilience test) plus **the key deliverable**,
   `tests/integration/test_lifecycle_agent.py` (1 — the REQUIRED real "run one full cycle" proof,
-  described below).
+  re-run against the rebuilt Module 13, described below).
 - Known blockers: none.
 - Last verified command: `.venv/bin/python -m pytest tests/unit/test_lifecycle_agent.py
-  tests/integration/test_lifecycle_agent.py -v` → 15 passed; full suite
-  `.venv/bin/python -m pytest tests -q` → 478 passed, 1 skipped, 0 regressions (2026-09-07).
-- **The full real cycle was actually run and the resulting record was inspected for completeness,
-  exactly as this turn's instruction required.** `tests/integration/test_lifecycle_agent.py`
-  chains: a real raw drift notification through Module 11's `DriftDetectorInterface.
-  process_event()` -> a real observation from a real `AdaptationEnv.reset()` (Module 13), decided
-  by the REAL already-trained PPO policy on disk via `decide_adaptation_strategy()` -> dispatch,
-  in the test, to WHICHEVER of Modules 14/15/16's real agents PPO actually selected (all three
-  wired, no branch assumed in advance) -> a real Module 17 `VerificationAgent.verify()` call ->
-  this module's `record_adaptation_event()`/`generate_maintenance_report()`. **Actual observed
-  result on this machine (2026-09-07)**: PPO selected **`regenerate`** for a synthetic
-  `throughput` drift event at severity 0.65; `RegenerationAgent` produced a real sandboxed
-  candidate (`RebuiltThroughput`, sandbox rmse=1.6435, 1 attempt); `VerificationAgent`
-  independently recomputed **fidelity_before=0.9800, fidelity_after=0.9977 -> ACCEPT**, genuinely
-  promoting `throughput-v2` to production; the resulting `LifecycleRecord`'s full JSON was
-  inspected directly and confirmed to contain every one of prompt.md §37's fields with correct,
-  non-fabricated values, and the generated maintenance report was confirmed to mention the
-  affected component, the selected action, and the verification decision.
-- Next task: `src/main.py` (prompt.md §39's continuous orchestration loop, Phase 11) — the last
-  remaining piece. All 19 numbered modules + D1 + D2 are now implemented and tested; what remains
-  is wiring them into one real continuous loop (init config/storage/RAG/registry -> load/train
-  bootstrap DT models -> start telemetry source -> continuously: receive telemetry -> preprocess
-  -> synchronize D1 -> run dependency-aware DT prediction -> evaluate fidelity -> receive drift
-  event -> construct PPO observation -> PPO chooses action -> selected adaptation agent -> create
-  candidate -> sandbox validation -> Module 17 verification -> ACCEPT/REJECT -> Module 19
-  lifecycle record) — this turn's integration test is effectively a manual, single-iteration proof
-  of exactly this loop's core cycle, minus the "run forever, never stop after one event" property
-  prompt.md §39 requires of the real thing. Three still-open follow-ups, unrelated to Module 19's
+  tests/integration/test_lifecycle_agent.py -v` → 17 passed; full suite → 507 passed, 1 skipped
+  (this revision, two clean separate unit/integration invocations).
+- **The full real cycle was re-run against the rebuilt Decision & Root-Cause Analysis Agent and
+  the resulting record was inspected for completeness.** `tests/integration/
+  test_lifecycle_agent.py` chains: a real raw drift notification through Module 11's
+  `DriftDetectorInterface.process_event()`, normalized via `trigger_from_drift_event()` -> a real
+  `DecisionContext` decided by a real `DecisionAgent.decide()` call (LLM transport faked, no real
+  key in this environment) -> dispatch, in the test, to WHICHEVER of Modules 14/15/16's real
+  agents the decision actually selected (all three wired, no branch assumed in advance) -> a real
+  Module 17 `VerificationAgent.verify()` call -> this module's
+  `record_adaptation_event()`/`generate_maintenance_report()`. **Actual observed result on this
+  machine (this revision)**: the decision agent selected **`regenerate`**; `RegenerationAgent`
+  produced a real sandboxed candidate (`RebuiltThroughput`, sandbox rmse=1.6434686446704596, 1
+  attempt); `VerificationAgent` independently recomputed **fidelity_before=0.9799598306188408,
+  fidelity_after=0.997735206164199 -> ACCEPT**, genuinely promoting `throughput-v2` to production
+  (numerically consistent with the pre-pivot run — same underlying deterministic bootstrap
+  data/seed, only the decision layer changed); the resulting `LifecycleRecord` was confirmed to
+  contain every one of prompt.md §37's AND §20's fields with correct, non-fabricated values.
+- Next task: **Phase 11 is now also complete** — see its own entry below. All 19 numbered modules
+  + D1 + D2 are implemented, tested, and wired into one real continuous loop. What remains is
+  live-API validation (a real `GOOGLE_API_KEY` has never been configured in this environment —
+  see Overall Next Task). Three still-open follow-ups, unrelated to Module 19's
   own scope: (1) revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8
   exists (flagged by Module 7, still not done); (2) update Modules 15/16's `_build_context()` to
   genuinely retrieve from `RagKnowledgeBase` instead of their hardcoded "RAG context: not
@@ -1301,9 +1325,10 @@ that this same clamping behavior is intentional and tested with synthetic data t
   canonical loop in CLAUDE.md §2 / prompt.md §39. Integration only — no new model, fidelity,
   verification, or agent logic; only already-tested components, called in the specified order.
   Full design rationale (structural continuous-operation guarantee, bootstrap load-vs-train
-  dispatch, the runtime PPO observation construction and why it does NOT reuse `AdaptationEnv`,
-  the dependency-ground-truth bug found and fixed, honest LLM-availability handling) is in
-  `CLAUDE.md`'s Phase 11 entry — read that before touching this file.
+  dispatch, the real decision-context construction and both canonical trigger sources funneling
+  into one dispatch queue, the dependency-ground-truth bug found and fixed, honest
+  LLM-availability handling confirmed against Google's real live servers) is in `CLAUDE.md`'s
+  Phase 11 entry — read that before touching this file.
 
   **Every module is genuinely wired into the one continuous loop** — checked off here per
   fig-dataflow.png's own module numbering (this list, not the individual module sections above,
@@ -1324,13 +1349,17 @@ that this same clamping behavior is intentional and tested with synthetic data t
   - [x] Module 12 (fidelity) — one persistent, orchestrator-lifetime `FidelityEvaluator`; genuinely
         the FIRST real, non-test consumer of a SHARED evaluator instance across both the periodic
         prediction cycle (`update_window=True`) and Module 17's candidate comparison
-        (`update_window=False`) — the full intent Module 12's own docstring described from the
-        start, finally exercised as designed, not just proven in isolated tests.
-  - [x] Module 13 (PPO) — `decide_adaptation_strategy_safe()` against a genuinely real runtime
-        observation (`_build_runtime_observation()`), using the already-trained policy on disk.
+        (`update_window=False`). **This revision**: `run_prediction_and_fidelity_cycle()` also
+        calls `check_fidelity_trigger()` after every update, enqueueing a real fidelity-based
+        `AdaptationTrigger` onto the SAME queue Module 11's external drift consumer feeds — both
+        canonical trigger sources genuinely dispatch through one path (prompt.md §16a).
+  - [x] Module 13 (Decision & Root-Cause Analysis Agent) — `DecisionAgent.decide_safe()` against
+        a genuinely real `DecisionContext` (`build_decision_context()`), making a genuine LLM call
+        on every trigger (never a cached/reused decision); degrades to the configured fallback
+        strategy on infrastructure failure, confirmed against Google's real live servers.
   - [x] Modules 14/15/16 (recalibrate/regenerate/expand_scope) — dispatched generically on
-        whichever action PPO returns; `regenerate`/`expand_scope` gracefully skip (never fake an
-        LLM call) when no working `AnthropicClient` is available.
+        whichever strategy the decision agent returns; `regenerate`/`expand_scope` gracefully
+        skip (never fake an LLM call) when no working `GoogleClient` is available.
   - [x] Module 17 (verification) — `VerificationAgent.verify()`, independently recomputing
         fidelity and promoting/rejecting the real `ModelRegistry`.
   - [x] D2 (RAG) — `RagKnowledgeBase.from_settings()`, read-only, passed into both Module 17's
@@ -1347,71 +1376,69 @@ that this same clamping behavior is intentional and tested with synthetic data t
     properly needs a `DTModelRegistry` replace/hot-swap primitive that doesn't exist yet (only
     `register`, which raises on a duplicate name) — a legitimate, scoped follow-up, not attempted
     this turn to avoid expanding "integration only" into new registry-primitive design work.
-- [x] Tests: 9 new tests (478 -> 487 total, 1 still skipped [live LLM smoke test, unrelated]):
-  `tests/unit/test_main.py` (8 — the component dispatch tables are internally consistent with
-  each other and with `config.drift.valid_components`; the runtime observation vector has the
-  exact dimension PPO was trained on and stays within its clipped bounds; the affected-component
-  and previous-action one-hots are placed correctly; a cold-start component with no fidelity yet
-  defaults to a finite neutral value, never NaN/crash; the network-state summary is zeros for
-  empty history and a bounded, self-normalized vector for real data; bootstrap dispatch genuinely
-  LOADS every component when production versions already exist, without ever generating bootstrap
-  telemetry) and `tests/integration/test_main_orchestrator.py` (1 — a smaller/faster but still
-  fully real automated re-run of the same full-cycle-plus-continuous-telemetry proof the demo
-  script performs at full scale, against temp storage paths).
-- Known blockers: none for this turn's scope. The hot-swap limitation above is the one open
-  follow-up specific to this module.
+- [x] Tests: `tests/unit/test_main.py` (4 — the component dispatch tables are internally
+  consistent with each other and with `config.drift.valid_components`; per-component
+  `_previous_outcome_for()` tracking, including the honest default for an untracked component;
+  bootstrap dispatch genuinely LOADS every component when production versions already exist,
+  without ever generating bootstrap telemetry) and `tests/integration/test_main_orchestrator.py`
+  (1 — a smaller/faster but still fully real automated re-run of the same
+  full-cycle-plus-continuous-telemetry proof the demo script performs at full scale, against temp
+  storage paths) — both re-run against the rebuilt Module 13, confirmed passing this revision.
+- Known blockers: none for this revision's scope. The hot-swap limitation above is the one open
+  follow-up specific to this module. Live-API *success* validation remains genuinely pending — see
+  Overall Next Task.
 - Last verified command: `.venv/bin/python -m pytest tests/unit/test_main.py
-  tests/integration/test_main_orchestrator.py -v` → 8 passed, 0 failed (2026-09-07); a prior clean
-  full-suite run in this same session (before this turn's files existed) confirmed
-  478 passed, 1 skipped with 0 regressions from Modules 1-19 + D1 + D2; `.venv/bin/python -m
-  pytest tests --collect-only -q` → all 487 tests (478 + this turn's 9) collect with zero import/
-  collection errors. **Honestly noted**: several later attempts at a single combined
-  `pytest tests -q` run (487 tests in one process) were killed by this environment's own memory
-  manager partway through (as early as the first ~40 tests) — confirmed unrelated to this turn's
-  code (no existing source file was modified, only new files added; `free -h` showed ample memory
-  immediately before and after each kill) rather than re-run indefinitely against a resource
-  constraint outside this session's control. `python scripts/run_orchestrator_demo.py` → real,
-  unattended, one-cycle run against this repo's REAL configured storage paths — see below for the
-  actual observed result.
-- **The REQUIRED real, unattended, one-full-cycle validation run — performed exactly as this
-  turn's instruction specified.** `scripts/run_orchestrator_demo.py` (permanent, repo-tracked)
-  initialized the complete system against this project's REAL configured storage paths (the very
-  first genuine `D1Store`/`ModelRegistry`/lifecycle-records state this project has ever produced),
-  narrowed the mock drift severity range to bias toward `recalibrate` (documented, honest reason:
-  no real `ANTHROPIC_API_KEY` is configured in this environment; low severity reliably selects the
-  one strategy that needs no LLM at all, per Module 13's own real held-out evidence — PPO still
-  genuinely decided, nothing else about the run was scripted or faked), and ran unattended.
-  **Actual observed result (2026-09-07)**: a real drift event on `jitter` at severity 0.1846 ->
-  PPO genuinely selected `recalibrate` -> real candidate `jitter-v2` produced -> Module 17
-  independently recomputed **fidelity_before=1.8686, fidelity_after=0.9853 -> REJECT** (a
-  genuinely worse candidate, correctly and automatically rejected — production `jitter-v1`
-  untouched) -> a complete Module 19 lifecycle record and human-readable maintenance report were
-  generated (both are now real, permanent files: `data/artifacts/lifecycle_records.jsonl` and
-  `data/artifacts/maintenance_reports/1dd67be9-e230-47d9-9683-0b42dcc823a4.md`). **The concrete
-  continuous-operation proof this turn required**: a real sampler thread observed
-  `ContinuousSynchronizer.records_synced` grow from **560 to 680** strictly WITHIN the adaptation
-  cycle's own 2.438-second wall-clock window (148 samples taken 10ms apart during that exact
-  bracket) — telemetry ingestion never paused for the adaptation cycle, confirmed with real
-  numbers. A REJECT outcome is treated as an equally complete "one full cycle" as an ACCEPT would
-  have been — Module 17 correctly protecting production from a worse candidate IS the deterministic
-  gate working as designed, not a shortfall of this validation.
-- Next task: none required by prompt.md's core architecture — all 19 numbered modules + D1 + D2
-  are now implemented, tested, AND wired into one real continuous loop that has been run and
-  validated end-to-end. Remaining, explicitly-scoped follow-ups for whoever picks this up next:
-  (1) the `DTModelRegistry` hot-swap/replace primitive flagged above, so an ACCEPTed recalibration
-  candidate actually takes over live serving without a process restart; (2) a vetted dynamic-
-  loading path for regenerate/expand_scope candidates specifically (flagged by Modules 15/16/17
-  since before this module existed — a materially harder problem than (1), since it involves
-  LLM-generated code, not just a trusted already-in-process instance); (3) revisit
-  `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by Module
-  7, still not done); (4) update Modules 15/16's `_build_context()` to genuinely retrieve from
-  `RagKnowledgeBase` instead of their hardcoded "RAG context: not available" placeholder (flagged
-  by D2, still not done); (5) a real component-scoped adaptation lock (prompt.md §30) for genuine
-  concurrent-drift-event handling — this orchestrator processes one drift event fully before the
-  next, which is safe but not yet the "queue/coalesce/defer" policy `config.adaptation.
-  lock_policy` already anticipates; (6) `tests/e2e/` is still empty — this turn's validation
-  scripts/tests are the closest thing to true e2e coverage so far, but a dedicated `tests/e2e/`
-  suite (prompt.md's own directory convention) has never been populated.
+  tests/integration/test_main_orchestrator.py -v` → 5 passed, 0 failed (this revision); full
+  suite → 507 passed, 1 skipped across two clean separate unit/integration invocations (this
+  environment intermittently can't sustain one single combined 507-test run without its own
+  memory manager killing it partway through — a genuine, repeatedly-observed environment
+  constraint, not a code issue). `python scripts/run_orchestrator_demo.py` → real, unattended,
+  one-cycle run against this repo's REAL configured storage paths — see below for the actual
+  observed result.
+- **The REQUIRED real, unattended, one-full-cycle validation run — re-run this revision against
+  the rebuilt Decision & Root-Cause Analysis Agent.** `scripts/run_orchestrator_demo.py`
+  (permanent, repo-tracked) initialized the complete system against this project's REAL configured
+  storage paths and ran unattended. **Actual observed result (this revision)**: a real drift event
+  on `jitter` at severity 0.1846 -> the decision agent genuinely attempted a live Google AI call,
+  received a real `400 INVALID_ARGUMENT (API_KEY_INVALID)` response from Google's actual servers
+  (no valid key configured), correctly classified it non-retryable, and degraded to the configured
+  fallback `recalibrate` (confidence=0.0, logged at WARNING) -> real candidate `jitter-v5`
+  produced -> Module 17 independently recomputed **fidelity_before=0.9902, fidelity_after=0.6185
+  -> REJECT** (a genuinely worse candidate, correctly and automatically rejected — production
+  `jitter-v4` untouched) -> a complete Module 19 lifecycle record (including the new
+  `decision_strategy`/`root_cause_analysis`/`decision_confidence` fields) and human-readable
+  maintenance report were generated. **The concrete continuous-operation proof**: a real sampler
+  thread observed `ContinuousSynchronizer.records_synced` grow from **340 to 420** strictly WITHIN
+  the adaptation cycle's own 2.194-second wall-clock window (99 samples taken 10ms apart during
+  that exact bracket) — telemetry ingestion never paused for the adaptation cycle. A REJECT
+  outcome is treated as an equally complete "one full cycle" as an ACCEPT would have been. **A
+  real, necessary bug was found and fixed while running this**: the repo's pre-existing
+  `data/artifacts/lifecycle_records.jsonl` (written before this revision, old schema) crashed
+  `LifecycleAgent.list_records()` on first attempt — fixed by making `list_records()` skip-and-log
+  any line that fails to validate against the current schema (Module 19's own entry above), not by
+  deleting the old data.
+- Next task: none required by prompt.md's core architecture for the LLM/RL design pivot itself —
+  all 19 numbered modules + D1 + D2 are implemented, tested, AND wired into one real continuous
+  loop that has been re-validated end-to-end against the rebuilt Module 13. The one genuinely new
+  remaining task the pivot itself surfaces: **live-API success validation** — a real
+  `GOOGLE_API_KEY`/`GEMINI_API_KEY` has never been configured in this environment, so no test or
+  run in this project has yet observed a genuinely successful (non-error) live Google AI response;
+  every "LLM available" path validated so far is either a mocked transport or a real transport
+  that genuinely failed at auth (see `test_live_api_smoke_if_key_configured`, which auto-skips
+  until a real key exists). Remaining, explicitly-scoped follow-ups from before the pivot, still
+  open and unaffected by it: (1) the `DTModelRegistry` hot-swap/replace primitive flagged above,
+  so an ACCEPTed recalibration candidate actually takes over live serving without a process
+  restart; (2) a vetted dynamic-loading path for regenerate/expand_scope candidates specifically;
+  (3) revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged
+  by Module 7, still not done); (4) update Modules 15/16's `_build_context()` to genuinely
+  retrieve from `RagKnowledgeBase` instead of their still-hardcoded "RAG context: not available —
+  Module 18 (RAG Knowledge Base) is not built yet" placeholder — genuinely stale text now (D2
+  exists and Module 13's own `decision_context.py` proves the real retrieval pattern), flagged by
+  D2 originally, still not done, unaffected by and unrelated to this pivot; (5) a real
+  component-scoped adaptation lock (prompt.md §30) for genuine concurrent-trigger handling — this
+  orchestrator processes one trigger fully before the next, which is safe but not yet the
+  "queue/coalesce/defer" policy `config.adaptation.lock_policy` already anticipates; (6)
+  `tests/e2e/` is still empty.
 
 ---
 
@@ -1419,9 +1446,11 @@ that this same clamping behavior is intentional and tested with synthetic data t
 - [x] Repository scaffolding + Git init — full directory tree per prompt.md §53 created; `git
   init` done on branch `main` (no commits yet — commits are made only when the user asks).
 - [x] Python virtual environment + dependencies installed/verified — `.venv` (Python 3.14.4);
-  `pip install -r requirements.txt` succeeded; all 16 core packages import cleanly, including
-  `torch 2.14.0+cu130` with `cuda_available=True` (NVIDIA GPU detected via `nvidia-smi`, driver
-  592.82, CUDA 13.1 — used where beneficial for PPO training, never required; CPU path unaffected).
+  `pip install -r requirements.txt` succeeded; all core packages import cleanly. **This revision
+  (LLM/RL design pivot)**: `torch`/`gymnasium`/`stable-baselines3` genuinely uninstalled from the
+  venv (confirmed via `pip show` that nothing else depended on them first) — this project now has
+  no GPU/CUDA-dependent component at all, since Module 13 is a remote LLM call rather than a
+  locally-trained policy (see CLAUDE.md §12's design-pivot notice).
 - [x] `config/settings.yaml` + `.env.example` — every tunable in prompt.md §40 covered; secrets
   excluded (`GOOGLE_API_KEY`/`GEMINI_API_KEY` only in `.env`/env vars, never YAML — updated this
   revision from `ANTHROPIC_API_KEY`, see the LLM provider pivot below). `.env` scaffolded locally
@@ -1492,39 +1521,40 @@ that this same clamping behavior is intentional and tested with synthetic data t
 - [x] Main continuous loop (`src/main.py`, `--mode demo` / `--mode live`) — implemented, wired,
   and run end-to-end for real; see the new "Phase 11" section above for the full write-up and
   actual observed results.
-- [~] Test suite: unit / integration / e2e — `tests/unit/` (443 tests: config, logging, mock
+- [x] Test suite: unit / integration / e2e — `tests/unit/` (466 collected: config, logging, mock
   source, zmq source, preprocessing, D1 interface/stub, synchronizer, D1 component registry,
   D1Store [incl. 4 dtype-integrity regression tests], DT model registry, orchestrator, all five
   DT prediction components, Module 12's fidelity metrics/evaluator/unified-score/fidelity-trigger
-  [STALE test count — see the LLM-pivot and fidelity-trigger entries below for what changed this
-  revision], Module 11's mock drift source + drift detector interface, Module 13's `AdaptationEnv`
-  + `rl_agent` plumbing [STALE — see CLAUDE.md §12 design-pivot notice], the
-  centralized Google AI (Gemini) client [mocked transport — no real API key is configured in this
-  environment; one live-smoke test exists and auto-skips until a real key is ever set], the
-  versioned `ModelRegistry`, the `RecalibrationAgent`, the shared `data_selection` helpers, the
-  `SandboxExecutor`, the `RegenerationAgent`, the `ExpandScopeAgent`, D2's `RagKnowledgeBase`/
-  `RagIngestor`, Module 17's `VerificationAgent` [incl. the rule-9 LLM-cannot-override proof in
-  both directions], Module 19's `LifecycleAgent`, and Phase 11's `ContinuousOrchestrator` dispatch/
-  observation-construction logic) + `tests/integration/` (44 tests: full Module 2 pipeline +
-  Module 3 continuous sync + Module 3 -> real D1Store wiring + orchestrator <- real D1Store + all
-  five DT models' training+orchestrator [incl. real dependency chains, two-independent-root-nodes,
-  the enable/disable toggle, and the full 5-component throughput->{latency,prb_utilization}->
-  jitter chain through DTOrchestrator] + the fidelity engine run against real predictions from all
-  five components vs. real D1 ground truth, mock and real-zmq paths + Module 11's full drift
-  pipeline against real config + Module 13's real small PPO training run + held-out-scenario check
-  + Module 14's real candidate through the full pipeline and the concrete continuous-telemetry-
-  during-recalibration proof + Module 15's real sandboxed candidate through the full pipeline and
-  the concrete continuous-telemetry-during-regeneration proof + Module 16's real sandboxed
-  new-component through the full pipeline, the concrete continuous-telemetry-during-expand-scope
-  proof, and the six-component dynamic `DTModelRegistry`/`DTOrchestrator` proof + D2's real
-  `rag_data/` corpus ingestion across all four categories with genuine semantic embeddings +
-  Module 17's real recalibration candidate verified end-to-end with a real independently-
-  recomputed ACCEPT decision + Module 19's REAL full drift->PPO->agent->verification->lifecycle
-  cycle + Phase 11's real, smaller-scale automated re-run of the full orchestrator cycle) = 487
-  total (478 confirmed passing, 1 skipped, in a clean full-suite run earlier in this session, plus
-  this turn's 9 new tests confirmed passing together separately — see Phase 11's own entry for why
-  a single unified 487-test run could not be completed this turn, a memory-environment constraint,
-  not a code issue); `tests/e2e/` still empty — see Phase 11's follow-up (6).
+  [including the debounce state machine, this revision], Module 11's mock drift source + drift
+  detector interface, Module 13's rebuilt `decision_context`/`decision_agent` [this revision — the
+  old `AdaptationEnv`/`rl_agent` tests no longer exist], the centralized Google AI (Gemini) client
+  [28 tests, mocked transport — no real API key is configured in this environment; one live-smoke
+  test exists and auto-skips until a real key is ever set], the versioned `ModelRegistry`, the
+  `RecalibrationAgent`, the shared `data_selection` helpers, the `SandboxExecutor`, the
+  `RegenerationAgent`, the `ExpandScopeAgent`, D2's `RagKnowledgeBase`/`RagIngestor`, Module 17's
+  `VerificationAgent` [incl. the rule-9 LLM-cannot-override proof in both directions], Module 19's
+  `LifecycleAgent` [incl. the schema-migration-resilience test, this revision], and Phase 11's
+  `ContinuousOrchestrator` per-component previous-outcome tracking) + `tests/integration/` (42
+  tests: full Module 2 pipeline + Module 3 continuous sync + Module 3 -> real D1Store wiring +
+  orchestrator <- real D1Store + all five DT models' training+orchestrator [incl. real dependency
+  chains, two-independent-root-nodes, the enable/disable toggle, and the full 5-component
+  throughput->{latency,prb_utilization}->jitter chain through DTOrchestrator] + the fidelity
+  engine run against real predictions from all five components vs. real D1 ground truth, mock and
+  real-zmq paths + Module 11's full drift pipeline against real config + Module 14's real
+  candidate through the full pipeline and the concrete continuous-telemetry-during-recalibration
+  proof + Module 15's real sandboxed candidate through the full pipeline and the concrete
+  continuous-telemetry-during-regeneration proof + Module 16's real sandboxed new-component
+  through the full pipeline, the concrete continuous-telemetry-during-expand-scope proof, and the
+  six-component dynamic `DTModelRegistry`/`DTOrchestrator` proof + D2's real `rag_data/` corpus
+  ingestion across all four categories with genuine semantic embeddings + Module 17's real
+  recalibration candidate verified end-to-end with a real independently-recomputed ACCEPT decision
+  + Module 19's REAL full trigger->decision-agent->agent->verification->lifecycle cycle, re-run
+  against the rebuilt Module 13 this revision + Phase 11's real, smaller-scale automated re-run of
+  the full orchestrator cycle, also re-run this revision) = 508 total collected, 507 passing/1
+  skipped confirmed this revision across two clean separate invocations (`tests/unit` then
+  `tests/integration` — this environment intermittently can't sustain one single combined run
+  without its own memory manager killing it, a genuine repeatedly-observed constraint, not a code
+  issue); `tests/e2e/` still empty.
 - [x] End-to-end validation run (demo mode) — performed for real this turn via
   `scripts/run_orchestrator_demo.py` against this project's REAL configured storage paths; see the
   "Phase 11" section above for the actual observed result. Real NS-3 e2e (`ns3_sim/validate_e2e.py`)
@@ -1537,33 +1567,58 @@ that this same clamping behavior is intentional and tested with synthetic data t
 ## Verified commands (re-run these to confirm the environment still works)
 ```
 .venv/bin/python scripts/setup.py                 # directories, .env scaffold, dep + config check
-.venv/bin/python -m pytest tests -q                # 487 total; 478 confirmed passing/1 skipped in a clean full run + this turn's 9 new tests confirmed passing separately (2026-09-07) — see Phase 11 entry: a single combined 487-test run has been repeatedly killed by this environment's memory manager, not a code issue
+.venv/bin/python -m pytest tests/unit -q           # 466 collected; 465 passing/1 skipped, confirmed this revision (LLM/RL design pivot)
+.venv/bin/python -m pytest tests/integration -q    # 42 passed, confirmed this revision
 ./scripts/setup_ns3.sh                             # idempotent ns-3+nr clone/configure/build
 python ns3_sim/validate_e2e.py                     # real NS-3 binary -> real zmq -> real preprocessing; OK, 162/162 clean (2026-09-07)
-python scripts/train_ppo.py --total-timesteps 20000 --n-envs 4 --seed 42   # real PPO training + held-out inference report (2026-09-07): see Module 13 entry
 python scripts/ingest_rag.py                       # real ChromaDB ingestion of rag_data/; OK, 6 documents / 31 chunks across all 4 categories, re-run confirmed idempotent (2026-09-07)
-python scripts/run_orchestrator_demo.py            # real, unattended, one-full-cycle orchestrator run against REAL storage paths; OK, records_synced 560->680 during a 2.438s adaptation cycle, REJECT decision (jitter, real fidelity 1.8686->0.9853) (2026-09-07): see Phase 11 entry
+python scripts/run_orchestrator_demo.py            # real, unattended, one-full-cycle orchestrator run against REAL storage paths; OK this revision, records_synced 340->420 during a 2.194s adaptation cycle, real Google AI 400/API_KEY_INVALID -> fallback recalibrate -> REJECT decision (jitter, real fidelity 0.9902->0.6185): see Phase 11 entry
 python -m src.main --mode demo --max-drift-events 1   # the same orchestrator via its real CLI entrypoint, bounded to one cycle
 ```
 
 ## Overall Next Task
-No module work is required by prompt.md's core architecture — all 19 numbered modules + D1 + D2
-are now implemented, tested, AND genuinely wired into one real continuous loop
-(`src/main.py`/`ContinuousOrchestrator`) that has been run unattended end-to-end and validated with
-real, observed numbers (see the "Phase 11" section above). What remains are the explicitly-scoped
-follow-ups Phase 11's own entry lists: (1) a `DTModelRegistry` hot-swap/replace primitive so an
-ACCEPTed recalibration candidate actually takes over live serving without a process restart —
-currently only `ModelRegistry` (Concept C, the versioned artifact store) is updated on promotion,
-not the LIVE in-memory serving registry; (2) a vetted dynamic-loading path specifically for
-regenerate/expand_scope candidates (materially harder than (1) — untrusted LLM-generated code,
-flagged by Modules 15/16/17 since before this module existed); (3) revisit
-`LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by Module 7,
-still not done — the longest-standing open item in this project); (4) update Modules 15/16's
-`_build_context()` to genuinely retrieve from `RagKnowledgeBase` instead of their hardcoded "RAG
-context: not available" placeholder (flagged by D2, still not done); (5) a real component-scoped
-adaptation lock implementing `config.adaptation.lock_policy`'s queue/coalesce/defer semantics for
-genuinely concurrent drift events (this orchestrator is safe today because it never overlaps
-adaptations, which is a stronger-than-required but not yet the DESIGNED policy); (6) a populated
-`tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter (Module 1) once both
-happen to be exercised in the same session — nothing in `src/main.py` is NS-3-specific, this is
-purely an untried combination, not a known gap.
+**The LLM/RL design pivot (CLAUDE.md §12) is COMPLETE**: Module 13 rebuilt as the knowledge-based
+Decision & Root-Cause Analysis Agent, the LLM provider moved from Anthropic to Google AI (Gemini)
+across every consumer, Module 12 gained the Unified Fidelity Score + debounced fidelity-based
+trigger, Module 19's `LifecycleRecord` schema updated to record the richer decision output, and
+`src/main.py` fully rewired onto both canonical trigger sources — all re-validated end-to-end with
+real, observed numbers (see the "Phase 11" and "Module 13"/"Module 19" sections above), including
+a real end-to-end demo run that genuinely reached Google's live servers. A repo-wide grep for
+`anthropic|stable.baselines|gymnasium|rl_env|rl_agent` returns only intentional historical/
+comparison prose — confirmed clean.
+
+No module work is otherwise required by prompt.md's core architecture — all 19 numbered modules +
+D1 + D2 remain implemented, tested, AND genuinely wired into one real continuous loop. What
+remains:
+
+1. **Live-API success validation (the one genuinely new task this pivot surfaces)**: a real
+   `GOOGLE_API_KEY`/`GEMINI_API_KEY` has never been configured in this environment. Every
+   LLM-dependent path has been validated either against a mocked transport or a real transport
+   that genuinely failed at auth (a real, well-formed `400 API_KEY_INVALID` from Google's own
+   servers — see Phase 11's entry) — never yet a genuinely successful live completion. Once a real
+   key is available: re-run `tests/unit/test_google_client.py::test_live_api_smoke_if_key_configured`
+   (currently auto-skipped), and re-run `scripts/run_orchestrator_demo.py`/`run_e2e_demo.py` to
+   observe a genuine (non-fallback) Decision & Root-Cause Analysis Agent call, and ideally a real
+   `regenerate`/`expand_scope` cycle (never yet observed with genuine LLM-generated code, only
+   with hand-authored stand-ins per this project's established mocked-transport testing
+   convention).
+2. A `DTModelRegistry` hot-swap/replace primitive so an ACCEPTed recalibration candidate actually
+   takes over live serving without a process restart — currently only `ModelRegistry` (Concept C,
+   the versioned artifact store) is updated on promotion, not the LIVE in-memory serving registry.
+3. A vetted dynamic-loading path specifically for regenerate/expand_scope candidates (materially
+   harder than (2) — untrusted LLM-generated code, flagged by Modules 15/16/17 since before this
+   module existed).
+4. Revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
+   Module 7, still not done — the longest-standing open item in this project).
+5. Update Modules 15/16's `_build_context()` to genuinely retrieve from `RagKnowledgeBase` instead
+   of their still-hardcoded "RAG context: not available — Module 18 (RAG Knowledge Base) is not
+   built yet" placeholder — genuinely stale now that D2 exists and Module 13's own
+   `decision_context.py` proves the real retrieval pattern (flagged by D2, still not done,
+   unrelated to this pivot).
+6. A real component-scoped adaptation lock implementing `config.adaptation.lock_policy`'s
+   queue/coalesce/defer semantics for genuinely concurrent triggers (this orchestrator is safe
+   today because it never overlaps adaptations, which is stronger-than-required but not yet the
+   DESIGNED policy).
+7. A populated `tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter
+   (Module 1) once both happen to be exercised in the same session — nothing in `src/main.py` is
+   NS-3-specific, this is purely an untried combination, not a known gap.

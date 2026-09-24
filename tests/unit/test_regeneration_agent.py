@@ -298,7 +298,7 @@ def test_prompt_includes_current_source_and_drift_context(tmp_path):
 
     agent.regenerate(
         lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
-        drift_context="PPO selected regenerate due to severity 0.87",
+        drift_context="decision agent selected regenerate due to severity 0.87",
     )
 
     prompt = llm.calls[0]

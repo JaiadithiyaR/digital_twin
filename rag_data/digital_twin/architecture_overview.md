@@ -4,18 +4,22 @@
 This is a production-quality, modular AI-Driven Self-Adaptive Network Digital Twin (DT) platform
 that ingests telemetry from an NS-3/5G-LENA simulated 5G network, keeps a continuously
 synchronized dynamic DT state (never a static periodically-replaced dataset), runs
-dependency-aware DT prediction components, computes deterministic per-component fidelity, reacts
-to externally-sourced drift events via a trained PPO policy that selects an adaptation strategy,
-executes that strategy through an LLM-capable adaptation agent producing an isolated sandboxed
-candidate, verifies the candidate with a deterministic acceptance gate, and promotes or rejects
-it while preserving rollback safety.
+dependency-aware DT prediction components, computes deterministic per-component fidelity (plus a
+system-wide Unified Fidelity Score and an internal fidelity-based adaptation trigger), reacts to
+two canonical adaptation triggers (an externally-sourced drift event, or the internal
+fidelity-based trigger) via a knowledge-based (RAG-grounded) Decision & Root-Cause Analysis Agent
+that analyzes the likely root cause and selects an adaptation strategy, executes that strategy
+through an LLM-capable adaptation agent producing an isolated sandboxed candidate, verifies the
+candidate with a deterministic acceptance gate, and promotes or rejects it while preserving
+rollback safety.
 
 ## Canonical Data Flow
 
 ```
 NS-3/5G-LENA -> telemetry extraction -> transport -> validation -> preprocessing
 -> continuous synchronization -> dynamic D1 state -> dependency-aware DT prediction
--> fidelity evaluation -> external drift event -> PPO -> selected adaptation agent
+-> fidelity evaluation (+ unified score/trigger) -> adaptation trigger (external drift OR
+fidelity-based) -> Decision & Root-Cause Analysis Agent -> selected adaptation agent
 -> candidate -> sandbox -> deterministic evaluation -> agentic contextual verification
 -> deterministic acceptance gate -> promotion/rejection -> lifecycle management
 -> continued operation.

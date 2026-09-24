@@ -24,15 +24,18 @@ it.
   already has an adaptation in progress, it is queued rather than coalesced or deferred/dropped.
   Telemetry ingestion itself is never blocked by this lock regardless of policy.
 
-## Per-Strategy Adaptation Cost Penalty
+## Relative Strategy Cost (for the Decision & Root-Cause Analysis Agent's own judgment)
 
-Reward for the PPO decision agent is `fidelity_improvement - adaptation_cost_penalty`, with the
-penalty scaled to reflect each strategy's real relative cost:
-
-- Recalibrate: `0.02` (cheapest — retrains an existing pipeline on recent data).
-- Regenerate: `0.08` (costlier — LLM-driven full pipeline rebuild, sandboxed).
-- Expand Scope: `0.12` (costliest — LLM-driven design AND implementation of a genuinely new
-  component, sandboxed).
+There is no trained policy or numeric reward function anymore (design pivot — the decision agent
+makes a direct, genuine LLM call and judges cost/severity tradeoffs itself, grounded in this
+context, rather than optimizing a reward signal). As qualitative guidance for that judgment,
+ordered cheapest to costliest: Recalibrate (cheapest — retrains an existing pipeline on recent
+data, no LLM code generation involved) < Regenerate (costlier — LLM-driven full pipeline rebuild,
+sandboxed) < Expand Scope (costliest — LLM-driven design AND implementation of a genuinely new
+component, sandboxed). Recalibrate is typically appropriate for a fresh, low-severity, or
+first-attempt incident; Regenerate for structural drift an existing pipeline cannot represent, or
+after Recalibrate has already failed; Expand Scope only for network behaviour the current DT has
+no component for at all, or after repeated failures on the same incident with other strategies.
 
 ## Per-Agent Training-Data Policy
 
@@ -52,7 +55,7 @@ penalty scaled to reflect each strategy's real relative cost:
 - `sandbox.max_output_bytes = 1000000` — captured stdout/stderr from a candidate is truncated
   past this size, bounding an output-flooding vector.
 - The sandboxed subprocess environment is built from scratch (never inherited from the parent
-  process) — secrets such as `ANTHROPIC_API_KEY` are never visible inside it.
+  process) — secrets such as `GOOGLE_API_KEY` are never visible inside it.
 
 ## Drift Detection Interface Policy
 

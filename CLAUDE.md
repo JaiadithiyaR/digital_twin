@@ -256,28 +256,33 @@ python scripts/run_orchestrator_demo.py           # permanent, real, unattended 
 ## 11. Testing Commands
 
 ```bash
-.venv/bin/python -m pytest tests/unit -v          # 443 passed, 1 skipped as of this writing
-.venv/bin/python -m pytest tests/integration -v   # 44 passed (Module 2 pipeline + Module 3 continuous sync + D1 wiring + orchestrator<-D1 + all five DT models' training+orchestrator + fidelity engine vs. real predictions, mock + real zmq + Module 11 drift pipeline vs. real config + Module 13 real PPO training run [STALE — see §12's design-pivot notice; pending re-validation against the new Decision & Root-Cause Analysis Agent] + Module 14 real candidate + concurrent-telemetry proof + Module 15 real sandboxed candidate + concurrent-telemetry proof + Module 16 real sandboxed new component + concurrent-telemetry proof + six-component dynamic orchestrator proof + D2 real rag_data/ corpus ingestion + genuine semantic embeddings + Module 17 real candidate verified end-to-end + Module 19 real full drift->PPO->agent->verification->lifecycle cycle [STALE, same reason] + Phase 11 real orchestrator cycle w/ continuous-telemetry proof [PARTIALLY STALE — the PPO-driven decision step needs a re-run, the threading/continuity proof does not])
+.venv/bin/python -m pytest tests/unit -v          # 466 collected: 465 passed, 1 skipped (live Google AI smoke test, no real key configured) — confirmed clean this revision (post LLM/RL design pivot)
+.venv/bin/python -m pytest tests/integration -v   # 42 passed (Module 2 pipeline + Module 3 continuous sync + D1 wiring + orchestrator<-D1 + all five DT models' training+orchestrator + fidelity engine vs. real predictions, mock + real zmq + Module 11 drift pipeline vs. real config + Module 13's rebuilt Decision & Root-Cause Analysis Agent exercised via the real full-cycle proof + Module 14 real candidate + concurrent-telemetry proof + Module 15 real sandboxed candidate + concurrent-telemetry proof + Module 16 real sandboxed new component + concurrent-telemetry proof + six-component dynamic orchestrator proof + D2 real rag_data/ corpus ingestion + genuine semantic embeddings + Module 17 real candidate verified end-to-end + Module 19 real full trigger->decision-agent->agent->verification->lifecycle cycle + Phase 11 real orchestrator cycle w/ continuous-telemetry proof) — confirmed clean this revision
 .venv/bin/python -m pytest tests/e2e -v           # empty so far
-.venv/bin/python -m pytest tests -q               # 487 total tests, 0 collection errors — see IMPLEMENTATION_STATUS.md's Phase 11 entry: 478 confirmed passing/1 skipped in a clean full run + this turn's 9 new tests confirmed passing separately; a single combined 487-test run has been repeatedly killed by this environment's memory manager, not a code issue
+.venv/bin/python -m pytest tests -q               # 508 total tests collected, 0 collection errors — 507 passing/1 skipped confirmed this revision across two separate clean invocations (tests/unit then tests/integration; this environment intermittently can't sustain one single combined run without its own memory manager killing it — a genuine environment constraint observed repeatedly across this whole project, not a code issue, per prompt.md §0.24's own "report honestly, never fabricate" rule)
 ```
 
 ## 12. Current State
 
-> **Design pivot (this revision): Module 13 has been redesigned** from a Stable-Baselines3 PPO RL
-> policy to a knowledge-based LLM Decision & Root-Cause Analysis Agent (§6), and the LLM provider
-> for the whole project has moved from Anthropic to Google AI (Gemini) (§7). This invalidates:
-> `src/adaptation/rl_env.py`/`rl_agent.py`, `data/models/ppo/policy.zip`,
-> `scripts/train_ppo.py`, the `gymnasium`/`stable-baselines3`/`torch` dependencies, and every
-> specific PPO training/inference result recorded in Module 13's own entry below and in Phase 11's
-> end-to-end validation entry — those are now stale and must be re-implemented/re-validated
-> against the new design (tracked in `IMPLEMENTATION_STATUS.md`). Everything else recorded below
-> (Modules 1-12, 14-19, D1/D2, and the non-PPO parts of Phase 11) is unaffected — those modules
-> only ever consumed a strategy + trigger context from module 13, not its internal mechanism, so
-> their own validated behavior stands. `anthropic_client.py`/`AnthropicClient` throughout this
-> file are superseded by `google_client.py`/`GoogleClient` — re-verify the specific SDK-level
-> claims (exception types, structured-output field names) against `google-genai` when that module
-> is next touched.
+> **Design pivot — COMPLETE as of this revision.** Module 13 has been rebuilt from a
+> Stable-Baselines3 PPO RL policy into a knowledge-based LLM Decision & Root-Cause Analysis Agent
+> (§6), and the LLM provider for the whole project has moved from Anthropic to Google AI (Gemini)
+> (§7). `src/adaptation/rl_env.py`/`rl_agent.py`, `data/models/ppo/policy.zip`,
+> `scripts/train_ppo.py`, `src/llm/anthropic_client.py`, and the `gymnasium`/`stable-baselines3`/
+> `torch` dependencies are all genuinely DELETED (confirmed via a repo-wide grep sweep — see the
+> Phase 11 entry below) — a repo-wide grep for `anthropic|stable.baselines|gymnasium|rl_env|
+> rl_agent` returns only intentional historical/comparison prose (this notice, the "Prior PPO
+> implementation" `<details>` blocks, and `google_client.py`'s own "unlike the old Anthropic
+> client" comments), never a live import. Every module downstream of Module 13 (14-19, D1/D2, and
+> Phase 11's own orchestration loop) needed only a mechanical rewiring onto the new trigger/
+> decision shapes — see Module 19's entry (the `LifecycleRecord` schema itself DID need a small,
+> necessary update: `drift_event`/`rl_observation`/`rl_action` → `trigger`/`decision_strategy`/
+> `root_cause_analysis`/`decision_confidence`/`decision_rationale`/`knowledge_refs`, since Module
+> 13's new structured output is richer than a bare action index and prompt.md §20 explicitly
+> requires Module 19 to record it) and Phase 11's entry (the real end-to-end demo run) for what
+> was actually done and observed. All specific PPO training/inference numbers previously recorded
+> here are preserved ONLY inside `<details>`-collapsed historical blocks, clearly marked STALE —
+> never cited as current system behavior.
 
 **Phase 1 (prompt.md §67) in progress.** Done: full directory scaffold, git init (branch `main`,
 no commits — commits only on explicit user request, per this project's operating rules), `.venv`
@@ -1009,69 +1014,81 @@ compute or touch this formula. Key design decisions:
   debounce is itself a testable, deterministic state machine (single below-threshold cycle must
   NOT fire; N consecutive cycles must) — write it as such, not as an ad hoc counter.
 
-**Module 13 — Knowledge-Based Decision & Root-Cause Analysis Agent: REDESIGNED this revision,
-superseding the PPO implementation below it in `IMPLEMENTATION_STATUS.md`'s history — not yet
-(re)implemented.** This replaces the prior `src/adaptation/{rl_env.py,rl_agent.py}` entirely; those
-files, `data/models/ppo/policy.zip`, `scripts/train_ppo.py`, and the `gymnasium`/
-`stable-baselines3`/`torch` dependencies are obsolete and should be deleted the next time this
-module is touched, not left dead in the tree. This is the module prompt.md §70 rules 4 and 18 now
-single out — "the Decision & Root-Cause Analysis Agent decides WHY and WHAT" / "do not replace it
-with hardcoded heuristics" — so the design below keeps the same discipline the old PPO
-environment/policy split enforced: what informs the decision (`decision_context.py`) stays
-structurally separate from what the decision is (`decision_agent.py`). Target design:
+**Module 13 — Knowledge-Based Decision & Root-Cause Analysis Agent: REBUILT this revision,
+implemented and tested — replaces the PPO implementation entirely.** `src/adaptation/rl_env.py`,
+`rl_agent.py`, `data/models/ppo/policy.zip`, `scripts/train_ppo.py`, and the
+`gymnasium`/`stable-baselines3`/`torch` dependencies have all been deleted (confirmed via a
+repo-wide grep that nothing else imported them first) — none are left dead in the tree. This is
+the module prompt.md §70 rules 4 and 18 now single out — "the Decision & Root-Cause Analysis
+Agent decides WHY and WHAT" / "do not replace it with hardcoded heuristics" — and the same
+discipline the old PPO environment/policy split enforced is kept structurally: what informs the
+decision (`src/adaptation/decision_context.py`) stays separate from what the decision is
+(`src/adaptation/decision_agent.py`).
 
-- **`decision_context.py`** builds a bounded, structured context object from genuinely real
-  sources, never synthetic numbers invented in this file: (1) **Module 11 + Module 12** — the
-  triggering `DriftEvent`/`FidelityTrigger`, normalized to one shape, supplies
-  component/severity/trigger_type; (2) **Module 12** — every per-component `FidelityScore_c` PLUS
-  the `UnifiedFidelityScore` (§5) come from a real `FidelityEvaluator` call, never a placeholder;
-  (3) **Module 4 (D1)** — recent network-state summary from real `D1Store.get_history()`; (4) prior
-  adaptation attempts/outcomes for this component/incident, from the lifecycle record log (Module
-  19) once it exists; (5) **Module 18 (D2, RAG)** — read-only retrieval of relevant knowledge
-  (O-RAN specs, similar past incidents, policy context) — until Module 18 exists, this must
-  explicitly report "RAG context: not available — Module 18 is not built yet", exactly the
-  graceful-degradation convention Modules 15/16 already established (never fabricated).
-- **`decision_agent.py`** makes exactly one call to the centralized `GoogleClient` (see the
-  LLM Infrastructure entry below) per trigger, via `complete_structured()` with a schema enforcing
-  the closed `strategy` enum (`"recalibrate"|"regenerate"|"expand_scope"` — never a 4th/5th value)
-  plus `root_cause_analysis`/`confidence`/`rationale`/`knowledge_refs`. `decide_adaptation_
-  strategy(context, settings)` returns this structured `DecisionResult` or raises;
-  `decide_adaptation_strategy_safe()` adds the ONE permitted exception — on a genuine LLM
-  transport failure or exhausted structured-output validation retries, it falls back to
-  `config.decision_agent.fallback.default_action` (paired with a `root_cause_analysis` stating
-  plainly that this is a fallback, never inventing a fake analysis) and logs a WARNING every time,
-  mirroring the exact fallback discipline the old `decide_adaptation_strategy_safe` established
-  for PPO infrastructure failure — never a silent or routine substitute.
-- **No training phase, no saved policy artifact.** Every trigger gets a genuine LLM call; nothing
-  here is cached/reused across triggers. This removes an entire category of prior concerns (Gym
-  API compliance, reward-curve validation, reproducible `reset(seed=...)`, GPU/CPU device choice)
-  that no longer apply — do not try to preserve them structurally out of habit.
-- **What a future "held-out validation" should look like here, replacing the old reward-curve
-  proof**: since there is no trained policy to evaluate, validation instead means running the
-  agent against a held-out SET of hand-constructed scenarios (low severity/fresh incident,
-  high severity/fresh incident, repeated-failure-on-same-incident, fidelity-based vs.
-  external-drift trigger) against a MOCKED LLM transport returning realistic structured
-  responses, and asserting: the schema/enum is always respected even under adversarial mock
-  responses (extra fields, wrong-case strategy strings, missing fields); the fallback path fires
-  and is logged on transport failure and only then; and (once Module 18 exists) that retrieved
-  RAG content genuinely reaches the prompt. This is the direct structural analogue of
-  `test_rl_env.py`'s "different scenarios have a different, correct outcome" proof — just applied
-  to schema/routing correctness rather than to a reward signal, since there is no reward signal
-  anymore.
-- **Config**: `config.ppo.*` is replaced by `config.decision_agent.*` — `fallback.default_action`,
-  the structured-output retry budget (or reuse `config.llm.max_retries`), and nothing else
-  RL-specific (no `action_mapping` int table is needed — the LLM emits the strategy name directly
-  via the schema; no `env.*`, `training.*`, or `policy_path` survive the redesign).
-- **Tests (to be written against the design above, not yet run)**: a `test_decision_context.py`
-  covering context construction from each real source plus the RAG-unavailable degradation path;
-  a `test_decision_agent.py` covering schema/enum enforcement against a mocked `GoogleClient`,
-  the fallback-on-failure path (value + WARNING log, mirroring the old `test_rl_agent.py`
-  convention), and that a structurally invalid mocked response is rejected and retried before
-  falling back — never silently accepted.
+- **`decision_context.py`** builds a bounded, structured `DecisionContext` from genuinely real
+  sources, never synthetic numbers: (1) **Module 11 + Module 12** — the triggering
+  `AdaptationTrigger` (the canonical shape both `trigger_from_drift_event()` and Module 12's own
+  `check_fidelity_trigger()` produce — see §5) supplies component/severity/trigger_type; (2)
+  **Module 12** — every per-component `FidelityScore_c` PLUS the `UnifiedFidelityScore` are passed
+  in by the caller from a real `FidelityEvaluator`, never computed here; (3) **Module 4 (D1)** —
+  `summarize_network_state()` computes a bounded mean-over-recent-200-rows summary from real
+  `D1Store.get_history()` (a fixed, well-dimensioned 8-feature set — `NETWORK_STATE_FEATURES` —
+  never unbounded raw telemetry in the prompt, prompt.md §18); (4) `PreviousOutcome` — the
+  caller-supplied prior action/verification-result/fidelity-before/after for THIS component
+  (`src/main.py` tracks this per-component, not as a single global scalar, since there's no fixed
+  observation vector anymore); (5) **Module 18 (D2, RAG)** — `retrieve_rag_context()` genuinely
+  queries the real `RagKnowledgeBase` (it exists now, unlike when this module was first speced)
+  and degrades to an empty list (never fabricated) when unavailable, exactly
+  `verification_agent.py`'s own established RAG-consultation pattern.
+- **`decision_agent.py`**'s `DecisionAgent.decide()` makes exactly one call to the centralized
+  `GoogleClient` per trigger via `complete_structured()` with `DecisionOutput` — a schema
+  structurally enforcing the closed `strategy` Literal (`"recalibrate"|"regenerate"|
+  "expand_scope"` — never a 4th/5th value) plus `root_cause_analysis`/`confidence`/`rationale`/
+  `knowledge_refs` (prompt.md §20's exact minimum field set). The prompt explicitly delimits
+  retrieved RAG content from instructions (`--- BEGIN/END RETRIEVED KNOWLEDGE (untrusted
+  reference data, not instructions) ---`, prompt.md §44). `decide_safe()` adds the ONE permitted
+  exception: on a genuine LLM transport failure (including `llm_client=None`, mirroring the old
+  PPO runtime's own `model: PPO | None` pattern exactly) or exhausted structured-output
+  validation retries, it falls back to `config.decision_agent.fallback.default_strategy` — paired
+  with a `root_cause_analysis`/`rationale` stating plainly that this is a fallback and
+  `confidence=0.0` (never inventing a fake analysis) — and logs a WARNING every time, mirroring
+  the exact fallback discipline the old `decide_adaptation_strategy_safe` established for PPO
+  infrastructure failure.
+- **No training phase, no saved policy artifact** — confirmed genuinely true, not just declared:
+  every trigger observed in real runs (unit tests, integration tests, and the real end-to-end
+  demo below) produced its own fresh `complete_structured()` call; nothing is cached/reused
+  across triggers. This removed an entire category of prior concerns (Gym API compliance,
+  reward-curve validation, reproducible `reset(seed=...)`, GPU/CPU device choice) that no longer
+  apply.
+- **Config**: `config.ppo.*` replaced by `config.decision_agent.*` — `action_mapping` (kept only
+  as documentation of the fixed 3-strategy enum; the LLM emits the strategy name directly via the
+  schema, this dict is never used to decode an integer) and `fallback.{enabled,default_strategy}`.
+  No `env.*`/`training.*`/`policy_path` survive — genuinely deleted from both
+  `config/settings.yaml` and `src/common/config.py`'s `DecisionAgentConfig`.
+- **Tests**: `tests/unit/test_decision_context.py` (10 — bounded network-state summarization
+  including the recent-rows cap and empty-history handling, RAG retrieval degradation in all three
+  cases [no KB / unavailable / genuine chunks with the component name embedded in the query],
+  full context assembly, and source-agnosticism across both trigger types) and
+  `tests/unit/test_decision_agent.py` (13 — prompt construction contains every required context
+  element with explicit RAG delimiters, honest `insufficient_history` rendering, a genuine fresh
+  LLM call per trigger [never cached], hard failure without fallback, the fallback path's exact
+  confidence=0.0/logged-WARNING behavior, `llm_client=None` handled identically to a failed call,
+  and the fallback strategy is always within the fixed enum by construction). **The required real,
+  non-scripted "run one full cycle" proof**: `tests/integration/test_lifecycle_agent.py` — a real
+  drift event through the real Module 11 pipeline, a real `DecisionAgent.decide()` call (LLM
+  transport faked per this environment's no-real-key situation, but the full context-building +
+  schema validation + prompt-construction path is genuinely exercised), dispatched to whichever
+  real Module 14/15/16 agent the decision selected, verified by a real Module 17 `VerificationAgent`
+  call, and recorded by a real Module 19 `LifecycleAgent` — inspected field-by-field for
+  completeness. **A second, independent real proof**: `tests/integration/test_main_orchestrator.py`
+  and `scripts/run_orchestrator_demo.py` (see Phase 11's own entry below) run the SAME cycle
+  through the real `ContinuousOrchestrator`, with no real API key at all — genuinely hitting
+  Google's live servers, genuinely receiving a real `401`/`400 API_KEY_INVALID` response, and
+  genuinely falling back, all logged and all correctly non-fatal.
 
 <details>
 <summary>Prior PPO implementation (STALE — retained for history only; do not extend or trust
-these specific numbers)</summary>
+these specific numbers; the files themselves no longer exist in this repo)</summary>
 
 `src/adaptation/{rl_env.py,rl_agent.py}` implemented Stable-Baselines3 PPO + Gymnasium: a
 `Discrete(3)` action space, a 23-dimension observation vector, a simulated adaptation-outcome
@@ -1082,97 +1099,97 @@ fixed). A real training run (`scripts/train_ppo.py`, 2026-09-07, 20,480 timestep
 reportedly showed mean episode reward improving ~22% (0.2536 → 0.3091), with held-out inference
 matching an always-recalibrate baseline at low severity and an always-regenerate baseline at high
 severity. All of this — the environment, the trained policy artifact, and these specific numbers —
-is superseded by the redesign above and must not be cited as current system behavior.
+is superseded by the rebuild above and must not be cited as current system behavior.
 
 </details>
 
-**LLM Infrastructure — centralized Google AI (Gemini) API client: implemented and tested.**
-`src/llm/google_client.py`. Not one of the 19 numbered modules itself — this is the
-cross-cutting infrastructure prompt.md §24/§42 requires *before* Modules 15 (Regeneration), 16
-(Expand-Scope), 17 (Agentic Verification), and 19 (Lifecycle) can be built, plus Module 14
-(Recalibration)'s optional training-window reasoning per CLAUDE.md §7 — and, as of this revision,
-Module 13's Decision & Root-Cause Analysis Agent is its first and most central consumer.
-**Infrastructure only — no agent logic**: no prompt templates, no per-agent output schemas, no
-business rules about when to call the LLM. Key design decisions:
+**LLM Infrastructure — centralized Google AI (Gemini) API client: implemented and tested (LLM
+provider pivot, this revision — supersedes the old `anthropic_client.py`/`AnthropicClient`).**
+`src/llm/google_client.py`. Not one of the 19 numbered modules itself — this is the cross-cutting
+infrastructure prompt.md §24/§42 requires *before* Modules 15 (Regeneration), 16 (Expand-Scope),
+17 (Agentic Verification), and 19 (Lifecycle) can be built, plus Module 14 (Recalibration)'s
+optional training-window reasoning per CLAUDE.md §7 — and Module 13's Decision & Root-Cause
+Analysis Agent is now its first and most central consumer. **Infrastructure only — no agent
+logic**: no prompt templates, no per-agent output schemas, no business rules about when to call
+the LLM. Public surface (`LLMResponse`/`LLMUsage`/`LLMClientError`/`LLMTransportError`/
+`LLMStructuredOutputError`/`complete`/`complete_structured`/`complete_safe`/
+`complete_structured_safe`) is deliberately identical to the old `AnthropicClient`'s, so every
+consumer needed only an import/class-name swap, not a rewrite. Key design decisions:
 
 - **One centralized client, never a per-agent `genai.Client()` instance.**
   `GoogleClient.from_settings(settings, secrets)` is how every agent constructs it — `config.
   llm.model` is the only place a Gemini model ID is set (never hardcoded in agent code, never a
-  deprecated/obsolete model), and `Secrets.require_google_api_key()` is the only source of the
-  API key (reads `GOOGLE_API_KEY`, matching the `google-genai` SDK's own env-var precedence —
-  raises a clear `RuntimeError` if unset — never a hardcoded key, never a silent empty fallback).
-- **A real, load-bearing discovery, not an assumption from older docs**: the installed
-  `google-genai` SDK's actual `GenerateContentConfig` type was checked directly (not older API
-  documentation) — unlike some other providers' newest APIs, Gemini's generation config genuinely
-  DOES expose `temperature`/`top_p`/`top_k`, so prompt.md §42's "deterministic/non-deterministic
-  settings where appropriate" is satisfied literally: `config.llm.temperature` is set low (e.g.
-  0.0-0.2) for tasks wanting near-deterministic output (Module 17's verification reasoning,
-  Module 13's structured decision) and left higher for more exploratory generation. Separately,
-  thinking-capable Gemini models expose reasoning depth via `thinking_config.thinking_budget` —
-  a genuinely DIFFERENT field from sampling temperature, not a replacement for it — mapped from
-  `config.llm.thinking_budget`, documented in both `config/settings.yaml` and the client's own
-  module docstring as controlling reasoning effort, not randomness. Conflating the two would have
-  produced a config field that silently did the wrong thing — exactly the kind of "actually check
-  the real SDK types" discovery this project's discipline exists to catch (see Modules 6/9/10's
-  own bug writeups for the same pattern).
+  deprecated/obsolete model), and `Secrets.require_google_key()` is the only source of the API
+  key (`GOOGLE_API_KEY` takes precedence over `GEMINI_API_KEY`, matching the `google-genai` SDK's
+  own env-var precedence — verified directly in `google.genai._api_client.get_env_api_key` — raises
+  a clear `RuntimeError` if neither is set — never a hardcoded key, never a silent empty fallback).
+- **Real, load-bearing SDK discoveries, verified directly against the installed `google-genai`
+  2.25.0 (not assumed from documentation)**, the same discipline the old Anthropic client's own
+  docstring established: (1) **unlike the old Anthropic Messages API, this SDK's
+  `GenerateContentConfig` DOES expose a genuine `temperature`** — the opposite conclusion from
+  the Anthropic client's own documented finding; `config.llm.temperature` is therefore a real
+  determinism knob here, not a fiction. (2) **The SDK's own transport retry defaults to "never
+  retry"** unless `http_options.retry_options` is explicitly set (verified in
+  `google.genai._api_client.retry_args`'s own docstring) — this client deliberately never sets
+  it, so there is exactly ONE retry/backoff schedule in this system (`_call_with_retry`), exactly
+  like the old client's explicit `max_retries=0` achieved by a different mechanism. (3)
+  **Exception shape is structurally different**: no named exception per failure type — only
+  `APIError` (base), `ClientError` (any 4xx, real HTTP status on `.code`), `ServerError` (any
+  5xx). Retry classification is therefore done on `.code`, not exception identity: every
+  `ServerError` and a `ClientError` with `.code==429` are retryable; every other `ClientError`
+  (400/401/403/404/422) fails fast. Raw `httpx.TimeoutException`/`httpx.ConnectError` can also
+  propagate uncaught from this SDK's own transport (verified in `google.genai._api_client`'s own
+  `_HTTPX_TRANSIENT_EXC` tuple) and are treated as retryable too. (4) `config.llm.effort` maps
+  onto Gemini's `ThinkingConfig(thinking_level=...)`, clamped (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`
+  only — `"xhigh"`/`"max"` both clamp to `HIGH`, documented so a future reader isn't surprised the
+  two don't differ on this provider). (5) `HttpOptions.timeout` is in MILLISECONDS, not seconds.
 - **Structured output uses the API's own native mechanism, not prompt-engineered JSON
   extraction.** `complete_structured(prompt, schema)` sets `response_mime_type="application/json"`
-  and `response_schema=schema.model_json_schema()` on `GenerateContentConfig` — a real feature of
-  this SDK that constrains the model's response server-side — and *independently re-validates*
-  the result against the caller's pydantic schema afterward regardless (CLAUDE.md §7: "LLM output
-  is always untrusted" — never skipped just because the API is expected to have already enforced
-  it). If validation still fails, the WHOLE call is retried (not just re-parsing, since only a
-  fresh call can produce different output) up to `config.llm.max_retries` times before raising
+  and `response_json_schema=schema.model_json_schema()` on `GenerateContentConfig` — verified
+  against `types.py` to be the field that accepts a plain JSON Schema dict (`response_schema`,
+  the SIBLING field, instead expects the SDK's own `Schema` type or a pydantic class passed
+  directly — not used here, to keep the exact same "build the JSON schema dict ourselves, then
+  independently re-validate" flow the old Anthropic client used) — and *independently
+  re-validates* the result against the caller's pydantic schema afterward regardless (CLAUDE.md
+  §7: "LLM output is always untrusted"). If validation still fails, the WHOLE call is retried
+  (not just re-parsing) up to `config.llm.max_retries` times before raising
   `LLMStructuredOutputError`.
-- **All retry/backoff is this client's own explicit, testable code — not the SDK's.** The
-  underlying `genai.Client` is constructed with its own transport-level retries disabled/left at a
-  minimal default (via its `http_options`), so there is exactly ONE retry schedule in this system
-  (`_call_with_retry`), not two silently compounding (e.g. the SDK retrying internally while our
-  own loop also retries, yielding far more real HTTP attempts than intended for one logical
-  call). Retryable failures (`google.genai.errors.ServerError` — 5xx — and `ClientError` whose
-  `.code == 429`, rate limiting) get exponential backoff (`config.llm.retry_backoff_seconds *
-  2^attempt`, capped at a fixed 30s ceiling) — honoring a `Retry-After` response header when the
-  API provides one (genuine rate-limit-aware handling, not just a fixed guess). Non-retryable
-  failures (`ClientError` with any other 4xx code — 400 invalid argument, 401/403 auth/
-  permission, 404 not found) fail fast on the first attempt — retrying bad credentials or a
-  malformed request can never succeed, so the retry budget isn't wasted on them.
 - **Graceful degradation is an explicit opt-in, not a default.** `complete()`/
-  `complete_structured()` raise `LLMTransportError`/`LLMStructuredOutputError` (both subclass
-  `LLMClientError`) on failure — the right behavior for a caller that needs a hard failure.
-  `complete_safe()`/`complete_structured_safe()` catch `LLMClientError` and return `None`
-  instead, always logging a WARNING when they do — mirroring Module 13's `decide_adaptation_
-  strategy_safe` fallback discipline exactly, for the same reason (prompt.md §42: "LLM failures
-  must not corrupt production"; CLAUDE.md §7's own example — recalibration's training-window
-  reasoning is *optional*, so a future Module 14 should call the `_safe` variant and fall back to
-  its deterministic default window on `None`, never letting an LLM outage halt adaptation).
-- **`prompts.py`/`schemas.py` (prompt.md §42's suggested layout) were deliberately NOT created
-  now.** Both would hold agent-specific content (prompt templates, per-agent structured-output
-  shapes) that belongs with Modules 13-19 as they're actually (re)built — creating them now with
-  no real consumer would be exactly the speculative/premature content this project's conventions
-  avoid. `GoogleClient`'s own response types (`LLMResponse`/`LLMUsage`) are the only "schema"
-  this layer owns.
+  `complete_structured()` raise on failure — the right behavior for a caller that needs a hard
+  failure. `complete_safe()`/`complete_structured_safe()` catch `LLMClientError` and return
+  `None` instead, always logging a WARNING when they do — mirroring Module 13's
+  `DecisionAgent.decide_safe()` fallback discipline exactly (prompt.md §42: "LLM failures must
+  not corrupt production").
 - **Tested against a mocked transport, not a real network call — and this is stated plainly, not
-  hidden.** No real `GOOGLE_API_KEY` is configured in this development environment (`.env`
-  holds only the placeholder from `.env.example`); genuinely calling the live API would either
-  fail loudly or silently accomplish nothing useful for a test, and prompt.md §0.24/§20 forbid
-  faking a real API response. `tests/unit/test_google_client.py` (20 tests, all passing)
-  therefore drives `GoogleClient` against a mocked `models.generate_content`, using REAL
-  `httpx.Request`/`httpx.Response` objects (the `google-genai` SDK's own transport is itself
-  built on httpx) and REAL `google.genai.errors.ClientError`/`ServerError` exception types (so
-  the client's actual exception-classification logic is genuinely exercised, not a stand-in) —
-  covering: a trivial-prompt completion end-to-end; the configured model/temperature/
-  thinking_budget are what's actually sent (never hardcoded); retryable-error-then-success
-  (right attempt count, right sleep count); non-retryable errors fail fast with zero sleeps;
-  exhausting the retry budget raises with the right attempt count; `Retry-After` header honored
-  when present, exponential backoff when absent; structured output returns a validated pydantic
-  instance, sends the correct `response_mime_type`/`response_schema`, retries on validation
-  failure then succeeds, raises after exhausting validation retries, and rejects JSON missing a
-  required field; both `_safe` wrappers degrade to `None` and log a WARNING on failure while
-  still returning the real result on success; and a dedicated test asserts a real-looking API key
-  string never appears in ANY log record's message or `extra` fields. One additional test,
-  `test_live_api_smoke_if_key_configured`, is skipped (not faked) until a real key is ever
-  configured — it would genuinely call the live API with a trivial prompt and a trivial
-  structured schema if one is.
+  hidden.** No real `GOOGLE_API_KEY`/`GEMINI_API_KEY` was configured when this test suite was
+  written (`.env` held only the placeholder from `.env.example`); genuinely calling the live API
+  in a test would either fail loudly or silently accomplish nothing useful, and prompt.md
+  §0.24/§20 forbid faking a real API response. `tests/unit/test_google_client.py` (28 tests, all
+  passing, 1 live-smoke test auto-skipped) therefore drives `GoogleClient` against a mocked
+  `client.models.generate_content` (patched via the underlying `Client._models` attribute, since
+  `Client.models` is a read-only property — verified against `google/genai/client.py`), using REAL
+  `httpx.Request`/`httpx.Response` objects and REAL `google.genai.errors.ClientError`/
+  `ServerError`/`APIError` exception types — covering: a trivial-prompt completion end-to-end; the
+  configured model/temperature/effort/system-instruction are what's actually sent (never
+  hardcoded); the `"xhigh"`/`"max"` effort clamp; retryable-server-error, rate-limited-429, and
+  raw-transient-httpx-exception retry-then-succeed; non-retryable client error fails fast with
+  zero sleeps; retry-budget exhaustion; an unclassified bare `APIError` treated as non-retryable
+  (fail-safe); an empty-text response rejected (never silently treated as `""`); `Retry-After`
+  header honored when present, exponential backoff when absent; structured output returns a
+  validated pydantic instance, sends the correct native JSON-schema request, retries on
+  validation failure then succeeds, raises after exhausting validation retries, and rejects JSON
+  missing a required field; both `_safe` wrappers degrade to `None` and log a WARNING on failure;
+  and a dedicated test asserts a real-looking API key string never appears in ANY log record.
+  **A subsequent real, unattended end-to-end run** (`scripts/run_orchestrator_demo.py`, this
+  revision) genuinely exercised this client against the REAL live Google AI endpoint with the
+  placeholder key still configured — it received a real, well-formed `400 INVALID_ARGUMENT
+  (API_KEY_INVALID)` response from Google's actual servers, was correctly classified
+  non-retryable, and the caller (Module 13's `DecisionAgent`) correctly degraded to its
+  deterministic fallback, logged at WARNING — genuine evidence the request-construction/
+  auth-header/endpoint/error-classification path is wired correctly end-to-end, even though a
+  valid key was never available to confirm a successful live call. Live-API *success* validation
+  (a real key returning a real completion) is explicitly still pending — see the Overall Next
+  Task entry.
 
 **Versioned Model Registry (Concept C — prompt.md §46/§29): implemented and tested.**
 `src/registry/model_registry.py`. Built now (ahead of Module 15/16) because the user's explicit
@@ -1761,21 +1778,34 @@ real.** `src/adaptation/lifecycle_agent.py`. This is the last of the six agents 
 the last of the 19 numbered modules — it decides nothing; it RECORDS and EXPLAINS what every other
 agent already decided. Key design decisions:
 
-- **`LifecycleRecord` carries every field prompt.md §37 lists, no more and no fewer** — event ID,
-  timestamp, drift event, affected component/scope, drift severity, RL observation/context, RL
-  action, agent action, production version before, candidate version, fidelity before, fidelity
-  after, verification result, verification explanation, training window, evaluation window, model
-  metadata, LLM metadata if used, final status. Nothing here computes or re-derives any of these
-  — every field is read verbatim from the real object each upstream module already produced (see
-  the module's own extensive docstring for the exact source of every field). Two field-mapping
-  decisions worth calling out explicitly: (1) `production_version_before` is simply the
-  candidate's own `parent_version_id` — exactly what Module 14/15 recalibrated/regenerated FROM
-  (or `None` for Module 16's genuinely new components) — rather than a fresh registry lookup,
-  which would be WRONG on ACCEPT (the registry has already been updated to the candidate by the
-  time this agent runs); (2) `fidelity_before`/`fidelity_after`/`verification_result`/
-  `verification_explanation` all come from Module 17's `VerificationResult` — the INDEPENDENTLY
-  RECOMPUTED values — never an agent's own self-reported `evaluation_metrics`/`fidelity_before`/
-  `fidelity_after`, since Module 17 is this system's trusted authority for those numbers.
+- **`LifecycleRecord` carries every field prompt.md §37 lists, no more and no fewer, PLUS the
+  richer decision-output fields prompt.md §20 separately requires** — event ID, timestamp,
+  trigger, affected component/scope, trigger severity/type, decision strategy + root-cause
+  analysis + confidence + rationale + knowledge refs, agent action, production version before,
+  candidate version, fidelity before, fidelity after, verification result, verification
+  explanation, training window, evaluation window, model metadata, LLM metadata if used, final
+  status. **Design-pivot field rename (this revision)**: the old PPO-era `drift_event`/
+  `rl_observation`/`rl_action` fields are gone, replaced by `trigger` (the canonical
+  `AdaptationTrigger`, covering both trigger sources uniformly) and `decision_strategy`/
+  `root_cause_analysis`/`decision_confidence`/`decision_rationale`/`knowledge_refs` (Module 13's
+  full structured `DecisionOutput`, verbatim — prompt.md §20's own explicit requirement that this
+  is "what Module 19 records for the auditable history"). A real, necessary consequence of this
+  rename: `list_records()` now skips (logs a WARNING, never crashes) any line that fails to
+  validate against the current schema — found genuinely necessary when the real end-to-end demo
+  (Phase 11 entry below) hit a pre-existing `lifecycle_records.jsonl` containing an old-schema
+  line from before this revision; mirrors Module 2/11's own established "one malformed record
+  must never take down the whole stream" quarantine discipline. Nothing here computes or
+  re-derives any of these — every field is read verbatim from the real object each upstream
+  module already produced (see the module's own extensive docstring for the exact source of
+  every field). Two field-mapping decisions worth calling out explicitly: (1)
+  `production_version_before` is simply the candidate's own `parent_version_id` — exactly what
+  Module 14/15 recalibrated/regenerated FROM (or `None` for Module 16's genuinely new components)
+  — rather than a fresh registry lookup, which would be WRONG on ACCEPT (the registry has already
+  been updated to the candidate by the time this agent runs); (2)
+  `fidelity_before`/`fidelity_after`/`verification_result`/`verification_explanation` all come
+  from Module 17's `VerificationResult` — the INDEPENDENTLY RECOMPUTED values — never an agent's
+  own self-reported `evaluation_metrics`/`fidelity_before`/`fidelity_after`, since Module 17 is
+  this system's trusted authority for those numbers.
 - **`agent_action` is built by `_summarize_agent_action()`, a small duck-typed helper** — Modules
   14/15/16's `RecalibrationResult`/`RegenerationResult`/`ExpandScopeResult` deliberately share no
   common base class (each agent's own turn made that call independently, and forcing one onto them
@@ -1821,44 +1851,43 @@ agent already decided. Key design decisions:
   degrades to `"not available"` and never crashes) and, the key deliverable,
   `tests/integration/test_lifecycle_agent.py` (1 — **the REQUIRED "run one full cycle" proof**,
   described in full below).
-- **The full real cycle was run end-to-end and the resulting record was inspected for
-  completeness, exactly as this turn's instruction required — not simulated, not asserted in the
-  abstract.** **[STALE — this specific run depended on the now-superseded PPO decision agent
-  (steps 2-3 below); must be re-run against the new Decision & Root-Cause Analysis Agent before
-  being cited again. Steps 1, 4, and 5 and the overall chaining structure remain valid — only the
-  "how the strategy got decided" step needs rebuilding.]** `tests/integration/
-  test_lifecycle_agent.py` chained together, for real: (1) a real raw drift notification through
-  Module 11's actual `DriftDetectorInterface.process_event()`; (2) a real observation from a real
-  `AdaptationEnv.reset()` (Module 13's now-superseded PPO implementation), decided by the
-  then-trained PPO policy on disk via `decide_adaptation_strategy()` — never a scripted/hardcoded
-  action; a re-run must instead call the new `decision_agent.py`'s
-  `decide_adaptation_strategy()` against a real (or realistically-mocked, per Module 13's own
-  "no real GOOGLE_API_KEY configured" convention) `GoogleClient`; (3) dispatch, in the test
-  itself, to WHICHEVER of Modules 14/15/16's real agents the decision agent actually selected (the
-  test does not assume or force a particular branch — all three are wired and handle whichever
-  action comes back); (4) a real Module 17 `VerificationAgent.verify()` call recomputing fidelity
+- **The full real cycle was re-run end-to-end against the REBUILT Decision & Root-Cause Analysis
+  Agent and the resulting record was inspected for completeness — not simulated, not asserted in
+  the abstract.** `tests/integration/test_lifecycle_agent.py` chains together, for real: (1) a
+  real raw drift notification through Module 11's actual
+  `DriftDetectorInterface.process_event()`, normalized via `trigger_from_drift_event()`; (2) a
+  real `DecisionContext` built by `build_decision_context()`, decided by a real
+  `DecisionAgent.decide()` call (LLM transport faked, since no real `GOOGLE_API_KEY` is
+  configured in this environment — the SAME one fake client serves both this call and whichever
+  of Modules 15/16's calls the selected strategy needs, discriminating purely on the schema
+  argument, exactly like one real `GoogleClient` would in production); (3) dispatch, in the test
+  itself, to WHICHEVER of Modules 14/15/16's real agents the decision actually selected (the test
+  does not assume or force a particular branch — all three are wired and handle whichever action
+  comes back); (4) a real Module 17 `VerificationAgent.verify()` call recomputing fidelity
   independently and promoting/rejecting the real registry; (5) this module's
   `record_adaptation_event()` and `generate_maintenance_report()`. **Actual observed result on
-  this machine (2026-09-07, PRE-REDESIGN — historical only)**: PPO selected `regenerate` for a
-  synthetic `throughput` drift event at severity 0.65; `RegenerationAgent` produced a real
-  sandboxed candidate (`RebuiltThroughput`, sandbox `rmse=1.6435`, 1 attempt, no self-correction
-  needed); `VerificationAgent` independently recomputed fidelity_before=0.9800,
-  fidelity_after=0.9977 -> ACCEPT, genuinely promoting `throughput-v2` to production; the
-  resulting `LifecycleRecord` was confirmed, field-by-field, to contain every one of prompt.md
-  §37's required fields with correct, non-fabricated values, and the generated maintenance report
-  was confirmed to mention the affected component, the selected action, and the verification
-  decision. The general principle these numbers illustrated still holds and should be
-  re-demonstrated post-redesign: a second run is expected to potentially select a DIFFERENT
-  strategy depending on the exact context the decision agent is handed — the test's generic
-  three-way dispatch means this is a feature (proving genuine, non-scripted integration across
-  all three adaptation agents), not a source of flakiness: whichever branch runs, the same
-  completeness assertions should apply and pass.
-- **Deliberately NOT done this turn, per its own scope**: no code in Modules 11/13/14-17 was
-  modified to automatically CALL this agent — `src/main.py` (prompt.md §39's continuous
-  orchestration loop, Phase 11, not yet built) is what will eventually wire
-  `record_adaptation_event()`/`generate_maintenance_report()` into the live continuous loop after
-  every real verification decision; this turn only builds and proves the recording/reporting
-  agent itself, exactly as scoped ("Module 19 only").
+  this machine (this revision)**: the decision agent selected `regenerate` (fake LLM configured
+  to return it, so this run exercises the real sandbox path); `RegenerationAgent` produced a real
+  sandboxed candidate (`RebuiltThroughput`, sandbox `rmse=1.6434686446704596`, 1 attempt, no
+  self-correction needed); `VerificationAgent` independently recomputed
+  fidelity_before=0.9799598306188408, fidelity_after=0.997735206164199 -> ACCEPT, genuinely
+  promoting `throughput-v2` to production — numerically consistent with the pre-redesign run
+  (same underlying deterministic bootstrap data/seed; only the decision layer wrapping it
+  changed). The resulting `LifecycleRecord` was confirmed, field-by-field, to contain every one
+  of prompt.md §37's AND §20's required fields (including the new
+  `root_cause_analysis`/`decision_confidence`/`decision_rationale`) with correct, non-fabricated
+  values, and the generated maintenance report was confirmed to mention the affected component,
+  the selected strategy, and the verification decision. A second run may select a DIFFERENT
+  strategy depending on how the fake LLM is configured — the test's generic three-way dispatch
+  means this is a feature (proving genuine, non-scripted integration across all three adaptation
+  agents), not a source of flakiness.
+- **Now genuinely wired into the live continuous loop** (this revision — see Phase 11's own
+  entry below for the full rewiring and a SEPARATE real end-to-end demo run via
+  `scripts/run_orchestrator_demo.py`, against the real live Google AI endpoint with no valid key,
+  which genuinely exercised the fallback path end-to-end): `src/main.py`'s
+  `ContinuousOrchestrator._run_adaptation_cycle()` calls `record_adaptation_event()`/
+  `generate_maintenance_report()` after every real verification decision, for both canonical
+  trigger sources.
 
 **Phase 11 — `src/main.py`: the top-level continuous orchestration loop — implemented and run
 end-to-end for real.** This is the final piece of the architecture: `ContinuousOrchestrator`
@@ -1887,26 +1916,28 @@ decisions:
   is deliberately NEVER written into the live `D1Store` — it is a distinct provenance category
   from live-synchronized telemetry, per Module 3's own already-established scope boundary; the
   live D1Store starts empty and grows ONLY from genuinely live telemetry once `start()` runs.
-- **[REDESIGNED this revision, not yet (re)implemented — see Module 13's own entry above for the
-  full target design.]** The orchestrator's decision-input construction must be rebuilt as a call
-  into `decision_context.py`, not the old `_build_runtime_observation()`. The old method
-  constructed a fixed-dimension PPO observation vector by reusing `AdaptationEnv`'s exact schema;
-  that concept is gone entirely (there is no vector, no fixed schema tied to a trained policy's
-  input shape). The replacement must instead assemble the bounded, structured decision context
-  Module 13 now specifies — real per-component `FidelityEvaluator` scores AND the
-  `UnifiedFidelityScore` from Modules 5-10's own live predictions against real D1 ground truth
-  (`run_prediction_and_fidelity_cycle()`, public — called periodically by `run()` and also
-  directly by validation tooling to pre-warm real fidelity history), the real triggering event's
-  own component/severity/trigger_type (from either Module 11 or Module 12's fidelity-trigger
-  monitor), this orchestrator's own tracked previous action/outcome for the affected
-  component/incident (from the last REAL adaptation cycle's REAL verified fidelity delta — no
-  reward formula anymore, since there is no RL reward to compute), a real D1-history-derived
-  network-state summary (self-referential min-max normalization, the same convention
-  `build_network_state_pool` already uses, adapted for a live/streaming window instead of a
-  precomputed training pool), and — once Module 18 exists — real RAG retrieval (until then,
-  explicitly reported unavailable, never fabricated). A component with no fidelity evaluated yet
-  (cold start) should default to a neutral/explicit "unknown" marker, never a fabricated score —
-  the one part of the old design worth preserving unchanged.
+- **Decision-input construction rebuilt this revision, implemented and run for real.** The
+  orchestrator's `_run_adaptation_cycle()` now calls `build_decision_context()`
+  (`src.adaptation.decision_context`), not the deleted `_build_runtime_observation()`. There is
+  no fixed-dimension observation vector anymore — no concept tied to a trained policy's input
+  shape. The context assembled is: real per-component `FidelityEvaluator` scores AND the real
+  `UnifiedFidelityScore` (`compute_unified_score()`) from Modules 5-10's own live predictions
+  against real D1 ground truth (`run_prediction_and_fidelity_cycle()`, public — called
+  periodically by `run()`, and ALSO now calls `FidelityEvaluator.check_fidelity_trigger()` after
+  every update, enqueueing a fidelity-based `AdaptationTrigger` onto the SAME `_trigger_queue`
+  the external-drift consumer thread feeds, via `trigger_from_drift_event()` — both canonical
+  trigger sources genuinely funnel into one dispatch path, prompt.md §16a); the real triggering
+  `AdaptationTrigger`'s own component/severity/trigger_type; this orchestrator's own tracked
+  `_previous_outcome_by_component` dict (PER COMPONENT, not a single global scalar — populated
+  from the last REAL adaptation cycle's REAL `VerificationResult` for that exact component; no
+  reward formula anymore, since there is no RL reward to compute); a real D1-history-derived
+  network-state summary (`summarize_network_state()` — plain mean-over-recent-200-rows, bounded,
+  human-readable for an LLM prompt, not a normalized ML vector); and genuine RAG retrieval via the
+  real `RagKnowledgeBase` (it exists now — `retrieve_rag_context()` degrades to an empty list,
+  never fabricated, when unavailable). A component with no fidelity evaluated yet (cold start)
+  is represented honestly as `None`/`insufficient_history` throughout this whole path — never a
+  fabricated score — exactly the one part of the old design already worth preserving, now true
+  end-to-end instead of only at the observation-vector layer.
 - **Dependency-having target components are handled generically at verification time too** — a
   genuine bug found and fixed while validating this module (see below): if the drifted component
   itself has `DEPENDENCIES` (latency/prb_utilization/jitter), the held-out `DataFrame` this
@@ -1917,61 +1948,60 @@ decisions:
   first real run (a `jitter` drift event crashed with `JitterModel missing required input
   column(s)`); fixed by applying the same ground-truth-population helper every adaptation agent
   already uses internally, once more here for the orchestrator's OWN externally-built held-out set.
-- **LLM availability handled honestly, never faked**: no real `GOOGLE_API_KEY` is configured in
-  this development environment (only a placeholder in `.env`) — the orchestrator constructs a real
-  `GoogleClient` regardless (a placeholder key is non-empty, so construction succeeds), and any
-  ACTUAL API call made through it (the Decision & Root-Cause Analysis Agent itself, a
-  `regenerate`/`expand_scope` agent, or `VerificationAgent`'s optional explanation step) genuinely
-  fails at the network/auth layer and gracefully degrades — the Decision & Root-Cause Analysis
-  Agent falls back to `config.decision_agent.fallback.default_action` (logged), while
-  `RegenerationError`/`ExpandScopeError` are caught and logged, the cycle is skipped (telemetry
-  unaffected, loop continues to the next trigger), and `VerificationAgent`'s explanation falls
-  back to its deterministic template exactly as Module 17 already specifies. Nothing here invents
-  a fake LLM response anywhere in `src/main.py` itself.
+- **LLM availability handled honestly, never faked — and genuinely confirmed against Google's
+  real live servers, not just reasoned about.** No real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is
+  configured in this development environment (only a placeholder in `.env`) — the orchestrator
+  constructs a real `GoogleClient` regardless (a placeholder key is non-empty, so construction
+  succeeds), and any ACTUAL API call made through it genuinely fails at the network/auth layer and
+  gracefully degrades. **Unlike the old PPO design, the DECISION itself now requires an LLM call
+  every time** — `scripts/run_orchestrator_demo.py`'s real run (below) genuinely received a real
+  `400 INVALID_ARGUMENT (API_KEY_INVALID)` response from Google's actual servers, which
+  `DecisionAgent.decide_safe()` correctly classified non-retryable and degraded to
+  `config.decision_agent.fallback.default_strategy` (logged at WARNING). Separately,
+  `RegenerationError`/`ExpandScopeError` (if that strategy is ever selected with no client
+  available to execute it) are caught and logged, the cycle is skipped (telemetry unaffected, loop
+  continues to the next trigger), and `VerificationAgent`'s optional explanation falls back to its
+  deterministic template exactly as Module 17 already specifies. Nothing here invents a fake LLM
+  response anywhere in `src/main.py` itself.
 - **Real validation run performed exactly as this turn required** — `scripts/run_orchestrator_demo.py`
   (permanent, repo-tracked, same convention as `ns3_sim/validate_e2e.py`/`scripts/ingest_rag.py`)
   initializes the full real system against this repo's REAL configured storage paths (the very
   first genuine `D1Store`/`ModelRegistry`/lifecycle-records state this project has ever produced —
   `data/artifacts/d1_*.parquet`, `data/models/{throughput,latency,packet_loss,prb_utilization,
   jitter}/`, `data/models/registry_index.json`, `data/artifacts/lifecycle_records.jsonl`,
-  `data/artifacts/maintenance_reports/*.md` did not exist before this run) and runs it unattended
-  through one complete real cycle. **[STALE — this specific observed result depended on the
-  now-superseded PPO decision path and must be re-run against the new Decision & Root-Cause
-  Analysis Agent before being cited again; retained here for historical reference only.]** Actual
-  observed result on this machine (2026-09-07): a real drift event on `jitter` at severity 0.1846
-  -> PPO genuinely selected `recalibrate` -> a real candidate `jitter-v2` was produced and
-  independently re-verified by Module 17: fidelity_before=1.8686, fidelity_after=0.9853 -> REJECT
-  (the candidate was genuinely worse — production correctly, automatically preserved, `jitter-v1`
-  untouched) -> a complete Module 19 lifecycle record and human-readable maintenance report were
-  generated. The mock trigger severity range was narrowed for that specific run to bias toward
-  `recalibrate` (based on PPO's own held-out behavior, no longer applicable) — a future re-run
-  should instead exercise the Decision & Root-Cause Analysis Agent across the same range of
-  scenarios `decision_context.py`'s own held-out validation uses (Module 13's entry above), so the
-  bias/rationale for whichever scenario is chosen is re-justified from scratch, not inherited.
-  **The concrete continuous-operation proof, by contrast, is NOT PPO-specific and remains valid
-  as-is**: a real sampler thread observed `ContinuousSynchronizer.records_synced` grow from **560
-  to 680 records** strictly WITHIN the adaptation cycle's own 2.438-second wall-clock window (148
-  samples taken during that window, 10ms apart) — telemetry ingestion never paused for the
-  adaptation cycle, confirmed with real numbers, not asserted in the abstract; this structural
-  guarantee comes from the threading model (first bullet above), not from which decision mechanism
-  is running, so it needs no re-run. A REJECT outcome is treated as an equally valid, equally
-  complete demonstration of "one full cycle" as an ACCEPT would have been — Module 17 correctly
-  protecting production from a worse candidate is exactly the deterministic gate working as
-  designed, not a failure of this validation.
-- **Tests [PARTIALLY STALE — see above]**: `tests/unit/test_main.py` (8 — the component-spec
-  dispatch tables are internally consistent with each other and with `config.drift.
-  valid_components`; the runtime observation vector has the exact dimension PPO was trained on and
-  stays within its clipped bounds [this specific assertion no longer applies — replace with an
-  assertion that the new decision-context object contains every required field, well-typed, once
-  Module 13 is rebuilt]; the affected-component and previous-action one-hots are placed correctly
-  [likewise superseded by whatever shape `decision_context.py` actually returns]; a cold-start
-  component with no fidelity yet defaults to a finite neutral value, never NaN/crash; the
-  network-state summary is zeros for empty history and a bounded, self-normalized vector for real
-  data; bootstrap dispatch genuinely LOADS every component when production versions already exist,
-  without ever generating bootstrap telemetry — these last three remain valid) and
-  `tests/integration/test_main_orchestrator.py` (1 — a smaller/faster but still fully real re-run
-  of the exact same proof `scripts/run_orchestrator_demo.py` performs at full scale, against temp
-  storage paths, as an automated regression test — needs re-running against the new Decision &
-  Root-Cause Analysis Agent, per above).
+  `data/artifacts/maintenance_reports/*.md` did not exist before this run originally) and runs it
+  unattended through one complete real cycle. **Re-run this revision against the rebuilt Decision
+  & Root-Cause Analysis Agent — actual observed result on this machine**: a real drift event on
+  `jitter` at severity 0.1846 → the decision agent genuinely attempted a live Google AI call,
+  received a real `400 INVALID_ARGUMENT (API_KEY_INVALID)` response from Google's actual servers
+  (no valid key is configured — see the LLM-availability bullet above), correctly classified it
+  non-retryable, and degraded to the configured fallback `recalibrate` (confidence=0.0, logged at
+  WARNING) → a real candidate `jitter-v5` was produced and independently re-verified by Module 17:
+  fidelity_before=0.9902, fidelity_after=0.6185 → REJECT (the candidate was genuinely worse —
+  production correctly, automatically preserved, `jitter-v4` untouched) → a complete Module 19
+  lifecycle record (including the new `trigger_type="external_drift"`, `decision_strategy=
+  "recalibrate"`, `decision_confidence=0.0`, and a `root_cause_analysis` honestly stating the
+  fallback reason) and human-readable maintenance report were generated. **The concrete
+  continuous-operation proof**: a real sampler thread observed
+  `ContinuousSynchronizer.records_synced` grow from **340 to 420 records** strictly WITHIN the
+  adaptation cycle's own 2.194-second wall-clock window (99 samples taken during that window, 10ms
+  apart) — telemetry ingestion never paused for the adaptation cycle, confirmed with real numbers.
+  A REJECT outcome is treated as an equally valid, equally complete demonstration of "one full
+  cycle" as an ACCEPT would have been — Module 17 correctly protecting production from a worse
+  candidate is exactly the deterministic gate working as designed. A genuine, real compatibility
+  bug was found and fixed while running this: the repo's pre-existing
+  `data/artifacts/lifecycle_records.jsonl` (from before this revision) contained an old-schema
+  line, which crashed `list_records()` on the first attempt — fixed by making `list_records()`
+  skip-and-log any line that fails to validate against the current schema (see Module 19's own
+  entry above), not by deleting or hiding the old data.
+- **Tests**: `tests/unit/test_main.py` (4 — the component-spec dispatch tables are internally
+  consistent with each other and with `config.drift.valid_components`; `_previous_outcome_for()`
+  returns the honest `PreviousOutcome()` default for an unknown/untracked component and the
+  correct tracked value per-component, independently across components; bootstrap dispatch
+  genuinely LOADS every component when production versions already exist, without ever generating
+  bootstrap telemetry) and `tests/integration/test_main_orchestrator.py` (1 — a smaller/faster but
+  still fully real re-run of the exact same proof `scripts/run_orchestrator_demo.py` performs at
+  full scale, against temp storage paths, as an automated regression test — re-run this revision
+  against the rebuilt Decision & Root-Cause Analysis Agent, confirmed passing).
 
 See `IMPLEMENTATION_STATUS.md` for the full module-by-module table and the exact next task.

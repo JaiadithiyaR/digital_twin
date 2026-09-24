@@ -2,15 +2,18 @@
 1-19) wired together and run for real, at a smaller/faster scale than
 `scripts/run_orchestrator_demo.py` (the permanent, repo-tracked, full-scale validation script —
 see CLAUDE.md's Phase 11 entry for real observed numbers). This test proves the same two things
-automatically on every run: (1) one full real drift -> PPO -> agent -> verification -> lifecycle
-cycle completes without error, and (2) live D1 telemetry synchronization never stops during that
-cycle — the same real-background-thread-plus-sampler-thread proof Modules 14/15/16/19 already
-established for individual agents, applied here to the real orchestrator.
+automatically on every run: (1) one full real drift -> Decision & Root-Cause Analysis Agent ->
+agent -> verification -> lifecycle cycle completes without error, and (2) live D1 telemetry
+synchronization never stops during that cycle — the same real-background-thread-plus-sampler-
+thread proof Modules 14/15/16/19 already established for individual agents, applied here to the
+real orchestrator.
 
-No real GOOGLE_API_KEY is configured in this environment — the drift severity range is
-narrowed to bias PPO toward `recalibrate` (real Module 13 held-out evidence: low severity
-reliably selects it), which needs no LLM at all, exactly like `scripts/run_orchestrator_demo.py`'s
-own documented rationale.
+No real GOOGLE_API_KEY is configured in this environment — unlike the old PPO design, the decision
+itself now always requires a genuine LLM call, which genuinely fails here (no real key) and
+`DecisionAgent.decide_safe()` degrades to `config.decision_agent.fallback.default_strategy`
+(`recalibrate`, which needs no LLM to execute) every time, logged at WARNING. The narrowed drift
+severity range is kept only for otherwise-stable test behavior — it no longer influences which
+strategy is selected, since the fallback is severity-independent.
 """
 
 from __future__ import annotations
@@ -96,7 +99,7 @@ def test_full_orchestrator_cycle_never_stops_telemetry_synchronization(tmp_path)
         assert len(records) == 1
         record = records[0]
         assert record.affected_component in fast_settings.drift.valid_components
-        assert record.rl_action in ("recalibrate", "regenerate", "expand_scope")
+        assert record.decision_strategy in ("recalibrate", "regenerate", "expand_scope")
         assert record.verification_result in ("ACCEPT", "REJECT")
         assert record.final_status in ("promoted", "rejected")
         assert (record.final_status == "promoted") == (record.verification_result == "ACCEPT")

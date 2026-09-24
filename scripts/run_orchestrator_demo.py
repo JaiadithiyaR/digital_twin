@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """Phase 11 — real, end-to-end validation of `src/main.py`'s `ContinuousOrchestrator` (permanent,
-repo-tracked, same convention as `ns3_sim/validate_e2e.py`/`scripts/train_ppo.py`/
-`scripts/ingest_rag.py`): initializes the FULL wired system, runs it unattended through one
-complete real cycle (drift -> PPO -> Module 14/15/16 agent -> Module 17 verification -> Module 19
+repo-tracked, same convention as `ns3_sim/validate_e2e.py`/`scripts/ingest_rag.py`): initializes
+the FULL wired system, runs it unattended through one complete real cycle (drift -> Decision &
+Root-Cause Analysis Agent -> Module 14/15/16 agent -> Module 17 verification -> Module 19
 lifecycle record), and — the concrete, load-bearing proof this script exists for — confirms the
 live D1 telemetry state kept growing DURING the adaptation cycle's own wall-clock window, via the
 same real-background-thread-plus-sampler-thread technique Modules 14/15/16/19 already established
 in their own tests, applied here to the real orchestrator instead of a single agent in isolation.
 
-**Why the drift severity range is narrowed for this run**: no real `GOOGLE_API_KEY` is
-configured in this development environment. Narrowing `MockDriftSource`'s generated severity to
-a low range (real Module 13 held-out evidence: low severity reliably selects `recalibrate`, which
-needs no LLM at all) lets this validation run complete with ZERO fakes/mocks anywhere — a genuinely
-real drift event, a genuinely real PPO decision, a genuinely real recalibration candidate, real
+**Why the drift severity range is narrowed for this run**: no real `GOOGLE_API_KEY`/
+`GEMINI_API_KEY` is configured in this development environment. Unlike the old PPO design, the
+Decision & Root-Cause Analysis Agent's decision itself now requires a genuine LLM call every
+time — which genuinely fails here (no real key), so `DecisionAgent.decide_safe()` degrades to
+`config.decision_agent.fallback.default_strategy` (`recalibrate`, which needs no LLM to execute)
+regardless of severity. The narrowed severity range is kept only for otherwise-stable/realistic
+demo output, not because it changes which strategy gets selected anymore. This still lets the run
+complete with ZERO fakes/mocks anywhere — a genuinely real drift event, a genuine (if
+infrastructure-degraded) decision-agent call, a genuinely real recalibration candidate, real
 Module 17 verification, and a real lifecycle record. `src/main.py`'s own orchestrator is otherwise
 unmodified and unaware of this script; `--mode demo`/`--mode live` (no severity override) is the
 real, general-purpose entrypoint for actual continuous operation, where a real `GOOGLE_API_KEY`
-would let `regenerate`/`expand_scope` cycles run too.
+would let the decision agent make genuine (non-fallback) calls, including selecting
+`regenerate`/`expand_scope`.
 
 Usage:
     python scripts/run_orchestrator_demo.py
@@ -59,11 +64,10 @@ def main() -> int:
     )
 
     print("[demo] initializing the full wired system (D1, RAG, model registry, bootstrap DT models, "
-          "PPO policy, telemetry source, drift source)...")
+          "decision agent, telemetry source, drift source)...")
     orchestrator = ContinuousOrchestrator(fast_settings, secrets, drift_severity_range_override=(0.05, 0.2))
     orchestrator.initialize()
-    print(f"[demo] llm_available={orchestrator.llm_client is not None} ppo_available={orchestrator.ppo_model is not None} "
-          f"rag_available={orchestrator.rag_kb.is_available}")
+    print(f"[demo] llm_available={orchestrator.llm_client is not None} rag_available={orchestrator.rag_kb.is_available}")
 
     orchestrator.start()
     print("[demo] telemetry synchronization + drift consumption started in the background")
@@ -84,9 +88,9 @@ def main() -> int:
 
     # Warm every component's real fidelity rolling window PAST config.fidelity.
     # min_history_for_normalization using genuinely live D1 data (never synthetic) — otherwise
-    # PPO's observation would see "insufficient history" (neutral placeholder) fidelity for every
-    # component, an unrealistic cold-start distribution real deployment wouldn't stay in for long.
-    # Mirrors AdaptationEnv._prewarm_fidelity_windows()'s discipline, applied to real live data.
+    # the decision agent's context would see "insufficient history" (neutral placeholder) fidelity
+    # for every component, an unrealistic cold-start distribution real deployment wouldn't stay in
+    # for long.
     min_history = fast_settings.fidelity.min_history_for_normalization
     print(f"[demo] warming real fidelity rolling windows past min_history_for_normalization ({min_history})...")
     for _ in range(min_history + 2):
@@ -145,8 +149,11 @@ def main() -> int:
     print("\n[demo] === lifecycle record (Module 19) ===")
     print(f"  event_id                  = {record.event_id}")
     print(f"  affected_component        = {record.affected_component}")
-    print(f"  drift_severity            = {record.drift_severity:.4f}")
-    print(f"  rl_action (PPO)           = {record.rl_action}")
+    print(f"  trigger_type              = {record.trigger_type}")
+    print(f"  trigger_severity          = {record.trigger_severity:.4f}")
+    print(f"  decision_strategy         = {record.decision_strategy}")
+    print(f"  decision_confidence       = {record.decision_confidence:.2f}")
+    print(f"  root_cause_analysis       = {record.root_cause_analysis}")
     print(f"  production_version_before = {record.production_version_before}")
     print(f"  candidate_version         = {record.candidate_version}")
     print(f"  fidelity_before           = {record.fidelity_before}")

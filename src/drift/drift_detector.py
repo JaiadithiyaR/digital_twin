@@ -10,7 +10,7 @@ class) hands it, and identify which DT scope (`component`) the notification conc
 needs adaptation" responsibility named on fig-dataflow.png for Module 11: an event naming a
 component this system doesn't actually run (typo, stale detector config, unrelated KPI) cannot be
 routed anywhere real, so it is quarantined rather than silently passed to whatever consumes
-`DriftEvent`s next (Module 13's future PPO observation construction — not built yet).
+`DriftEvent`s next (Module 13's Decision & Root-Cause Analysis Agent, via `src.fidelity.trigger.trigger_from_drift_event`'s normalization).
 
 Deliberately does NOT carry-forward-impute like Module 2's `TelemetryPreprocessor` does for
 missing telemetry fields: a drift notification is a discrete, one-off signal with no "last known
@@ -215,8 +215,8 @@ class DriftDetectorInterface:
     def process_stream(self, source: DriftSource) -> Iterator[DriftEvent]:
         """Continuously receive from `source`, yielding only validated events with an identified
         DT scope. A quarantined event is logged and skipped, never raised — one malformed
-        notification must never break the stream a future consumer (Module 13's PPO observation
-        loop, not built yet) reads from."""
+        notification must never break the stream a real consumer (Module 13's Decision &
+        Root-Cause Analysis Agent, via the trigger queue in `src/main.py`) reads from."""
         for raw in source.events():
             event, _ = self.process_event(raw)
             if event is not None:

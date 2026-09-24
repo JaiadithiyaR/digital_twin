@@ -1,21 +1,35 @@
 """Module 19 — Lifecycle Management Agent (Agent 6; prompt.md §37-38).
 
 The last of the six agents (CLAUDE.md §3): it does not decide anything — it RECORDS and EXPLAINS
-what every other agent already decided. Every adaptation event (one drift notification -> one PPO
-strategy choice -> one Module 14/15/16 agent execution -> one Module 17 verification decision)
-must produce exactly one structured, auditable `LifecycleRecord`, plus an automatically-generated,
-human-readable maintenance report.
+what every other agent already decided. Every adaptation event (one adaptation trigger, external
+drift OR fidelity-based -> one Decision & Root-Cause Analysis Agent strategy choice -> one Module
+14/15/16 agent execution -> one Module 17 verification decision) must produce exactly one
+structured, auditable `LifecycleRecord`, plus an automatically-generated, human-readable
+maintenance report.
 
-**`LifecycleRecord` carries every field prompt.md §37 lists, no more and no fewer**: event ID,
-timestamp, drift event, affected component/scope, drift severity, RL observation/context, RL
-action, agent action, production version before, candidate version, fidelity before, fidelity
-after, verification result, verification explanation, training window, evaluation window, model
-metadata, LLM metadata if used, final status. Nothing here computes or re-derives any of these —
-every field is read verbatim from the real object each upstream module already produced:
+**Design-pivot note** (see CLAUDE.md §12): the old PPO-era `drift_event`/`rl_observation`/
+`rl_action` fields have been replaced by `trigger` (the canonical `AdaptationTrigger`, covering
+BOTH trigger sources uniformly — prompt.md §16a) and `decision_strategy`/`root_cause_analysis`/
+`decision_confidence`/`decision_rationale`/`knowledge_refs` (the Decision & Root-Cause Analysis
+Agent's full structured `DecisionOutput`, prompt.md §20's explicit requirement that this agent's
+output — never free-form prose — is "what Module 19 records for the auditable history"). No
+existing field's MEANING changed beyond that rename; recording/persistence/report-generation logic
+is otherwise untouched.
 
-- `drift_event`/`affected_component`/`drift_severity` <- Module 11's `DriftEvent`.
-- `rl_observation`/`rl_action` <- whatever observation vector and action name Module 13's
-  `decide_adaptation_strategy()` was actually called with/returned.
+**`LifecycleRecord` carries every field prompt.md §37 lists, no more and no fewer** (plus the
+richer decision-output fields prompt.md §20 separately requires): event ID, timestamp, trigger,
+affected component/scope, trigger severity/type, decision strategy + root-cause analysis +
+confidence + rationale + knowledge refs, agent action, production version before, candidate
+version, fidelity before, fidelity after, verification result, verification explanation, training
+window, evaluation window, model metadata, LLM metadata if used, final status. Nothing here
+computes or re-derives any of these — every field is read verbatim from the real object each
+upstream module already produced:
+
+- `trigger`/`affected_component`/`trigger_severity`/`trigger_type` <- Module 11/12's canonical
+  `AdaptationTrigger` (`src/fidelity/trigger.py`).
+- `decision_strategy`/`root_cause_analysis`/`decision_confidence`/`decision_rationale`/
+  `knowledge_refs` <- Module 13's `DecisionAgent.decide()`/`decide_safe()` structured
+  `DecisionOutput`, verbatim.
 - `agent_action` <- a small, generic summary of whichever of Module 14/15/16's result objects the
   caller passed in (`RecalibrationResult`/`RegenerationResult`/`ExpandScopeResult` — see
   `_summarize_agent_action()`; these three types deliberately share no common base class, so this
@@ -67,20 +81,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RagUnavailableError
 
 if TYPE_CHECKING:
-    import numpy as np
-
+    from src.adaptation.decision_agent import DecisionOutput
     from src.adaptation.expand_scope_agent import ExpandScopeResult
     from src.adaptation.recalibration_agent import RecalibrationResult
     from src.adaptation.regeneration_agent import RegenerationResult
     from src.adaptation.verification_agent import VerificationResult
     from src.common.config import Settings
-    from src.drift.schema import DriftEvent
+    from src.fidelity.trigger import AdaptationTrigger
     from src.llm.google_client import GoogleClient
     from src.rag.rag_kb import RagKnowledgeBase
 
@@ -100,11 +113,15 @@ class LifecycleRecord(BaseModel):
 
     event_id: str
     timestamp: datetime
-    drift_event: dict[str, Any]
+    trigger: dict[str, Any]
     affected_component: str
-    drift_severity: float
-    rl_observation: list[float]
-    rl_action: str
+    trigger_severity: float
+    trigger_type: str
+    decision_strategy: str
+    root_cause_analysis: str
+    decision_confidence: float
+    decision_rationale: str
+    knowledge_refs: list[str]
     agent_action: dict[str, Any]
     production_version_before: str | None
     candidate_version: str
@@ -189,29 +206,30 @@ class LifecycleAgent:
     def record_adaptation_event(
         self,
         *,
-        drift_event: "DriftEvent",
-        rl_observation: "np.ndarray | list[float]",
-        rl_action: str,
+        trigger: "AdaptationTrigger",
+        decision: "DecisionOutput",
         agent_result: "RecalibrationResult | RegenerationResult | ExpandScopeResult",
         verification_result: "VerificationResult",
     ) -> LifecycleRecord:
         """Build and durably append exactly one `LifecycleRecord` for one full adaptation event.
-        Every argument is a real object a real upstream module (11/13/14-16/17) already produced —
-        this method computes nothing beyond the field-by-field mapping documented in the module
-        docstring above."""
+        Every argument is a real object a real upstream module (11/12/13/14-16/17) already
+        produced — this method computes nothing beyond the field-by-field mapping documented in
+        the module docstring above."""
         candidate_version_meta = agent_result.version
         updated_version = verification_result.updated_version
-
-        observation_list = [float(v) for v in rl_observation]
 
         record = LifecycleRecord(
             event_id=str(uuid.uuid4()),
             timestamp=datetime.now(UTC),
-            drift_event=json.loads(drift_event.model_dump_json()),
-            affected_component=drift_event.component,
-            drift_severity=drift_event.severity,
-            rl_observation=observation_list,
-            rl_action=rl_action,
+            trigger=json.loads(trigger.model_dump_json()),
+            affected_component=trigger.component,
+            trigger_severity=trigger.severity,
+            trigger_type=trigger.trigger_type,
+            decision_strategy=decision.strategy,
+            root_cause_analysis=decision.root_cause_analysis,
+            decision_confidence=decision.confidence,
+            decision_rationale=decision.rationale,
+            knowledge_refs=list(decision.knowledge_refs),
             agent_action=_summarize_agent_action(agent_result),
             production_version_before=candidate_version_meta.parent_version_id,
             candidate_version=verification_result.candidate_version_id,
@@ -240,7 +258,7 @@ class LifecycleAgent:
                 "component": "lifecycle_agent",
                 "event_id": record.event_id,
                 "affected_component": record.affected_component,
-                "rl_action": record.rl_action,
+                "decision_strategy": record.decision_strategy,
                 "final_status": record.final_status,
             },
         )
@@ -255,11 +273,31 @@ class LifecycleAgent:
     # --- read path (auditability) ---------------------------------------------------------------
 
     def list_records(self) -> list[LifecycleRecord]:
+        """Every line that parses against the CURRENT `LifecycleRecord` schema — a line written
+        by a prior, now-superseded schema (e.g. this project's own pre-design-pivot PPO-era
+        records, which used `drift_event`/`rl_observation`/`rl_action` instead of `trigger`/
+        `decision_strategy`/...) is logged and skipped, never allowed to crash the entire read.
+        This mirrors the same "one malformed record must never take down the whole stream"
+        discipline Module 2's telemetry quarantine and Module 11's drift-event quarantine already
+        establish — an append-only audit log must stay readable even across a schema migration,
+        not become a single point of failure the moment one old-format line is encountered."""
         if not self._records_path.exists():
             return []
         with self._lock:
             lines = self._records_path.read_text(encoding="utf-8").splitlines()
-        return [LifecycleRecord.model_validate_json(line) for line in lines if line.strip()]
+        records: list[LifecycleRecord] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                records.append(LifecycleRecord.model_validate_json(line))
+            except ValidationError as exc:
+                logger.warning(
+                    "skipping a lifecycle record line that doesn't match the current schema "
+                    "(likely written by a superseded schema version) — never crashes the read",
+                    extra={"component": "lifecycle_agent", "error": str(exc)},
+                )
+        return records
 
     def get_record(self, event_id: str) -> LifecycleRecord:
         for record in self.list_records():
@@ -273,10 +311,10 @@ class LifecycleAgent:
         self, record: LifecycleRecord, *, rag_knowledge_base: "RagKnowledgeBase | None" = None
     ) -> MaintenanceReport:
         """Automatically produce a human-readable vendor maintenance report for `record` (prompt.md
-        §38's exact list: what drifted, affected scope, why adaptation was triggered, what PPO
-        selected, what the adaptation agent did, what changed, fidelity before/after,
-        accepted/rejected + why, relevant contextual knowledge). Always saves the report to
-        `config.lifecycle.reports_dir/<event_id>.md` and returns it."""
+        §38's exact list: what drifted, affected scope, why adaptation was triggered, what the
+        Decision & Root-Cause Analysis Agent selected, what the adaptation agent did, what changed,
+        fidelity before/after, accepted/rejected + why, relevant contextual knowledge). Always
+        saves the report to `config.lifecycle.reports_dir/<event_id>.md` and returns it."""
         deterministic_text = self._deterministic_report(record)
         rag_context = self._retrieve_rag_context(record, rag_knowledge_base)
 
@@ -312,20 +350,25 @@ class LifecycleAgent:
             f"**Timestamp:** {record.timestamp.isoformat()}",
             "",
             "## What drifted",
-            f"Component `{record.affected_component}` reported drift severity "
-            f"{record.drift_severity:.4f} (drift event metadata: {record.drift_event.get('metadata', {})}).",
+            f"Component `{record.affected_component}` triggered adaptation via "
+            f"`{record.trigger_type}` at severity {record.trigger_severity:.4f} "
+            f"(trigger metadata: {record.trigger.get('metadata', {})}).",
             "",
             "## Affected scope",
             f"`{record.affected_component}` (production version before this event: "
             f"`{record.production_version_before or 'none — no prior production version'}`).",
             "",
             "## Why adaptation was triggered",
-            f"An external/mock drift detector (source={record.drift_event.get('source')}) flagged "
-            f"`{record.affected_component}` at severity {record.drift_severity:.4f}, which the RL "
-            "decision agent (PPO) observed and acted on.",
+            f"A `{record.trigger_type}` trigger flagged `{record.affected_component}` at severity "
+            f"{record.trigger_severity:.4f}, which the Decision & Root-Cause Analysis Agent "
+            "analyzed and acted on.",
             "",
-            "## What PPO selected",
-            f"`{record.rl_action}`",
+            "## Root-cause analysis",
+            record.root_cause_analysis,
+            "",
+            "## Decision strategy selected",
+            f"`{record.decision_strategy}` (confidence={record.decision_confidence:.2f})\n\n"
+            f"Rationale: {record.decision_rationale}",
             "",
             "## What the adaptation agent did",
             json.dumps(record.agent_action, indent=2, default=str),
@@ -365,9 +408,10 @@ class LifecycleAgent:
             f"Recorded facts (deterministic template):\n{deterministic_text}\n\n"
             f"Relevant contextual knowledge (D2 RAG retrieval): {rag_context}\n\n"
             "Write the final maintenance report in clear prose/markdown covering: what drifted, "
-            "the affected scope, why adaptation was triggered, what PPO selected, what the "
-            "adaptation agent did, what changed, fidelity before/after, whether accepted or "
-            "rejected and why, and any relevant contextual knowledge."
+            "the affected scope, why adaptation was triggered, what the Decision & Root-Cause "
+            "Analysis Agent selected and why, what the adaptation agent did, what changed, "
+            "fidelity before/after, whether accepted or rejected and why, and any relevant "
+            "contextual knowledge."
         )
 
     def _retrieve_rag_context(self, record: LifecycleRecord, rag_knowledge_base: "RagKnowledgeBase | None") -> str:

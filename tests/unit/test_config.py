@@ -9,7 +9,7 @@ def test_settings_load_and_validate():
     settings = load_settings()
     assert settings.environment in ("demo", "live")
     assert settings.telemetry.source in ("mock", "zmq")
-    assert settings.ppo.action_mapping == {0: "recalibrate", 1: "regenerate", 2: "expand_scope"}
+    assert settings.decision_agent.action_mapping == {0: "recalibrate", 1: "regenerate", 2: "expand_scope"}
     assert settings.fidelity.epsilon > 0
     assert settings.fidelity.rolling_window_length > 0
     assert isinstance(settings.dt_models.enable_prb_model, bool)

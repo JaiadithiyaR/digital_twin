@@ -1,32 +1,26 @@
-"""Unit tests for `src/main.py`'s pure integration-glue logic — the runtime PPO observation
-construction and the DT-model bootstrap dispatch (load-existing vs. train-new). Fast, no real
-telemetry pipeline or model training involved except where explicitly noted. The REQUIRED real,
-end-to-end "run one full cycle, confirm telemetry never stopped" proof is
-`scripts/run_orchestrator_demo.py` (a real, permanent, repo-tracked validation script — see
-CLAUDE.md's Phase 11 entry for the actual observed numbers from a real run) plus the lighter-
-weight, still-genuinely-real `tests/integration/test_main_orchestrator.py`.
+"""Unit tests for `src/main.py`'s pure integration-glue logic — per-component previous-outcome
+tracking (feeding the Decision & Root-Cause Analysis Agent's context, prompt.md §18) and the
+DT-model bootstrap dispatch (load-existing vs. train-new). Fast, no real telemetry pipeline or
+model training involved except where explicitly noted. The REQUIRED real, end-to-end "run one full
+cycle, confirm telemetry never stopped" proof is `scripts/run_orchestrator_demo.py` (a real,
+permanent, repo-tracked validation script — see CLAUDE.md's Phase 11 entry for the actual observed
+numbers from a real run) plus the lighter-weight, still-genuinely-real
+`tests/integration/test_main_orchestrator.py`. The decision-CONTEXT-building logic itself
+(fidelity vector, unified score, network-state summary, RAG retrieval) is `src.adaptation.
+decision_context`'s own concern, tested in `tests/unit/test_decision_context.py` — not duplicated
+here.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
-import numpy as np
 import pandas as pd
-import pytest
 
-from src.adaptation.rl_env import NETWORK_STATE_FEATURES
+from src.adaptation.decision_context import PreviousOutcome
 from src.common.config import Secrets, load_settings
-from src.drift.schema import DriftEvent
 from src.main import _DT_COMPONENT_CLASSES, _OUTPUT_FIELDS, _TARGET_COLUMNS, ContinuousOrchestrator
 
 SETTINGS = load_settings()
 NO_KEY_SECRETS = Secrets(google_api_key=None)
-
-
-def _event(component: str, severity: float) -> DriftEvent:
-    now = datetime.now(UTC)
-    return DriftEvent(component=component, severity=severity, timestamp=now, metadata={}, source="MOCK", received_at=now)
 
 
 class _FakeD1Store:
@@ -55,81 +49,23 @@ def test_component_spec_tables_are_internally_consistent():
         assert _OUTPUT_FIELDS[name] == cls.OUTPUT_FIELD
 
 
-# --- runtime PPO observation construction ----------------------------------------------------------
+# --- per-component previous-outcome tracking (feeds the Decision & Root-Cause Analysis Agent) ----
 
 
-def _network_state_history(n: int = 50) -> pd.DataFrame:
-    rng = np.random.default_rng(1)
-    data = {col: rng.uniform(1, 100, n) for col in NETWORK_STATE_FEATURES}
-    return pd.DataFrame(data)
-
-
-def test_runtime_observation_has_the_exact_dimension_ppo_was_trained_on():
+def test_previous_outcome_for_unknown_component_is_the_honest_default():
     orch = _bare_orchestrator()
-    orch.d1_store = _FakeD1Store(_network_state_history())
-    orch._latest_fidelity = {c: 0.5 for c in SETTINGS.drift.valid_components}
-    orch._prev_action_idx = None
-    orch._prev_reward = 0.0
-
-    obs = orch._build_runtime_observation(_event(SETTINGS.drift.valid_components[0], 0.4))
-
-    n_components = len(SETTINGS.drift.valid_components)
-    n_actions = len(SETTINGS.ppo.action_mapping)
-    expected_dim = n_components + n_components + 1 + n_actions + 1 + len(NETWORK_STATE_FEATURES)
-    assert obs.shape == (expected_dim,)
-    assert obs.dtype == np.float32
-    assert np.all(obs >= -2.0) and np.all(obs <= 2.0)
+    result = orch._previous_outcome_for("throughput")
+    assert result == PreviousOutcome()  # no prior attempt on record — never fabricated
 
 
-def test_runtime_observation_affected_component_onehot_is_correct():
+def test_previous_outcome_for_returns_the_tracked_value_for_that_component_only():
     orch = _bare_orchestrator()
-    orch.d1_store = _FakeD1Store(_network_state_history())
-    orch._latest_fidelity = {c: None for c in SETTINGS.drift.valid_components}
-    orch._prev_action_idx = None
-    orch._prev_reward = 0.0
+    orch._previous_outcome_by_component["jitter"] = PreviousOutcome(
+        action="recalibrate", verification_result="ACCEPT", fidelity_before=0.5, fidelity_after=0.9
+    )
 
-    components = tuple(SETTINGS.drift.valid_components)
-    target = components[2]
-    obs = orch._build_runtime_observation(_event(target, 0.7))
-
-    n = len(components)
-    affected_onehot = obs[n : 2 * n]
-    assert affected_onehot[2] == pytest.approx(1.0)
-    assert affected_onehot.sum() == pytest.approx(1.0)
-    # a component with no fidelity evaluated yet defaults to a neutral 0.0, never a crash/NaN
-    assert np.all(np.isfinite(obs[:n]))
-
-
-def test_runtime_observation_previous_action_onehot_reflects_last_real_action():
-    orch = _bare_orchestrator()
-    orch.d1_store = _FakeD1Store(_network_state_history())
-    orch._latest_fidelity = {c: 0.5 for c in SETTINGS.drift.valid_components}
-    orch._prev_action_idx = 1
-    orch._prev_reward = 0.3
-
-    obs = orch._build_runtime_observation(_event(SETTINGS.drift.valid_components[0], 0.4))
-
-    n = len(SETTINGS.drift.valid_components)
-    n_actions = len(SETTINGS.ppo.action_mapping)
-    prev_action_slice = obs[2 * n + 1 : 2 * n + 1 + n_actions]
-    assert prev_action_slice[1] == pytest.approx(1.0)
-    assert prev_action_slice.sum() == pytest.approx(1.0)
-
-
-def test_network_state_summary_is_zeros_for_empty_history():
-    orch = _bare_orchestrator()
-    orch.d1_store = _FakeD1Store(pd.DataFrame(columns=list(NETWORK_STATE_FEATURES)))
-    summary = orch._compute_network_state_summary()
-    assert summary.shape == (len(NETWORK_STATE_FEATURES),)
-    assert np.all(summary == 0.0)
-
-
-def test_network_state_summary_is_normalized_into_a_bounded_range():
-    orch = _bare_orchestrator()
-    orch.d1_store = _FakeD1Store(_network_state_history())
-    summary = orch._compute_network_state_summary()
-    assert summary.shape == (len(NETWORK_STATE_FEATURES),)
-    assert np.all(summary >= -0.01) and np.all(summary <= 1.01)  # self-referential min-max normalization
+    assert orch._previous_outcome_for("jitter").action == "recalibrate"
+    assert orch._previous_outcome_for("latency") == PreviousOutcome()  # independent per component
 
 
 # --- bootstrap dispatch: load existing vs. train new (no real training triggered here) ------------

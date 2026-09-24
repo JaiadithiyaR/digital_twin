@@ -33,7 +33,7 @@ ALLOWED_DRIFT_SOURCES = ("EXTERNAL", "MOCK")
 class DriftEvent(BaseModel):
     """A single validated, normalized drift notification identifying which DT scope
     (`component`) needs adaptation. This — not the raw payload — is what any future consumer
-    (Module 13's PPO observation construction) will read."""
+    (Module 13's Decision & Root-Cause Analysis Agent) will read."""
 
     model_config = ConfigDict(frozen=True)
 

@@ -8,18 +8,23 @@ synchronization, DT models, orchestrator, fidelity engine, drift interface, RAG,
 sandbox, LLM client, storage, config) is an ordinary software component, never renamed into an
 "agent":
 
-1. **PPO RL Decision Agent** (Module 13) — decides WHAT adaptation strategy to apply. Action
-   space is `Discrete(3)`: 0 = Recalibrate, 1 = Regenerate, 2 = Expand Scope. Observation: five
-   per-component fidelity values, an affected-component one-hot flag, drift severity, the
-   previous action (one-hot), the previous reward, plus relevant network state. Reward is
-   `fidelity_improvement - adaptation_cost_penalty`. PPO never generates code, never sets
-   fidelity formulas, never does LLM reasoning — it only picks the strategy index, and the
-   trained/saved policy is what runs at inference time (a deterministic fallback exists only for
-   genuine PPO infrastructure failure, always logged, never a silent substitute).
+1. **Decision & Root-Cause Analysis Agent** (Module 13) — decides WHY a trigger fired and WHAT
+   adaptation strategy to apply. Strategy space is a fixed, closed enum: `"recalibrate"`,
+   `"regenerate"`, `"expand_scope"` — never a 4th/5th value, enforced via the LLM's structured
+   output schema. Context: five per-component fidelity values, the Unified Fidelity Score, an
+   affected-component indicator, the trigger type (external drift vs. fidelity-based) and its
+   severity, the previous action taken for this component and its outcome, relevant network
+   state, and knowledge retrieved read-only from this RAG knowledge base. A genuine LLM
+   (Google AI/Gemini) call is made on every single trigger — never cached, never a hardcoded
+   heuristic. The agent never generates code, never sets fidelity formulas — its root-cause
+   analysis is explanatory and can never override the deterministic acceptance gate (Module 17).
+   A deterministic fallback strategy exists only for genuine decision-agent infrastructure
+   failure (LLM transport failure or exhausted structured-output validation), always logged,
+   never a silent or routine substitute.
 2. **Recalibration Agent** (Module 14) — decides HOW to recalibrate: retrains an EXISTING
    production component on a recent telemetry window when its structure is still valid but its
    learned behaviour has drifted. Never a blind periodic retrain — recalibration happens only
-   because PPO selected it.
+   because the Decision & Root-Cause Analysis Agent selected it.
 3. **Regeneration Agent** (Module 15, LLM-driven) — decides HOW to regenerate: rebuilds an
    existing component's pipeline from scratch via LLM-generated, sandboxed code when the current
    architecture can no longer represent the changed behaviour.

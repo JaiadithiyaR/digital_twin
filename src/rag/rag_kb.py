@@ -25,11 +25,12 @@ models, state, or registry."). Two separate classes enforce this by construction
   byte-identical before and after.
 
 **Embeddings**: `config.rag.embedding_model` names `all-MiniLM-L6-v2`. This uses ChromaDB's own
-bundled `DefaultEmbeddingFunction`, which runs exactly that model via a local ONNX runtime (no
-`sentence-transformers`/`torch` dependency needed for it specifically — this project already
-depends on `torch` for PPO, but pulling in the much larger `sentence-transformers` stack just to
-re-select a model ChromaDB already runs natively would be exactly the unnecessary infrastructure
-prompt.md §10 warns against). Genuine, real embeddings — verified directly in
+bundled `DefaultEmbeddingFunction`, which runs exactly that model via a local ONNX runtime — no
+`sentence-transformers`/`torch` dependency needed for it specifically (this project has no torch
+dependency at all since the LLM/RL design pivot — see CLAUDE.md §12 — and pulling in the much
+larger `sentence-transformers` stack just to re-select a model ChromaDB already runs natively
+would be exactly the unnecessary infrastructure prompt.md §10 warns against). Genuine, real
+embeddings — verified directly in
 `tests/integration/test_rag_kb.py` by confirming two similar queries embed closer together than
 two unrelated ones. Documented limitation: `DefaultEmbeddingFunction` always uses this specific
 model regardless of what `config.rag.embedding_model` is set to — changing that config value

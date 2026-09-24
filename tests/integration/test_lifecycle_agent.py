@@ -1,16 +1,17 @@
 """Integration test: Module 19 (Lifecycle Management Agent) — the REQUIRED "run one full cycle"
-proof: a genuine drift event (Module 11) drives a genuine PPO decision (Module 13's already-
-trained policy), which is dispatched to whichever real Module 14/15/16 agent it actually selects,
-verified by a real Module 17 `VerificationAgent`, and finally recorded by this module — the
-resulting `LifecycleRecord` is then inspected field-by-field for completeness against prompt.md
-§37's exact list.
+proof: a genuine drift event (Module 11), normalized into the canonical `AdaptationTrigger`
+(prompt.md §16a), drives a genuine Decision & Root-Cause Analysis Agent call (Module 13), which is
+dispatched to whichever real Module 14/15/16 agent it actually selects, verified by a real Module
+17 `VerificationAgent`, and finally recorded by this module — the resulting `LifecycleRecord` is
+then inspected field-by-field for completeness against prompt.md §37's exact list.
 
-No real GOOGLE_API_KEY is configured in this environment — Regeneration/Expand-Scope's LLM
-calls (only reached if PPO happens to select that branch) are driven by fake clients returning
-hand-written source, exactly Modules 15/16's own established testing convention (recalibration
-needs no LLM at all). Whichever branch executes, everything else — the real trained PPO policy,
-real Module 11 drift validation, a real sandbox subprocess (if reached), real Module 12 fidelity
-recomputation, and the real lifecycle record/report — is genuine, unmocked code.
+No real GOOGLE_API_KEY is configured in this environment — the Decision & Root-Cause Analysis
+Agent's own call, and Regeneration/Expand-Scope's LLM calls (only reached if the decision agent
+selects that branch), are all driven by one fake client returning a genuine, structurally-real
+response for whichever schema it's asked for (exactly Modules 15/16's own established testing
+convention; recalibration needs no LLM at all). Everything else — real Module 11 drift
+validation, real Module 12 fidelity recomputation, a real sandbox subprocess (if reached), and the
+real lifecycle record/report — is genuine, unmocked code.
 """
 
 from __future__ import annotations
@@ -21,18 +22,19 @@ import numpy as np
 import pytest
 
 from src.adaptation.data_selection import select_recent_window, time_split
+from src.adaptation.decision_agent import DecisionAgent, DecisionOutput
+from src.adaptation.decision_context import PreviousOutcome, build_decision_context
 from src.adaptation.expand_scope_agent import ExpandScopeAgent, _ProposedComponentDesign
 from src.adaptation.lifecycle_agent import LifecycleAgent
 from src.adaptation.recalibration_agent import RecalibrationAgent
 from src.adaptation.regeneration_agent import RegenerationAgent
-from src.adaptation.rl_agent import decide_adaptation_strategy, load_ppo_agent
-from src.adaptation.rl_env import AdaptationEnv, build_network_state_pool
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import load_settings
 from src.dt_models.model_registry import DTModelRegistry
 from src.dt_models.throughput import ThroughputModel
 from src.drift.drift_detector import DriftDetectorInterface
 from src.fidelity.evaluator import FidelityEvaluator
+from src.fidelity.trigger import trigger_from_drift_event
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 
@@ -132,26 +134,33 @@ class SinrQualityModel(DTComponent):
 """
 
 
-class _RegenFakeLLM:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
+class _FakeLLM:
+    """Serves BOTH the Decision & Root-Cause Analysis Agent's call AND whichever of Modules
+    15/16's calls its selected strategy needs — exactly like one real `GoogleClient` instance
+    serves every caller in production, discriminating purely on the `schema` argument it's asked
+    for, never on which "role" is calling. Genuinely returns a strategy (`"regenerate"`, chosen
+    here so this test exercises the real sandbox path — matching this test's own historical
+    observed behavior), never a hardcoded bypass of the real `DecisionAgent`/agent logic."""
+
+    def __init__(self, strategy: str = "regenerate") -> None:
+        self._strategy = strategy
+        self.calls: list[tuple[str, type]] = []
 
     def complete_structured(self, prompt, schema, **kwargs):
-        self.calls.append(prompt)
-        return schema(class_name="RebuiltThroughput", source_code=_REGEN_SOURCE, reasoning="rebuilt via a linear model")
-
-
-class _ExpandFakeLLM:
-    def __init__(self) -> None:
-        self.design_calls: list[str] = []
-        self.implementation_calls: list[str] = []
-
-    def complete_structured(self, prompt, schema, **kwargs):
+        self.calls.append((prompt, schema))
+        if schema is DecisionOutput:
+            return DecisionOutput(
+                strategy=self._strategy,
+                root_cause_analysis="Structural drift in throughput predictions likely requires a rebuilt pipeline.",
+                confidence=0.82,
+                rationale="Recalibration alone would not address a structural mismatch of this severity.",
+                knowledge_refs=[],
+            )
         if schema is _ProposedComponentDesign:
-            self.design_calls.append(prompt)
             return _EXPAND_DESIGN
-        self.implementation_calls.append(prompt)
-        return schema(class_name="SinrQualityModel", source_code=_EXPAND_SOURCE, reasoning="linear model")
+        if self._strategy == "expand_scope":
+            return schema(class_name="SinrQualityModel", source_code=_EXPAND_SOURCE, reasoning="linear model")
+        return schema(class_name="RebuiltThroughput", source_code=_REGEN_SOURCE, reasoning="rebuilt via a linear model")
 
 
 class _FakeD1Store:
@@ -167,7 +176,7 @@ class _FakeD1Store:
 
 def _bootstrap_weak_production(bootstrap_history, registry: ModelRegistry):
     """A deliberately weak, early-slice bootstrap production model — real headroom for whichever
-    adaptation strategy PPO selects to genuinely improve on, mirroring the same setup already used
+    adaptation strategy is selected to genuinely improve on, mirroring the same setup already used
     by `tests/integration/test_verification_agent.py`."""
     features = list(ThroughputModel.REQUIRED_FEATURES)
     ordered = bootstrap_history.sort_values("timestamp", kind="stable").reset_index(drop=True)
@@ -189,7 +198,8 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     _bootstrap_weak_production(bootstrap_history, registry)
 
-    # 1. drift (Module 11) — a REAL raw event through the REAL validation/normalization pipeline.
+    # 1. drift (Module 11) — a REAL raw event through the REAL validation/normalization pipeline,
+    # normalized into the canonical AdaptationTrigger (Module 12, prompt.md §16a).
     detector = DriftDetectorInterface.from_settings(SETTINGS)
     raw_event = {
         "component": "throughput",
@@ -200,17 +210,25 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     }
     drift_event, quarantined = detector.process_event(raw_event)
     assert drift_event is not None and quarantined is None
+    trigger = trigger_from_drift_event(drift_event)
 
-    # 2. PPO action (Module 13) — a REAL observation from a REAL AdaptationEnv, decided by the
-    # REAL already-trained policy on disk (config.ppo.policy_path).
-    network_pool = build_network_state_pool(SETTINGS, seed=4242, pool_size=5, sample_rows=20)
-    env = AdaptationEnv(SETTINGS, drift_events=[drift_event], network_state_pool=network_pool, seed=4242)
-    observation, _ = env.reset(seed=4242)
-    ppo_model = load_ppo_agent(SETTINGS)
-    action_idx, action_name = decide_adaptation_strategy(ppo_model, observation, SETTINGS)
+    # 2. Decision & Root-Cause Analysis Agent (Module 13) — a REAL DecisionContext built from real
+    # sources, decided by a REAL DecisionAgent.decide() call (LLM transport faked, per this file's
+    # own docstring — no real GOOGLE_API_KEY is configured in this environment).
+    fake_llm = _FakeLLM(strategy="regenerate")
+    decision_context = build_decision_context(
+        trigger,
+        component_fidelity={},
+        unified_fidelity_score=None,
+        previous_outcome=PreviousOutcome(),
+        history=bootstrap_history,
+    )
+    decision_agent = DecisionAgent(fake_llm, SETTINGS)
+    decision = decision_agent.decide(decision_context)
+    action_name = decision.strategy
     assert action_name in ("recalibrate", "regenerate", "expand_scope")
 
-    # 3. whichever real Module 14/15/16 agent PPO actually selected.
+    # 3. whichever real Module 14/15/16 agent the decision agent actually selected.
     drift_context = f"drift on 'throughput' at severity {drift_event.severity:.3f}"
     if action_name == "recalibrate":
         agent = RecalibrationAgent(SETTINGS, _FakeD1Store(bootstrap_history), registry)
@@ -218,18 +236,16 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
             lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48, held_out_fraction=0.2
         )
     elif action_name == "regenerate":
-        llm = _RegenFakeLLM()
-        agent = RegenerationAgent(SETTINGS, _FakeD1Store(bootstrap_history), registry, llm, SandboxExecutor.from_settings(SETTINGS))
+        agent = RegenerationAgent(SETTINGS, _FakeD1Store(bootstrap_history), registry, fake_llm, SandboxExecutor.from_settings(SETTINGS))
         agent_result = agent.regenerate(
             lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps",
             window_hours=48, held_out_fraction=0.2, drift_context=drift_context,
         )
     else:
-        llm = _ExpandFakeLLM()
         dt_model_registry = DTModelRegistry()
         dt_model_registry.register(ThroughputModel.from_settings(SETTINGS))
         agent = ExpandScopeAgent(
-            SETTINGS, _FakeD1Store(bootstrap_history), registry, dt_model_registry, llm, SandboxExecutor.from_settings(SETTINGS)
+            SETTINGS, _FakeD1Store(bootstrap_history), registry, dt_model_registry, fake_llm, SandboxExecutor.from_settings(SETTINGS)
         )
         agent_result = agent.expand_scope(
             lambda: ThroughputModel.from_settings(SETTINGS),
@@ -273,9 +289,8 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
         records_path=tmp_path / "lifecycle" / "records.jsonl", reports_dir=tmp_path / "lifecycle" / "reports"
     )
     record = lifecycle_agent.record_adaptation_event(
-        drift_event=drift_event,
-        rl_observation=observation,
-        rl_action=action_name,
+        trigger=trigger,
+        decision=decision,
         agent_result=agent_result,
         verification_result=verification_result,
     )
@@ -283,11 +298,14 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     # --- inspect the resulting record for completeness against prompt.md §37's exact field list ---
     assert record.event_id
     assert record.timestamp is not None
-    assert record.drift_event["component"] == "throughput"
+    assert record.trigger["component"] == "throughput"
     assert record.affected_component == "throughput"
-    assert record.drift_severity == pytest.approx(drift_event.severity)
-    assert len(record.rl_observation) == len(observation)
-    assert record.rl_action == action_name
+    assert record.trigger_severity == pytest.approx(drift_event.severity)
+    assert record.trigger_type == "external_drift"
+    assert record.decision_strategy == action_name
+    assert record.root_cause_analysis
+    assert 0.0 <= record.decision_confidence <= 1.0
+    assert record.decision_rationale
     assert record.agent_action and record.agent_action["adaptation_type"] == action_name
     assert record.production_version_before == candidate_version.parent_version_id
     assert record.candidate_version == candidate_version.version_id

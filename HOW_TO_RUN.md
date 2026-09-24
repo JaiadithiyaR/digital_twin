@@ -18,12 +18,14 @@ source .venv/bin/activate
 # Install dependencies (idempotent — safe to re-run)
 pip install -r requirements.txt
 
-# Secrets — never committed. Fill in a real Anthropic API key to enable the
-# Regeneration/Expand-Scope/Verification-explanation/Lifecycle-report LLM calls.
-# Without a real key, the system still runs: recalibration needs no LLM at all, and every
-# other LLM call degrades gracefully (logged, never faked) — see CLAUDE.md §7.
+# Secrets — never committed. Fill in a real Google AI (Gemini) API key to enable the
+# Decision & Root-Cause Analysis Agent, Regeneration/Expand-Scope/Verification-explanation/
+# Lifecycle-report LLM calls. Without a real key, the system still runs: the decision agent
+# degrades to its configured deterministic fallback strategy (logged every time, never silent),
+# recalibration execution needs no LLM at all, and every other LLM call degrades gracefully
+# (logged, never faked) — see CLAUDE.md §7.
 cp .env.example .env
-# then edit .env and set ANTHROPIC_API_KEY=sk-ant-...
+# then edit .env and set GOOGLE_API_KEY=... (or GEMINI_API_KEY=...)
 
 # Verify the environment: directories, .env, dependencies, config all check out (non-destructive)
 python scripts/setup.py
@@ -44,16 +46,16 @@ All tunable parameters live in `config/settings.yaml` — nothing to edit there 
                                                    # if a single combined run gets OOM-killed)
 ```
 
-No test hits a real network/API — the Anthropic client's transport is mocked in every test; only
-`test_anthropic_client.py`'s one live-smoke test would call the real API, and it auto-skips
-unless a real `ANTHROPIC_API_KEY` is configured.
+No test hits a real network/API — the Google AI (Gemini) client's transport is mocked in every
+test; only `test_google_client.py`'s one live-smoke test would call the real API, and it
+auto-skips unless a real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured.
 
 ---
 
 ## 3. (Optional) Build the real NS-3 / 5G-LENA simulator
 
 Only needed for `--mode live` / the real-NS-3 end-to-end demo (step 6). Everything else
-(`--mode demo`, all tests, PPO training, RAG ingestion) uses mock telemetry and does not need this.
+(`--mode demo`, all tests, RAG ingestion) uses mock telemetry and does not need this.
 
 ```bash
 ./scripts/setup_ns3.sh   # idempotent: clones ns-3.48 + 5G-LENA (nr v5.1) into ns3_sim/ns-3-dev,
@@ -72,22 +74,22 @@ python ns3_sim/validate_e2e.py
 
 ---
 
-## 4. (Optional) Prerequisites for a full adaptation cycle
+## 4. (Optional) Prerequisite for a full adaptation cycle
 
-These two are only needed the FIRST time — their outputs are saved to disk and reused
-automatically after that (`data/models/ppo/policy.zip`, `rag_data/chroma/`).
+There is no training step anymore (design pivot — see CLAUDE.md §12): the Decision & Root-Cause
+Analysis Agent (Module 13) makes a genuine LLM call on every trigger instead of using a
+pre-trained policy, so the only real one-time prerequisite is the RAG knowledge base, whose output
+is saved to disk and reused automatically after the first run (`rag_data/chroma/`).
 
 ```bash
-# Train the PPO policy (real Stable-Baselines3 training against the real AdaptationEnv)
-python scripts/train_ppo.py --total-timesteps 20000 --n-envs 4 --seed 42
-
 # Ingest the RAG knowledge base corpus into ChromaDB (idempotent)
 python scripts/ingest_rag.py
 ```
 
-If skipped, the system still runs: with no trained PPO policy it falls back to
-`config.ppo.fallback.default_action` (logged every time, never silent); with no RAG store it
-proceeds with "not available" context (logged, never fabricated).
+If skipped, the system still runs: with no RAG store it proceeds with "not available" context
+(logged, never fabricated). Separately, with no real `GOOGLE_API_KEY`/`GEMINI_API_KEY` configured
+(step 1), the decision agent's own LLM call genuinely fails and falls back to
+`config.decision_agent.fallback.default_strategy` (logged every time, never silent).
 
 ---
 
@@ -103,7 +105,7 @@ python -m src.main --mode demo --max-drift-events 1     # bounded run — stop a
 
 This is the real continuous loop (`ContinuousOrchestrator`): telemetry -> preprocessing ->
 continuous D1 synchronization -> dependency-aware DT prediction -> fidelity evaluation -> drift
-event -> PPO decision -> recalibrate/regenerate/expand_scope -> verification -> lifecycle record
+event/fidelity-based trigger -> Decision & Root-Cause Analysis Agent -> recalibrate/regenerate/expand_scope -> verification -> lifecycle record
 -> repeat, forever, without stopping — exactly prompt.md §39. It writes to this repo's REAL
 configured storage paths (`data/artifacts/d1_*.parquet`, `data/models/`,
 `data/artifacts/lifecycle_records.jsonl`, `data/artifacts/maintenance_reports/`) and logs to
@@ -127,11 +129,44 @@ python scripts/run_orchestrator_demo.py
 python scripts/run_e2e_demo.py 2>&1 | tee logs/e2e_demo_output.log
 ```
 
-Each prints: whether an LLM/PPO/RAG were available, live telemetry row accumulation progress, the
+Each prints: whether an LLM/RAG were available, live telemetry row accumulation progress, the
 real fidelity values it warmed up with, a concrete before/after `records_synced` proof that
-telemetry never stopped during the adaptation cycle, the full lifecycle record (drift event, PPO
-action, candidate version, fidelity before/after, ACCEPT/REJECT decision), and the path to the
-generated maintenance report.
+telemetry never stopped during the adaptation cycle, the full lifecycle record (trigger, decision
+agent strategy, candidate version, fidelity before/after, ACCEPT/REJECT decision), and the path to
+the generated maintenance report.
+
+---
+
+## 6b. Visualize telemetry and fidelity from a previous run
+
+`scripts/visualize_metrics.py` is a standalone, read-only program that charts whatever the system
+has already genuinely produced — it never runs the pipeline itself, only reads and plots. Run it
+any time after step 5 or 6 above has produced some real data:
+
+```bash
+# production storage (config/settings.yaml's own paths — what `python -m src.main` writes)
+python scripts/visualize_metrics.py
+
+# the dedicated real-NS-3 end-to-end demo's own storage subtree
+python scripts/visualize_metrics.py --preset e2e_ns3_demo --output-dir data/e2e_ns3_demo/plots
+```
+
+Produces, under `--output-dir` (default `data/artifacts/plots/`):
+
+- `telemetry_core_metrics.png` — throughput/latency/jitter/packet-loss/PRB-utilization over time
+- `telemetry_radio_conditions.png` — SINR/RSRP/RSRQ/UE-speed over time
+- `fidelity_over_time.png` — composite FidelityScore and raw RMSE per component, **recomputed by
+  replaying the real D1 history through each component's real current production model via the
+  same Module 12 `FidelityEvaluator` the live system uses** (not a re-implementation or estimate)
+- `fidelity_timeseries_<component>.csv` — the full unclipped numbers behind that chart (the PNG's
+  y-axis is capped for readability on outliers; the CSV never is)
+- `lifecycle_adaptation_outcomes.png` — fidelity before/after per Module 19 lifecycle record,
+  outlined green (ACCEPT) or red (REJECT)
+
+`--window`/`--stride` control how many rows go into each fidelity-recompute window (default 20,
+non-overlapping); `--history-path`/`--models-dir`/`--lifecycle-path` override individual paths
+directly if your data doesn't fit either `--preset`. Nothing here writes to D1, the model
+registry, or the lifecycle log.
 
 ---
 
@@ -143,7 +178,6 @@ data/artifacts/d1_history.parquet           live DT history
 data/artifacts/d1_quarantine.parquet        rejected telemetry records (never silently dropped)
 data/models/<component>/<version>.joblib    versioned DT model artifacts (Modules 6-10 + adapted)
 data/models/registry_index.json            versioned model registry (Concept C)
-data/models/ppo/policy.zip                  trained PPO policy
 data/artifacts/lifecycle_records.jsonl      every adaptation event ever recorded (Module 19)
 data/artifacts/maintenance_reports/*.md     human-readable report per adaptation event
 rag_data/chroma/                            RAG vector store (D2)
