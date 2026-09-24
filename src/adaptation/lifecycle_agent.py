@@ -49,7 +49,7 @@ report-generation time. A deterministic template (`_deterministic_report()`) is 
 first and used as the report whenever no LLM client is supplied or the LLM call fails
 (`complete_safe`'s graceful-degradation convention, same as every other optional-LLM path in this
 codebase) — a maintenance report must exist for every event regardless of LLM availability. When
-an `AnthropicClient` is supplied, it is asked to write better prose FROM the same deterministic
+a `GoogleClient` is supplied, it is asked to write better prose FROM the same deterministic
 facts (never invited to invent new ones), with D2's `RagKnowledgeBase` consulted for "relevant
 contextual knowledge" (prompt.md §38's own explicit requirement — "Use RAG retrieval where
 useful"), gracefully degrading to "not available" exactly like Module 17's own RAG consultation
@@ -69,7 +69,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RagUnavailableError
 
 if TYPE_CHECKING:
@@ -81,7 +81,7 @@ if TYPE_CHECKING:
     from src.adaptation.verification_agent import VerificationResult
     from src.common.config import Settings
     from src.drift.schema import DriftEvent
-    from src.llm.anthropic_client import AnthropicClient
+    from src.llm.google_client import GoogleClient
     from src.rag.rag_kb import RagKnowledgeBase
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,7 @@ class LifecycleAgent:
         self,
         records_path: Path,
         reports_dir: Path,
-        llm_client: "AnthropicClient | None" = None,
+        llm_client: "GoogleClient | None" = None,
     ) -> None:
         self._records_path = records_path
         self._reports_dir = reports_dir
@@ -176,7 +176,7 @@ class LifecycleAgent:
         self._reports_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
-    def from_settings(cls, settings: "Settings", llm_client: "AnthropicClient | None" = None) -> "LifecycleAgent":
+    def from_settings(cls, settings: "Settings", llm_client: "GoogleClient | None" = None) -> "LifecycleAgent":
         cfg = settings.lifecycle
         return cls(
             records_path=settings.resolve_path(cfg.records_path),

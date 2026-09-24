@@ -15,8 +15,8 @@ does not decide *whether* to regenerate — PPO already decided that; it only ex
        window), fidelity metrics, drift context (caller-supplied), RAG context (Module 18 not
        built yet — explicitly reported as unavailable, never faked)
     4. generate candidate source via the LLM     -> `_generate_candidate()`, using the centralized
-       `AnthropicClient` built for this project ("Use the Anthropic client from [the LLM
-       infrastructure turn] where LLM-assisted pipeline generation/reasoning is needed")
+       `GoogleClient` built for this project ("Use the direct Google AI (Gemini) API" per
+       prompt.md §24 — the centralized client where LLM-assisted pipeline generation is needed)
     5. sandbox the candidate                     -> `SandboxExecutor.run_candidate()`
        (`src/sandbox/executor.py`) — syntax/import/conformance/train/evaluate, prompt.md §26's
        exact pipeline, ALL deterministic, non-LLM code judging LLM-generated code
@@ -74,7 +74,7 @@ from src.adaptation.data_selection import (
     with_dependency_ground_truth,
 )
 from src.fidelity.evaluator import FidelityEvaluator
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 from src.sandbox.executor import SandboxExecutor, SandboxResult
 
@@ -82,7 +82,7 @@ if TYPE_CHECKING:
     from src.common.config import Settings
     from src.dt_models.base import DTComponent
     from src.dt_models.d1_model_store import D1Store
-    from src.llm.anthropic_client import AnthropicClient
+    from src.llm.google_client import GoogleClient
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ class RegenerationAgent:
         settings: "Settings",
         d1_store: "D1Store",
         model_registry: ModelRegistry,
-        llm_client: "AnthropicClient",
+        llm_client: "GoogleClient",
         sandbox_executor: SandboxExecutor,
         fidelity_evaluator: FidelityEvaluator | None = None,
     ) -> None:
@@ -141,7 +141,7 @@ class RegenerationAgent:
 
     @classmethod
     def from_settings(
-        cls, settings: "Settings", d1_store: "D1Store", model_registry: ModelRegistry, llm_client: "AnthropicClient"
+        cls, settings: "Settings", d1_store: "D1Store", model_registry: ModelRegistry, llm_client: "GoogleClient"
     ) -> "RegenerationAgent":
         return cls(
             settings,

@@ -28,15 +28,15 @@ Build a **production-quality, modular AI-Driven Self-Adaptive Network Digital Tw
 4. Maintaining current and historical Digital Twin state.
 5. Running dependency-aware DT prediction models.
 6. Comparing DT predictions against ground-truth network behaviour.
-7. Computing deterministic per-component fidelity.
-8. Receiving drift events from an external drift detector.
-9. Using a trained PPO agent to select:
+7. Computing deterministic per-component fidelity AND a unified, system-wide fidelity score.
+8. Receiving adaptation triggers from two sources: drift events from an external drift detector, AND an internal fidelity-based trigger fired when the unified fidelity score degrades past a configured threshold.
+9. Using a knowledge-based LLM Decision & Root-Cause Analysis Agent to determine, for each adaptation trigger, WHY the degradation/drift occurred and WHAT adaptation strategy should be selected:
 
    * Recalibration
    * Regeneration
    * Expand Scope
 10. Autonomously executing the selected adaptation.
-11. Using Anthropic Claude where LLM reasoning/code generation is required.
+11. Using Google AI (Gemini) where LLM reasoning/code generation is required.
 12. Running all generated candidates in a sandbox before they can affect production.
 13. Verifying candidates against controlled evaluation data.
 14. Automatically accepting or rejecting adaptations.
@@ -382,65 +382,56 @@ Never silently manufacture a fidelity score.
 
 ---
 
-# 0.11 — PPO MUST BE A GENUINE TRAINED POLICY
+# 0.11 — THE DECISION & ROOT-CAUSE ANALYSIS AGENT MUST BE A GENUINE KNOWLEDGE-BASED LLM AGENT
 
-PPO must not be implemented as a disguised rule-based system.
+The Decision & Root-Cause Analysis Agent (Module 13, formerly a PPO RL agent — now a knowledge-based LLM agent) must not be implemented as a disguised, hardcoded rule-based system (e.g. a fixed if/else on severity).
 
-The Gymnasium environment must have a meaningful adaptation-learning formulation.
+The agent must genuinely call the LLM (Google AI / Gemini, via the centralized client — see §42) for every adaptation trigger; it must not fall back to a hardcoded heuristic as its normal operating path.
 
-The environment must explicitly define:
+The agent's decision-making context must be built from a well-defined, explicit structure. This context must explicitly include:
 
-* observation space
-* action space
-* transition dynamics
-* adaptation outcome
-* reward calculation
-* episode termination
-* reset behaviour.
+* the affected component
+* the current per-component fidelity scores AND the unified fidelity score (§16a)
+* the trigger type (external drift vs. fidelity-based) and its severity
+* the previous adaptation action taken for this component/incident and its outcome (if any)
+* relevant network/telemetry state
+* relevant knowledge retrieved read-only from the RAG knowledge base (Module 18) — this is what makes the agent "knowledge-based," not merely "LLM-based."
 
-The PPO training environment must expose meaningful variation in:
+The agent must produce, for every invocation, a structured response containing BOTH:
 
-* affected component
-* fidelity degradation
-* drift severity
-* previous action
-* previous reward
-* network conditions
-* adaptation outcome.
+1. a root-cause analysis (a human-readable explanation of WHY the drift/fidelity degradation likely occurred, grounded in the supplied context and retrieved knowledge), AND
+2. exactly one selected adaptation strategy, from the fixed enum defined in §19.
 
-The trained PPO policy must actually be saved and subsequently loaded for runtime inference.
+The LLM's structured output must be produced via the provider's native structured-output/schema mechanism (see §42) and independently re-validated against the caller's own schema — never parsed from free-form text via regex.
 
-Runtime action selection must come from the trained PPO policy.
+Runtime action selection must come from a genuine LLM call for every trigger; the agent must not cache/reuse a previous decision for a new trigger.
 
-A deterministic fallback is allowed ONLY when the PPO infrastructure itself fails.
-
-The fallback must be logged.
-
-The fallback must never silently replace PPO during normal operation.
+A deterministic fallback (a configured default strategy, always logged as a WARNING) is allowed ONLY when the decision-agent infrastructure itself fails (LLM transport failure, or the structured output fails schema validation after exhausting retries) — never as a silent, routine substitute for a genuine LLM call.
 
 ---
 
-# 0.12 — EXACT PPO RESPONSIBILITY
+# 0.12 — EXACT DECISION & ROOT-CAUSE ANALYSIS AGENT RESPONSIBILITY
 
-PPO decides:
+The Decision & Root-Cause Analysis Agent decides, for every adaptation trigger:
 
-WHAT adaptation strategy should be selected.
+1. WHY the drift/fidelity degradation likely occurred (root-cause analysis), AND
+2. WHAT adaptation strategy should be selected.
 
-PPO does NOT generate code.
+The Decision & Root-Cause Analysis Agent does NOT generate code.
 
-PPO does NOT directly modify model parameters.
+The Decision & Root-Cause Analysis Agent does NOT directly modify model parameters.
 
-PPO does NOT determine fidelity formulas.
+The Decision & Root-Cause Analysis Agent does NOT determine fidelity formulas (deterministic, Module 12 owns these exclusively — see §16/§16a).
 
-PPO does NOT perform LLM reasoning.
+The Decision & Root-Cause Analysis Agent does NOT override the deterministic acceptance gate (Module 17 — see §32); its root-cause analysis is explanatory context only.
 
-PPO selects exactly one of:
+The Decision & Root-Cause Analysis Agent selects exactly one of:
 
-0 = Recalibrate
-1 = Regenerate
-2 = Expand Scope.
+"recalibrate" = Recalibrate
+"regenerate" = Regenerate
+"expand_scope" = Expand Scope.
 
-The selected action is then passed to the corresponding adaptation agent.
+The selected strategy, together with the root-cause analysis, is then passed to the corresponding adaptation agent as its triggering context.
 
 ---
 
@@ -448,7 +439,7 @@ The selected action is then passed to the corresponding adaptation agent.
 
 There must be exactly SIX agents:
 
-1. PPO RL Decision Agent
+1. Knowledge-Based Decision & Root-Cause Analysis Agent (LLM)
 2. Recalibration Agent
 3. Regeneration Agent
 4. Expand-Scope Agent
@@ -463,7 +454,7 @@ Telemetry ingestion, synchronization, DT models, orchestrators, registries, sand
 
 # 0.14 — LLM CODE GENERATION MUST BE REAL
 
-Regeneration and Expand Scope must genuinely use the Anthropic API when enabled.
+Regeneration and Expand Scope must genuinely use the Google AI (Gemini) API when enabled.
 
 Do not create a hardcoded implementation template and call it "LLM generation".
 
@@ -578,11 +569,11 @@ telemetry
 
 ---
 
-# 0.19 — DRIFT DETECTION REMAINS EXTERNAL
+# 0.19 — DRIFT DETECTION REMAINS EXTERNAL; THE FIDELITY-BASED TRIGGER IS INTERNAL AND DETERMINISTIC
 
-Do not implement the actual drift-detection algorithm.
+Do not implement the actual drift-detection algorithm — that remains external/partner-owned, exactly as before.
 
-Implement:
+Implement, for the external drift path:
 
 * external event contract
 * schema validation
@@ -593,6 +584,12 @@ Implement:
 A mock drift source exists only for testing.
 
 Never claim that the mock drift source represents a real drift detector.
+
+In addition to the external drift path, the system must implement a SECOND, internal adaptation-trigger source: a fidelity-based trigger. Unlike drift detection, this one IS implemented in full, because it is entirely derived from the system's own deterministic fidelity formula (§16/§16a) — there is no external algorithm to defer to.
+
+The fidelity-based trigger fires deterministically (never via the LLM) when the unified fidelity score (§16a) crosses below `config.fidelity.trigger_threshold` for `config.fidelity.trigger_min_consecutive_evaluations` consecutive evaluation cycles.
+
+Both trigger sources — external drift events and the internal fidelity-based trigger — must be normalized into the SAME canonical adaptation-trigger shape (component, severity, timestamp, trigger_type, metadata) before being handed to the Decision & Root-Cause Analysis Agent (Module 13), so it can consume either uniformly.
 
 ---
 
@@ -689,8 +686,8 @@ NS-3 / 5G-LENA
 → dynamic D1 state
 → dependency-aware DT prediction
 → fidelity evaluation
-→ external drift event
-→ PPO
+→ adaptation trigger (external drift event OR internal fidelity-based trigger)
+→ Knowledge-Based Decision & Root-Cause Analysis Agent (LLM + RAG knowledge base)
 → selected adaptation agent
 → candidate
 → sandbox
@@ -717,7 +714,7 @@ Before declaring completion, actually execute:
 2. unit tests
 3. integration tests
 4. end-to-end mock/demo pipeline
-5. PPO training/inference validation
+5. decision-agent (LLM + RAG) invocation/inference validation
 6. candidate sandbox validation
 7. adaptation validation
 8. rejection validation
@@ -734,8 +731,8 @@ NS-3 build
 → synchronization
 → DT prediction
 → fidelity
-→ drift
-→ PPO
+→ adaptation trigger (drift or fidelity-based)
+→ decision & root-cause analysis agent
 → adaptation
 → candidate validation
 → verification
@@ -753,7 +750,7 @@ Never claim:
 
 * NS-3 worked unless NS-3 actually ran
 * telemetry was emitted unless telemetry was observed
-* PPO was trained unless training actually ran
+* the decision agent produced a genuine LLM decision unless the API call actually occurred
 * an LLM generated a candidate unless the API call actually occurred
 * candidate verification passed unless verification actually ran
 * an adaptation succeeded unless promotion actually occurred
@@ -789,11 +786,11 @@ Before declaring completion, perform a final architecture review specifically lo
 * configuration inconsistencies
 * versioning inconsistencies
 * incorrect rollback semantics
-* incorrect PPO action mapping
-* hidden heuristic replacement of PPO
+* incorrect decision-strategy enum handling
+* hidden heuristic replacement of the Decision & Root-Cause Analysis Agent
 * fake LLM generation
 * fake NS-3 behaviour
-* fake drift detection
+* fake drift detection or fake fidelity-based triggering
 * mock/real source confusion
 * broken disabled-component behaviour
 * missing lifecycle records
@@ -875,9 +872,9 @@ The 19-module architecture:
 8. Packet-Loss Model
 9. PRB-Utilization Model
 10. Jitter Model
-11. Drift Detection Interface
-12. Fidelity Evaluation
-13. RL Decision Agent
+11. Drift Detection Interface (external drift trigger)
+12. Fidelity Evaluation (per-component + unified fidelity score; also the source of the internal fidelity-based trigger)
+13. Knowledge-Based Decision & Root-Cause Analysis Agent (LLM)
 14. Recalibration Agent
 15. Regeneration Agent
 16. Expand-Scope Agent
@@ -885,7 +882,7 @@ The 19-module architecture:
 18. D2 — RAG Knowledge Base
 19. Lifecycle Management Agent
 
-The DFD explicitly defines telemetry → synchronization → DT prediction → fidelity → drift → PPO adaptation → verification → lifecycle recording. Preserve this architecture.
+The DFD explicitly defines telemetry → synchronization → DT prediction → fidelity → adaptation trigger (external drift OR internal fidelity-based) → knowledge-based LLM decision & root-cause analysis → adaptation → verification → lifecycle recording. Preserve this architecture.
 
 ### C. Decisions explicitly defined in this prompt
 
@@ -1016,9 +1013,9 @@ This distinction is critical.
 
 There are exactly **six agents**.
 
-## Agent 1 — PPO RL Decision Agent
+## Agent 1 — Knowledge-Based Decision & Root-Cause Analysis Agent
 
-Chooses WHAT adaptation strategy to use.
+Uses an LLM, grounded in retrieved knowledge from the RAG knowledge base (Module 18) and the system's real fidelity/trigger context, to determine WHY an adaptation trigger occurred (root-cause analysis) and chooses WHAT adaptation strategy to use.
 
 ## Agent 2 — Recalibration Agent
 
@@ -1056,7 +1053,7 @@ Do NOT turn the following into additional agents:
 * RAG database
 * model registry
 * sandbox
-* Anthropic API client
+* Google AI (Gemini) API client
 * storage
 * configuration system
 
@@ -1436,6 +1433,8 @@ The mock source exists solely for development/integration testing.
 
 The production architecture must allow the external detector to be connected later without redesigning the adaptation system.
 
+This module is one of TWO adaptation-trigger sources. The other — the internal, fully-implemented fidelity-based trigger — is specified at the end of Module 12 (§16a) below. Both sources must be normalized into the same canonical adaptation-trigger shape before being handed to Module 13.
+
 \---
 
 # 16\. MODULE 12 — FIDELITY ENGINE
@@ -1500,6 +1499,34 @@ Configuration must contain the fidelity parameters.
 
 Create unit tests against known numerical examples.
 
+## 16a. UNIFIED FIDELITY SCORE AND THE INTERNAL FIDELITY-BASED TRIGGER
+
+`FidelityScore_c` above is per-component. In addition, this module must compute a single, system-wide **Unified Fidelity Score** that aggregates every component's current `FidelityScore_c` into one number:
+
+```text
+UnifiedFidelityScore =
+    Σ_c ( w_c * FidelityScore_c )
+    ---------------------------------
+    Σ_c w_c
+```
+
+computed only over components whose `FidelityScore_c` is currently well-defined (i.e. NOT `insufficient_history`).
+
+Rules:
+
+* `w_c` are per-component weights, from `config.fidelity.unified_weights`; the default is equal weighting across all currently-enabled components. Never hardcode unequal weights in code — they must be config-driven, exactly like every other fidelity parameter.
+* If fewer than `config.fidelity.unified_min_components` components currently have a well-defined `FidelityScore_c`, `UnifiedFidelityScore` is `None` with `status="insufficient_history"` — the same "never silently manufacture a score" discipline that governs the per-component formula (§0.10) applies here identically.
+* The Unified Fidelity Score is a system-health/trigger signal. It does NOT replace the per-component `FidelityScore_new > FidelityScore_old + delta` acceptance-gate criterion in §32, which remains strictly per-component.
+
+**The internal fidelity-based adaptation trigger** is derived deterministically from this score — never via the LLM, never via PPO/RL (there is no RL agent anymore — see §18):
+
+* The trigger fires when `UnifiedFidelityScore < config.fidelity.trigger_threshold` for `config.fidelity.trigger_min_consecutive_evaluations` consecutive evaluation cycles in a row (a debounce/hysteresis requirement, so that ordinary sampling noise across a single cycle can never fire a spurious adaptation).
+* When it fires, the trigger's `component` field is the single worst-scoring component at that moment (`argmin` over the currently-defined per-component `FidelityScore_c` values) — the same field an external drift event carries — so Module 13 always receives a specific target component regardless of which trigger source fired.
+* The trigger's `severity` field is derived deterministically from how far below threshold the score has fallen, e.g. `clip((trigger_threshold - UnifiedFidelityScore) / trigger_threshold, 0.0, 1.0)` — never a placeholder constant.
+* This trigger must be normalized into the exact same canonical adaptation-trigger shape (`component`, `severity`, `timestamp`, `trigger_type="fidelity_degradation"`, `metadata`) that the external drift path (§15) produces (there, `trigger_type="external_drift"`), so that Module 13 can consume either source uniformly without caring which one fired.
+
+Create unit tests against known numerical examples for the unified score exactly as required for the per-component formula, including the debounce/hysteresis behavior (a single below-threshold cycle must NOT fire the trigger; `trigger_min_consecutive_evaluations` consecutive cycles must).
+
 \---
 
 # 17\. FIDELITY WINDOW POLICY
@@ -1535,136 +1562,121 @@ Training data must not contain future evaluation information.
 
 \---
 
-# 18\. MODULE 13 — PPO RL DECISION AGENT
+# 18\. MODULE 13 — KNOWLEDGE-BASED DECISION & ROOT-CAUSE ANALYSIS AGENT
 
-PPO is responsible for choosing **WHAT adaptation strategy to apply**.
+This agent is responsible for two things on every adaptation trigger: (1) a root-cause analysis of WHY the trigger fired, and (2) choosing **WHAT adaptation strategy to apply**. It replaces the previous PPO/RL decision agent entirely — there is no RL policy, no Gymnasium environment, and no trained policy artifact anywhere in this system.
 
-The LLM must NOT replace PPO as the adaptation decision-maker.
+The decision is made by a genuine call to the centralized Google AI (Gemini) LLM client (§42), grounded in retrieval from the read-only RAG knowledge base (Module 18/D2) — this grounding in retrieved knowledge is what makes the agent "knowledge-based," not just "LLM-based." A hardcoded if/else on severity, or any other disguised heuristic used as the normal operating path, is exactly what this module must NOT be (mirroring the same "must not be a disguised rule-based system" discipline that previously governed PPO).
 
 Use:
 
 ```text
-Stable-Baselines3 PPO
+The centralized Google AI (Gemini) client (src/llm/google_client.py, §42)
 +
-Gymnasium
+The read-only RAG knowledge base (src/rag/rag_kb.py, Module 18)
 ```
 
 Create:
 
 ```text
-src/adaptation/rl\_env.py
-src/adaptation/rl\_agent.py
+src/adaptation/decision_context.py
+src/adaptation/decision_agent.py
 ```
+
+`decision_context.py` builds the structured decision context (analogous in spirit to what used to be "the observation" — the what-happens-to-the-world side, kept structurally separate from the decision itself). `decision_agent.py` performs the actual LLM call and root-cause analysis / strategy selection (analogous to what used to be "the policy" — the decision side). Keeping these two concerns in separate files/functions, exactly as the old environment/policy split did, keeps "what informs the decision" structurally incapable of being confused with "what the decision is."
 
 \---
 
-## PPO observation
+## Decision context
 
-The observation must represent the adaptation context.
+The context handed to the LLM must represent the adaptation situation. Include:
 
-Include:
+* per-component fidelity vector AND the unified fidelity score (§16a)
+* affected-component indicator
+* trigger type (external drift vs. fidelity-based) and its severity
+* previous action taken for this component/incident and its outcome, where available
+* relevant knowledge retrieved read-only from the RAG knowledge base (Module 18) — e.g. relevant O-RAN specs, prior similar adaptation history, relevant policy/configuration context
 
-* per-component fidelity vector
-* affected-component one-hot flag
-* drift severity
-* previous action one-hot
-* previous reward
+Also include relevant network state where necessary and where the size of the context is kept well-defined and bounded (do not dump unbounded raw telemetry into the prompt).
 
-Also include relevant network state where necessary and where the dimensionality is kept well-defined.
-
-The core required state representation is:
+The core required context is at minimum:
 
 ```text
-5 fidelity values
+5 (or N) per-component fidelity values
++
+the unified fidelity score
 +
 affected component indicator
 +
-drift severity
+trigger type and severity
 +
-previous action
+previous action and its outcome
 +
-previous reward
+retrieved knowledge-base context
 ```
-
-Normalize observations appropriately.
 
 \---
 
-# 19\. PPO ACTION SPACE
+# 19\. DECISION STRATEGY SPACE
 
-Use:
-
-```text
-Discrete(3)
-```
-
-Mapping:
+Use a fixed, closed enum of exactly three strategies, enforced via the LLM's structured-output schema (§42):
 
 ```text
-0 → Recalibrate
-1 → Regenerate
-2 → Expand Scope
+"recalibrate" → Recalibrate
+"regenerate" → Regenerate
+"expand_scope" → Expand Scope
 ```
 
-Do not add arbitrary fourth/fifth actions.
+Do not add arbitrary fourth/fifth strategies. A structured-output response naming anything outside this enum is a schema-validation failure, handled exactly like any other decision-agent infrastructure failure (§21).
 
 \---
 
-# 20\. PPO REWARD
+# 20\. ROOT-CAUSE ANALYSIS OUTPUT
 
-The primary reward is:
+Every decision-agent invocation must produce, alongside the selected strategy, a structured root-cause analysis: a human-readable explanation of why the drift/fidelity degradation likely occurred, grounded in the supplied context and the retrieved knowledge-base content — not a generic templated sentence.
 
-```text
-new\_fidelity - old\_fidelity
-```
-
-Optionally incorporate a configurable adaptation-cost penalty:
+The structured output must, at minimum, contain:
 
 ```text
-reward =
-    fidelity\_improvement
-    -
-    adaptation\_cost\_penalty
+strategy            (the §19 enum — required)
+root_cause_analysis (text explanation — required)
+confidence          (0.0-1.0 — required)
+rationale           (why this strategy, given the root cause — required)
+knowledge_refs      (identifiers/citations of any RAG knowledge actually used — may be empty)
 ```
 
-The implementation must make this configurable.
+This structured output — never the LLM's free-form prose parsed via regex — is what downstream agents (Modules 14/15/16) receive as their triggering context, and what Module 19 (Lifecycle Management) records for the auditable history and the human-readable maintenance report.
+
+The root-cause analysis is explanatory. It must never be treated as, or allowed to influence, the deterministic acceptance-gate decision in §32 — that remains Module 17's exclusive, independent, deterministic responsibility.
 
 \---
 
-# 21\. PPO TRAINING VS RUNTIME
+# 21\. DECISION AGENT INVOCATION VS RUNTIME
 
-Train PPO through the actual Gymnasium environment.
-
-Do not create a fake rule-based function such as:
+There is no training phase for this module — it is a direct LLM call, not a trained policy. Do not create a fake rule-based function such as:
 
 ```python
 if severity > X:
     regenerate()
 ```
 
-and call it PPO.
-
-The RL agent must genuinely use the trained policy.
+and call it "the decision agent." The agent must genuinely call the LLM for every trigger; a hardcoded substitute is exactly the disguised heuristic §0.11 forbids.
 
 At runtime:
 
 ```text
-drift
+adaptation trigger (external drift OR fidelity-based)
  ↓
-observation
+decision context (fidelity + trigger + history + RAG retrieval)
  ↓
-trained PPO
+Google AI (Gemini) LLM call, structured output
  ↓
-action
+{root_cause_analysis, strategy}
 ```
 
-Do not retrain PPO on every drift event.
+Do not let the agent silently reuse a cached decision for a new trigger — every trigger gets its own genuine call.
 
-If online PPO updating is ever implemented, it must be explicitly isolated/configurable and must not destabilize the production policy.
-
-The default runtime path should use the trained policy for inference.
-
-Provide a deterministic fallback only for infrastructure failure, not as a replacement for PPO.
+Provide a deterministic fallback (a configured default strategy) only for decision-agent infrastructure failure (LLM transport failure, or structured-output schema validation exhausted its retries) — never as a routine replacement for a genuine LLM call.
 
 Log when such a fallback is ever used.
 
@@ -1675,16 +1687,16 @@ Log when such a fallback is ever used.
 The central distinction is:
 
 ```text
-PPO decides WHAT
+The Decision & Root-Cause Analysis Agent decides WHY and WHAT
 LLM-enabled adaptation agents determine HOW
 ```
 
 Therefore:
 
 ```text
-Drift
+Adaptation trigger (drift OR fidelity-based)
   ↓
-PPO
+Decision & Root-Cause Analysis Agent
   ↓
 Recalibrate / Regenerate / Expand
   ↓
@@ -1723,7 +1735,7 @@ The agent may use LLM reasoning to determine training context/window if benefici
 
 Do not perform blind periodic recalibration.
 
-Recalibration happens because PPO selected it.
+Recalibration happens because the Decision & Root-Cause Analysis Agent selected it.
 
 \---
 
@@ -1735,17 +1747,17 @@ Regeneration is used when:
 
 This is the primary LLM code-generation component.
 
-Use the **direct Anthropic API**.
+Use the **direct Google AI (Gemini) API**.
 
 Do NOT introduce LiteLLM or another LLM gateway unless there is a compelling technical necessity.
 
-Create a centralized Anthropic client/service so all LLM calls are managed consistently.
+Create a centralized Google AI client/service so all LLM calls are managed consistently.
 
 The model name must be configurable.
 
-Do not hardcode an obsolete/deprecated Claude model.
+Do not hardcode an obsolete/deprecated Gemini model.
 
-Use a currently supported Anthropic Claude model according to the current Anthropic API/documentation available at implementation time.
+Use a currently supported Gemini model according to the current Google AI API/documentation available at implementation time.
 
 Never hardcode API keys.
 
@@ -1764,7 +1776,7 @@ The LLM may receive:
 * feature statistics
 * fidelity metrics
 * error patterns
-* drift metadata
+* adaptation-trigger metadata (drift or fidelity-based) and the Decision & Root-Cause Analysis Agent's root-cause analysis
 * relevant RAG context
 * training/evaluation constraints
 
@@ -2054,7 +2066,7 @@ Corpus categories:
 3. Adaptation policies
 4. Historical adaptation records
 
-Agents can retrieve knowledge.
+Agents can retrieve knowledge. The Knowledge-Based Decision & Root-Cause Analysis Agent (Module 13) is a primary consumer of this knowledge base — its root-cause analysis and strategy selection must be genuinely grounded in retrieval from here, not merely LLM reasoning in isolation.
 
 Agents must **NOT use RAG as a write path into the DT**.
 
@@ -2096,11 +2108,12 @@ At minimum record:
 ```text
 event ID
 timestamp
-drift event
+adaptation trigger (drift event OR fidelity-based trigger, with its type)
 affected component/scope
-drift severity
-RL observation/context
-RL action
+trigger severity
+decision-agent context (fidelity + trigger + retrieved knowledge)
+decision-agent root-cause analysis
+selected strategy
 agent action
 production version before
 candidate version
@@ -2125,10 +2138,10 @@ Lifecycle Management should also generate a human-readable vendor maintenance re
 
 The report should explain:
 
-* what drifted
+* what triggered adaptation (external drift or internal fidelity degradation) and what drifted/degraded
 * affected scope
-* why adaptation was triggered
-* what PPO selected
+* the decision agent's root-cause analysis for why adaptation was triggered
+* what strategy the Decision & Root-Cause Analysis Agent selected
 * what the adaptation agent did
 * what changed
 * fidelity before
@@ -2172,13 +2185,13 @@ Synchronize D1
       ↓
 Run dependency-aware DT prediction
       ↓
-Evaluate fidelity
+Evaluate fidelity (per-component + unified)
       ↓
-Receive drift event
+Receive adaptation trigger (external drift event OR internal fidelity-based trigger)
       ↓
-Construct PPO observation
+Construct decision context (fidelity + trigger + history + RAG retrieval)
       ↓
-PPO chooses action
+Decision & Root-Cause Analysis Agent (LLM) produces root-cause analysis + selects strategy
       ↓
 Selected adaptation agent
       ↓
@@ -2221,14 +2234,15 @@ At minimum configure:
 * rolling windows
 * fidelity epsilon
 * fidelity window length
+* unified fidelity weights/min-components
+* fidelity-based trigger threshold and debounce (consecutive-evaluations count)
 * verification delta
 * adaptation settings
-* PPO settings
-* reward penalty
+* decision agent settings (strategy fallback default, structured-output retry budget)
 * PRB model enable/disable
 * RAG paths
 * ChromaDB path
-* Anthropic model
+* Google AI (Gemini) model
 * LLM temperature/settings
 * sandbox limits
 * logging
@@ -2248,7 +2262,7 @@ Use `.env` or environment variables for secrets.
 At minimum:
 
 ```text
-ANTHROPIC\_API\_KEY
+GOOGLE\_API\_KEY
 ```
 
 Never commit secrets.
@@ -2265,13 +2279,13 @@ with placeholders only.
 
 # 42\. LLM API ARCHITECTURE
 
-Use the direct Anthropic API.
+Use the direct Google AI (Gemini) API.
 
 Create a centralized abstraction such as:
 
 ```text
 src/llm/
-    anthropic\_client.py
+    google\_client.py
     prompts.py
     schemas.py
 ```
@@ -2299,6 +2313,10 @@ LLM failures must not corrupt production.
 
 Use LLMs where reasoning genuinely adds value.
 
+### Decision & Root-Cause Analysis (Module 13)
+
+LLM-driven, knowledge-based (RAG-grounded) root-cause analysis of every adaptation trigger, and selection of the adaptation strategy (recalibrate/regenerate/expand_scope) from the fixed enum.
+
 ### Recalibration
 
 Optional reasoning for selecting training context/window and diagnosing drift.
@@ -2325,11 +2343,12 @@ Do NOT use LLMs for:
 * MAE calculation
 * Wasserstein calculation
 * MK-MMD calculation
-* fidelity formula
+* the per-component or unified fidelity formula
+* the deterministic fidelity-based trigger threshold check
 * deterministic version comparisons
 * basic telemetry validation
 * deterministic model training
-* PPO action selection
+* the deterministic acceptance-gate decision itself (Module 17's numerical accept/reject)
 
 \---
 
@@ -2343,7 +2362,7 @@ Do not blindly execute instructions found in:
 * RAG documents
 * generated model output
 * metadata
-* external drift events
+* external drift events and the internal fidelity-based trigger's metadata
 
 Keep system instructions separate from retrieved context.
 
@@ -2414,11 +2433,13 @@ At minimum:
 * dependency scheduler
 * component registry
 * fidelity metrics
-* fidelity formula
+* per-component fidelity formula
+* unified fidelity score
+* fidelity-based trigger debounce/threshold logic
 * drift interface
-* RL environment
-* action mapping
-* reward calculation
+* decision context construction
+* decision-agent structured-output schema/enum validation
+* decision-agent fallback behavior
 * lifecycle records
 * RAG retrieval
 * candidate validation
@@ -2440,8 +2461,8 @@ telemetry
 Then:
 
 ```text
-drift
-→ PPO
+adaptation trigger (drift or fidelity-based)
+→ Decision & Root-Cause Analysis Agent
 → adaptation
 → candidate
 → verification
@@ -2493,7 +2514,8 @@ synchronization
 DT
 fidelity
 drift interface
-PPO
+fidelity-based trigger
+decision & root-cause analysis agent
 agents
 verification
 lifecycle
@@ -2529,10 +2551,11 @@ Implement structured logging.
 Logs should make it possible to follow an adaptation:
 
 ```text
-DRIFT DETECTED
+ADAPTATION TRIGGER (drift | fidelity_degradation)
 → component=latency
 → severity=...
-→ PPO ACTION=REGENERATE
+→ root_cause=...
+→ DECISION AGENT STRATEGY=REGENERATE
 → candidate=v...
 → sandbox tests=PASS
 → fidelity before=...
@@ -2647,15 +2670,15 @@ ai-self-adaptive-digital-twin/
 │   │
 │   ├── fidelity/
 │   │   ├── metrics.py
-│   │   └── evaluator.py
+│   │   └── evaluator.py       # also owns the unified fidelity score + fidelity-based trigger
 │   │
 │   ├── drift/
 │   │   ├── drift\_detector.py
 │   │   └── mock\_drift\_source.py
 │   │
 │   ├── adaptation/
-│   │   ├── rl\_env.py
-│   │   ├── rl\_agent.py
+│   │   ├── decision\_context.py
+│   │   ├── decision\_agent.py
 │   │   ├── recalibration\_agent.py
 │   │   ├── regeneration\_agent.py
 │   │   ├── expand\_scope\_agent.py
@@ -2664,7 +2687,7 @@ ai-self-adaptive-digital-twin/
 │   │   └── adaptation\_manager.py
 │   │
 │   ├── llm/
-│   │   ├── anthropic\_client.py
+│   │   ├── google\_client.py
 │   │   ├── prompts.py
 │   │   └── schemas.py
 │   │
@@ -2704,7 +2727,6 @@ ai-self-adaptive-digital-twin/
 │
 └── scripts/
     ├── setup.py
-    ├── train\_ppo.py
     ├── ingest\_rag.py
     └── run\_demo.py
 ```
@@ -2726,8 +2748,8 @@ It must contain:
 * testing commands
 * important constraints
 * adaptation safety rules
-* fidelity formula
-* PPO action mapping
+* fidelity formula (per-component + unified score, and the fidelity-based trigger)
+* decision-strategy enum (recalibrate/regenerate/expand_scope)
 * LLM rules
 * repository conventions
 
@@ -2803,10 +2825,7 @@ Important likely dependencies include:
 * scikit-learn
 * xgboost
 * scipy
-* torch
-* gymnasium
-* stable-baselines3
-* anthropic
+* google-genai
 * chromadb
 * pyzmq
 * pyyaml
@@ -2821,21 +2840,13 @@ Do not blindly install unnecessary packages.
 
 # 58\. GPU / CUDA
 
-Check whether CUDA is available.
+The previous PPO-based decision agent was the only component that could have benefited from GPU/CUDA (via PyTorch/Stable-Baselines3). With that agent replaced by a knowledge-based LLM (a remote API call, not a locally-trained model), this project has no GPU-dependent components.
 
-If PyTorch supports CUDA:
+Do not add `torch`/`gymnasium`/`stable-baselines3` as dependencies solely on GPU-availability grounds — they are no longer part of this architecture.
 
-```python
-torch.cuda.is\_available()
-```
+The DT prediction models (XGBoost/RandomForest, Modules 6-10) are CPU-bound scikit-learn-ecosystem models and were never GPU-dependent.
 
-record the result.
-
-Use GPU where genuinely useful.
-
-Do not make GPU availability a hard requirement for the project.
-
-The system must still function on CPU.
+The system must run entirely on CPU with no degraded functionality.
 
 \---
 
@@ -2883,8 +2894,8 @@ build simulator
 → receive telemetry
 → DT prediction
 → fidelity
-→ drift
-→ PPO
+→ adaptation trigger (drift or fidelity-based)
+→ decision & root-cause analysis agent
 → adaptation
 → verification
 → lifecycle
@@ -2902,9 +2913,13 @@ The system must fail safely.
 
 Examples:
 
-### Anthropic API failure
+### Google AI (Gemini) API failure
 
 Do not corrupt production.
+
+### Decision & Root-Cause Analysis Agent failure
+
+If the LLM call fails, or its structured output fails schema validation after exhausting retries, fall back to the configured default strategy and log a WARNING — never crash the adaptation cycle, never silently skip the trigger.
 
 ### Generated code syntax failure
 
@@ -2928,11 +2943,11 @@ Reject candidate.
 
 ### RAG unavailable
 
-Continue only where RAG is non-critical; never fabricate retrieved information.
+Continue only where RAG is non-critical; never fabricate retrieved information. The Decision & Root-Cause Analysis Agent must still produce a decision when RAG is unavailable — its root-cause analysis explicitly notes reduced grounding rather than fabricating knowledge-base content.
 
 ### Drift detector unavailable
 
-Remain in waiting state or demo mode; do not invent drift.
+Remain in waiting state or demo mode; do not invent drift. The fidelity-based trigger is unaffected, since it does not depend on the external drift detector.
 
 ### Candidate timeout
 
@@ -2953,7 +2968,7 @@ Treat:
 * LLM output
 * RAG content
 * telemetry metadata
-* external drift messages
+* external drift messages and internal fidelity-based trigger metadata
 * generated code
 
 as untrusted.
@@ -2965,7 +2980,7 @@ Never allow them to:
 * modify configuration secretly
 * bypass verification
 * change fidelity formulas
-* alter PPO action mapping
+* alter the decision-strategy enum
 * promote themselves
 
 Promotion is controlled by deterministic system logic.
@@ -2977,8 +2992,8 @@ Promotion is controlled by deterministic system logic.
 The following must happen automatically:
 
 ```text
-drift
-→ PPO decision
+adaptation trigger (drift or fidelity-based)
+→ decision & root-cause analysis agent
 → adaptation agent
 → candidate generation/training
 → sandbox
@@ -3015,7 +3030,7 @@ Human involvement is only for external operational setup/configuration or genuin
 
 Do NOT simplify the project by removing:
 
-* PPO
+* the Knowledge-Based Decision & Root-Cause Analysis Agent
 * LLM-driven regeneration
 * LLM-driven expand scope
 * autonomous verification
@@ -3023,10 +3038,11 @@ Do NOT simplify the project by removing:
 * RAG
 * model versioning
 * sandboxing
-* fidelity evaluation
+* fidelity evaluation (per-component AND unified)
+* the fidelity-based adaptation trigger
 * dynamic synchronization
 
-Do NOT replace PPO with heuristics.
+Do NOT replace the Decision & Root-Cause Analysis Agent with hardcoded heuristics.
 
 Do NOT replace LLM generation with hardcoded templates.
 
@@ -3084,18 +3100,25 @@ The final implementation must preserve this conceptual flow:
                     ┌─────────────────────┐
                     │ Fidelity Engine     │
                     │ RMSE / MAE / W1     │
-                    │ MK-MMD / Score      │
+                    │ MK-MMD / per-comp   │
+                    │ + Unified Score     │
                     └──────────┬──────────┘
                                │
-                               │
-                 ┌─────────────▼─────────────┐
-                 │ External Drift Detector  │
-                 └─────────────┬─────────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ PPO Decision Agent   │
-                    └──────────┬──────────┘
+                ┌──────────────┴───────────────┐
+                │                               │
+                ▼                               ▼
+    ┌───────────────────────┐    ┌────────────────────────────┐
+    │ External Drift         │    │ Internal Fidelity-Based    │
+    │ Detector (Module 11)   │    │ Trigger (Module 12)        │
+    └────────────┬────────────┘    └──────────────┬─────────────┘
+                 │                                 │
+                 └────────────────┬────────────────┘
+                                   ▼
+                    ┌───────────────────────────────┐
+                    │ Knowledge-Based Decision \&    │
+                    │ Root-Cause Analysis Agent      │
+                    │ (LLM + RAG Knowledge Base)     │
+                    └───────────────┬─────────────────┘
                                │
              ┌─────────────────┼──────────────────┐
              │                 │                  │
@@ -3179,26 +3202,28 @@ Before declaring completion, verify every item.
 * \[ ] squared metrics
 * \[ ] rolling min-max normalization
 * \[ ] epsilon
-* \[ ] composite fidelity
+* \[ ] composite per-component fidelity
+* \[ ] unified fidelity score
 * \[ ] deterministic tests
 
-## Drift
+## Drift \& Fidelity-Based Trigger
 
-* \[ ] external interface
+* \[ ] external drift interface
 * \[ ] schema validation
 * \[ ] mock drift source
 * \[ ] no fake detector implementation
+* \[ ] internal fidelity-based trigger (deterministic, threshold + debounce)
+* \[ ] both trigger sources normalized to one canonical shape
 
-## PPO
+## Decision \& Root-Cause Analysis Agent
 
-* \[ ] Gymnasium environment
-* \[ ] PPO
-* \[ ] Stable-Baselines3
-* \[ ] observation
-* \[ ] action mapping
-* \[ ] reward
-* \[ ] training
-* \[ ] runtime inference
+* \[ ] knowledge-based (RAG-grounded) LLM decision
+* \[ ] no Gymnasium/PPO/Stable-Baselines3 anywhere in the codebase
+* \[ ] decision context construction
+* \[ ] structured output: root-cause analysis + strategy enum
+* \[ ] strategy enum restricted to recalibrate/regenerate/expand_scope
+* \[ ] deterministic fallback only on genuine LLM/infrastructure failure
+* \[ ] fallback logged every time
 
 ## Adaptation
 
@@ -3211,12 +3236,13 @@ Before declaring completion, verify every item.
 
 ## LLM
 
-* \[ ] direct Anthropic API
+* \[ ] direct Google AI (Gemini) API
 * \[ ] centralized client
-* \[ ] configurable Claude model
+* \[ ] configurable Gemini model
 * \[ ] API failure handling
 * \[ ] structured outputs
 * \[ ] secret management
+* \[ ] decision \& root-cause analysis
 * \[ ] regeneration
 * \[ ] expand scope
 * \[ ] verification reasoning
@@ -3284,19 +3310,19 @@ Fidelity engine.
 
 ### Phase 5
 
-Drift interface.
+Drift interface (external) + the internal fidelity-based trigger.
 
 ### Phase 6
 
-PPO environment + PPO training/inference.
+Google AI (Gemini) integration — the centralized client. This must come before the Decision \& Root-Cause Analysis Agent, since (unlike the old PPO agent) it is now the client's first real consumer.
 
 ### Phase 7
 
-Adaptation agents + model registry + sandbox.
+Decision \& Root-Cause Analysis Agent (decision context + LLM call + structured output). RAG grounding (Module 18) is not built yet at this phase — follow the same graceful-degradation convention used elsewhere in this spec (e.g. Modules 15/16, §25): explicitly report RAG context as unavailable rather than fabricating it, and wire in genuine retrieval once Phase 9 builds Module 18.
 
 ### Phase 8
 
-Anthropic integration.
+Adaptation agents + model registry + sandbox.
 
 ### Phase 9
 
@@ -3398,21 +3424,21 @@ Remember these above everything else:
 1. **This is a NEW repository. Create everything from scratch.**
 2. **The Digital Twin is continuously dynamic.**
 3. **Model versions are independently versioned from dynamic DT state.**
-4. **PPO decides WHAT adaptation strategy to use.**
+4. **The Knowledge-Based Decision & Root-Cause Analysis Agent decides WHY (root cause) and WHAT adaptation strategy to use.**
 5. **Adaptation agents decide HOW to execute that strategy.**
 6. **There are exactly six agents.**
-7. **Drift detection itself is external; implement only its interface/adapter.**
-8. **Fidelity calculations are deterministic.**
+7. **External drift detection itself is external (implement only its interface/adapter); the fidelity-based trigger is internal and fully implemented, since it is fully deterministic.**
+8. **Fidelity calculations — per-component AND unified — are deterministic.**
 9. **LLMs cannot override deterministic acceptance criteria.**
 10. **LLM-generated code is never production code until sandboxed and verified.**
 11. **Rejected candidates cannot affect production.**
 12. **Accepted candidates are versioned and reversible.**
 13. **Recalibration, regeneration, expand-scope, verification, and lifecycle management are autonomous.**
-14. **RAG is read-only contextual knowledge.**
-15. **Use the direct Anthropic API.**
+14. **RAG is read-only contextual knowledge — and the Decision & Root-Cause Analysis Agent is its primary consumer.**
+15. **Use the direct Google AI (Gemini) API.**
 16. **Never hardcode API keys.**
-17. **Never hardcode deprecated Claude model identifiers.**
-18. **Do not replace PPO with heuristics.**
+17. **Never hardcode deprecated Gemini model identifiers.**
+18. **Do not replace the Decision & Root-Cause Analysis Agent with hardcoded heuristics.**
 19. **Do not turn the DT into a static dataset.**
 20. **Do not fake NS-3 execution, telemetry, API responses, tests, or verification.**
 21. **Actually run the code and tests.**

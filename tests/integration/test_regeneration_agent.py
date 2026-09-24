@@ -1,6 +1,6 @@
 """Integration tests: Module 15 (Regeneration Agent) against the real Module 2/3/4 pipeline and
 the real sandbox subprocess (no mocking except the LLM transport — see the module docstring in
-`tests/unit/test_regeneration_agent.py` for why: no real ANTHROPIC_API_KEY is configured in this
+`tests/unit/test_regeneration_agent.py` for why: no real GOOGLE_API_KEY is configured in this
 environment).
 
 The key deliverable this file proves CONCRETELY (prompt.md §0.6/§0.8, mirroring

@@ -38,7 +38,7 @@ REQUIRED_IMPORTS = [
     "torch",
     "gymnasium",
     "stable_baselines3",
-    "anthropic",
+    "google.genai",
     "chromadb",
     "zmq",
     "yaml",
@@ -65,7 +65,7 @@ def ensure_env_file() -> None:
         print("[setup] WARNING: .env.example missing, cannot scaffold .env", file=sys.stderr)
         return
     shutil.copy(example_path, env_path)
-    print("[setup] created .env from .env.example — fill in ANTHROPIC_API_KEY before using LLM agents")
+    print("[setup] created .env from .env.example — fill in GOOGLE_API_KEY before using LLM agents")
 
 
 def check_dependencies() -> bool:

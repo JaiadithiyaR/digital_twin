@@ -83,7 +83,7 @@ from src.adaptation.data_selection import (
     with_dependency_ground_truth,
 )
 from src.fidelity.evaluator import FidelityEvaluator
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 from src.sandbox.executor import SandboxExecutor, SandboxResult
 
@@ -92,7 +92,7 @@ if TYPE_CHECKING:
     from src.dt_models.base import DTComponent
     from src.dt_models.d1_model_store import D1Store
     from src.dt_models.model_registry import DTModelRegistry
-    from src.llm.anthropic_client import AnthropicClient
+    from src.llm.google_client import GoogleClient
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class ExpandScopeAgent:
         d1_store: "D1Store",
         model_registry: ModelRegistry,
         dt_model_registry: "DTModelRegistry",
-        llm_client: "AnthropicClient",
+        llm_client: "GoogleClient",
         sandbox_executor: SandboxExecutor,
         fidelity_evaluator: FidelityEvaluator | None = None,
     ) -> None:
@@ -164,7 +164,7 @@ class ExpandScopeAgent:
         d1_store: "D1Store",
         model_registry: ModelRegistry,
         dt_model_registry: "DTModelRegistry",
-        llm_client: "AnthropicClient",
+        llm_client: "GoogleClient",
     ) -> "ExpandScopeAgent":
         return cls(
             settings,

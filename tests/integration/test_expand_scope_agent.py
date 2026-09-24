@@ -1,5 +1,5 @@
 """Integration tests: Module 16 (Expand-Scope Agent) against the real Module 2/3/4/5 pipeline and
-the real sandbox subprocess (LLM transport mocked — no real ANTHROPIC_API_KEY is configured in
+the real sandbox subprocess (LLM transport mocked — no real GOOGLE_API_KEY is configured in
 this environment, same situation as Modules 15/"LLM Infrastructure").
 
 Two deliverables this file proves CONCRETELY:

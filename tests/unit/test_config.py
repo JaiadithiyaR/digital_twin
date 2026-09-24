@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.common.config import load_secrets, load_settings
+from src.common.config import load_settings
 
 
 def test_settings_load_and_validate():
@@ -32,18 +32,19 @@ def test_settings_path_resolution_is_repo_relative():
 
 
 def test_secrets_never_expose_key_in_repr():
-    secrets = load_secrets()
-    assert "sk-" not in repr(secrets)
+    from src.common.config import Secrets
+
+    secrets = Secrets(google_api_key="AIzaSyFakeTestKeyShouldNeverAppearInRepr")
+    assert "AIzaSyFakeTestKeyShouldNeverAppearInRepr" not in repr(secrets)
     assert "<redacted>" in repr(secrets)
 
 
-def test_secrets_require_key_raises_when_absent(monkeypatch):
+def test_secrets_require_key_raises_when_absent():
     from src.common import config as config_module
 
-    monkeypatch.setattr(config_module, "load_secrets", config_module.load_secrets)
-    secrets = config_module.Secrets(anthropic_api_key=None)
+    secrets = config_module.Secrets(google_api_key=None)
     try:
-        secrets.require_anthropic_key()
-        assert False, "Expected RuntimeError when ANTHROPIC_API_KEY is unset"
+        secrets.require_google_key()
+        assert False, "Expected RuntimeError when GOOGLE_API_KEY/GEMINI_API_KEY is unset"
     except RuntimeError:
         pass

@@ -1,7 +1,7 @@
 """Integration test: Module 17 (Agentic Verification Agent) against a REAL candidate produced by
 Module 14 (Recalibration Agent) over the real Module 2/3/4 pipeline's bootstrap data.
 
-No real ANTHROPIC_API_KEY is configured in this environment — the LLM reasoning layer is driven by
+No real GOOGLE_API_KEY is configured in this environment — the LLM reasoning layer is driven by
 a fake `complete_structured`, exactly like every other agent's tests in this repo. Everything else
 is real, unmocked code: real telemetry -> preprocessing -> synchronization -> D1 (via the shared
 `bootstrap_history` fixture), a real `RecalibrationAgent.recalibrate()` call producing a genuine

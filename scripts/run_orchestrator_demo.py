@@ -8,14 +8,14 @@ live D1 telemetry state kept growing DURING the adaptation cycle's own wall-cloc
 same real-background-thread-plus-sampler-thread technique Modules 14/15/16/19 already established
 in their own tests, applied here to the real orchestrator instead of a single agent in isolation.
 
-**Why the drift severity range is narrowed for this run**: no real `ANTHROPIC_API_KEY` is
+**Why the drift severity range is narrowed for this run**: no real `GOOGLE_API_KEY` is
 configured in this development environment. Narrowing `MockDriftSource`'s generated severity to
 a low range (real Module 13 held-out evidence: low severity reliably selects `recalibrate`, which
 needs no LLM at all) lets this validation run complete with ZERO fakes/mocks anywhere — a genuinely
 real drift event, a genuinely real PPO decision, a genuinely real recalibration candidate, real
 Module 17 verification, and a real lifecycle record. `src/main.py`'s own orchestrator is otherwise
 unmodified and unaware of this script; `--mode demo`/`--mode live` (no severity override) is the
-real, general-purpose entrypoint for actual continuous operation, where a real `ANTHROPIC_API_KEY`
+real, general-purpose entrypoint for actual continuous operation, where a real `GOOGLE_API_KEY`
 would let `regenerate`/`expand_scope` cycles run too.
 
 Usage:

@@ -90,7 +90,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from src.fidelity.evaluator import FidelityEvaluator, FidelityResult
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RagUnavailableError
 from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 
@@ -99,7 +99,7 @@ if TYPE_CHECKING:
 
     from src.common.config import Settings
     from src.dt_models.base import DTComponent
-    from src.llm.anthropic_client import AnthropicClient
+    from src.llm.google_client import GoogleClient
     from src.rag.rag_kb import RagKnowledgeBase
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ class VerificationAgent:
         settings: "Settings",
         model_registry: ModelRegistry,
         fidelity_evaluator: FidelityEvaluator | None = None,
-        llm_client: "AnthropicClient | None" = None,
+        llm_client: "GoogleClient | None" = None,
     ) -> None:
         self._settings = settings
         self._model_registry = model_registry
@@ -159,7 +159,7 @@ class VerificationAgent:
 
     @classmethod
     def from_settings(
-        cls, settings: "Settings", model_registry: ModelRegistry, llm_client: "AnthropicClient | None" = None
+        cls, settings: "Settings", model_registry: ModelRegistry, llm_client: "GoogleClient | None" = None
     ) -> "VerificationAgent":
         return cls(settings, model_registry, fidelity_evaluator=FidelityEvaluator(settings.fidelity), llm_client=llm_client)
 

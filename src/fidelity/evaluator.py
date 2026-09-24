@@ -26,6 +26,30 @@ USE THE SAME NORMALIZATION REFERENCE").
 `config.fidelity.min_history_for_normalization` prior points exist for a component, `evaluate()`
 returns `status="insufficient_history"` and `fidelity_score=None` — the raw/squared metrics are
 still computed and returned (they're always well-defined), only the composite score is withheld.
+
+**Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a)**: in addition to the
+per-component formula above, this module aggregates every component's current `FidelityScore_c`
+into a single system-wide `UnifiedFidelityScore` (`compute_unified_score()`) and derives a
+deterministic adaptation trigger from it (`check_fidelity_trigger()`) — never via the LLM, never
+via a trained policy (there is no RL agent anymore; see CLAUDE.md §12's design-pivot notice). This
+is a SEPARATE signal from the per-component acceptance gate (module 17's
+`FidelityScore_new > FidelityScore_old + delta`) — it never replaces or influences that check.
+
+The trigger is debounced: it only fires after `config.fidelity.trigger_min_consecutive_evaluations`
+CONSECUTIVE cycles with `UnifiedFidelityScore < config.fidelity.trigger_threshold`, tracked as
+persistent state on the evaluator instance (`_consecutive_below_threshold`) — a single bad cycle
+(ordinary sampling noise) can never fire a spurious adaptation. The counter resets to 0 on any
+cycle that is at-or-above threshold, AND immediately after firing (so a still-degraded system
+must accumulate a fresh run of bad cycles before firing again, rather than firing on every single
+cycle once past threshold). `check_fidelity_trigger()` therefore has to be called once per
+genuine evaluation cycle (not per-component, per-metric, or speculatively) — `src/main.py`'s own
+`run_prediction_and_fidelity_cycle()` is the one real caller.
+
+The resulting trigger is normalized into the exact same canonical shape
+(`src.fidelity.trigger.AdaptationTrigger`) that an external `DriftEvent` is normalized into via
+`trigger_from_drift_event()` — `trigger_type="fidelity_degradation"` here vs.
+`"external_drift"` there — so Module 13 (the Decision & Root-Cause Analysis Agent) consumes
+either source uniformly.
 """
 
 from __future__ import annotations
@@ -40,10 +64,20 @@ import numpy as np
 
 from src.common.config import FidelityConfig
 from src.fidelity import metrics as metric_fns
+from src.fidelity.trigger import AdaptationTrigger
 
 logger = logging.getLogger(__name__)
 
 _METRIC_NAMES = ("rmse", "mae", "wasserstein", "mk_mmd")
+
+
+@dataclass(frozen=True)
+class UnifiedFidelityResult:
+    status: Literal["ok", "insufficient_history"]
+    unified_score: float | None  # None iff status == "insufficient_history" — never fabricated
+    worst_component: str | None  # argmin over the currently-defined per-component scores; None iff insufficient_history
+    component_scores: dict[str, float]  # only the currently well-defined FidelityScore_c values that were aggregated
+    n_components_defined: int
 
 
 @dataclass
@@ -72,6 +106,15 @@ class FidelityEvaluator:
         self._mk_mmd_gamma = config.mk_mmd.gamma
         # windows[component][metric_name] -> bounded deque of past squared-metric values.
         self._windows: dict[str, dict[str, deque[float]]] = {}
+        # Unified Fidelity Score + fidelity-based trigger config (prompt.md §16a) — never
+        # hardcoded, always config-driven, exactly like every other fidelity parameter.
+        self._unified_weights = config.unified_weights
+        self._unified_min_components = config.unified_min_components
+        self._trigger_threshold = config.trigger_threshold
+        self._trigger_min_consecutive = config.trigger_min_consecutive_evaluations
+        # Persistent debounce state — deliberately an attribute, not a local, since the trigger
+        # must accumulate across separate calls to check_fidelity_trigger() over real time.
+        self._consecutive_below_threshold = 0
 
     def _window_for(self, component: str, metric_name: str) -> deque[float]:
         component_windows = self._windows.setdefault(component, {})
@@ -144,4 +187,91 @@ class FidelityEvaluator:
             normalized_metrics=normalized_metrics,
             fidelity_score=fidelity_score,
             window_size_used=window_size_used,
+        )
+
+    # --- Unified Fidelity Score + fidelity-based trigger (prompt.md §16a) ----------------------
+
+    def compute_unified_score(self, component_scores: dict[str, float | None]) -> UnifiedFidelityResult:
+        """Aggregates every component's current `FidelityScore_c` into one system-wide number:
+
+            UnifiedFidelityScore = Σ_c (w_c * FidelityScore_c) / Σ_c w_c
+
+        computed only over components whose score is currently well-defined (not `None` —
+        `evaluate()` returns `None` for `insufficient_history`, never a fabricated placeholder).
+        `component_scores` is the caller's full per-component map (e.g. `{"throughput": 0.82,
+        "jitter": None, ...}`) — components with `None` are excluded from both the sum and the
+        weight normalization, never treated as 0.
+        """
+        defined = {c: s for c, s in component_scores.items() if s is not None}
+
+        if len(defined) < self._unified_min_components:
+            logger.info(
+                "unified fidelity: insufficient defined components, score withheld",
+                extra={"n_defined": len(defined), "min_required": self._unified_min_components},
+            )
+            return UnifiedFidelityResult(
+                status="insufficient_history",
+                unified_score=None,
+                worst_component=None,
+                component_scores=defined,
+                n_components_defined=len(defined),
+            )
+
+        weights = self._unified_weights or dict.fromkeys(defined, 1.0)
+        weight_sum = sum(weights[c] for c in defined if c in weights)
+        weighted_sum = sum(defined[c] * weights[c] for c in defined if c in weights)
+        unified_score = weighted_sum / weight_sum
+        worst_component = min(defined, key=lambda c: defined[c])  # argmin over defined FidelityScore_c
+
+        logger.info(
+            "unified fidelity score computed",
+            extra={"unified_score": unified_score, "worst_component": worst_component, "n_defined": len(defined)},
+        )
+        return UnifiedFidelityResult(
+            status="ok",
+            unified_score=unified_score,
+            worst_component=worst_component,
+            component_scores=defined,
+            n_components_defined=len(defined),
+        )
+
+    def check_fidelity_trigger(self, component_scores: dict[str, float | None]) -> AdaptationTrigger | None:
+        """Deterministic, debounced fidelity-based adaptation trigger — call once per genuine
+        evaluation cycle (see module docstring). Returns `None` on every cycle that doesn't fire,
+        including every cycle while `UnifiedFidelityScore` is `insufficient_history` (a trigger
+        can never fire from an undefined score — the debounce counter is reset, not advanced, in
+        that case, since there is nothing genuinely "below threshold" to debounce)."""
+        unified = self.compute_unified_score(component_scores)
+
+        if unified.status == "insufficient_history":
+            self._consecutive_below_threshold = 0
+            return None
+
+        if unified.unified_score < self._trigger_threshold:
+            self._consecutive_below_threshold += 1
+        else:
+            self._consecutive_below_threshold = 0
+
+        if self._consecutive_below_threshold < self._trigger_min_consecutive:
+            return None
+
+        # Fires. Reset immediately so sustained degradation must accumulate a fresh run of bad
+        # cycles before firing again, rather than firing on every single subsequent cycle.
+        self._consecutive_below_threshold = 0
+        severity = min(max((self._trigger_threshold - unified.unified_score) / self._trigger_threshold, 0.0), 1.0)
+        logger.warning(
+            "fidelity-based adaptation trigger fired",
+            extra={
+                "component": unified.worst_component,
+                "severity": severity,
+                "unified_score": unified.unified_score,
+                "threshold": self._trigger_threshold,
+            },
+        )
+        return AdaptationTrigger(
+            component=unified.worst_component,
+            severity=severity,
+            timestamp=datetime.now(UTC),
+            trigger_type="fidelity_degradation",
+            metadata={"unified_fidelity_score": unified.unified_score, "component_scores": unified.component_scores},
         )

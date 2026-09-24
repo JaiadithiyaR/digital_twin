@@ -1,9 +1,9 @@
 """Unit tests for RegenerationAgent (Module 15, prompt.md §24-26).
 
-No real ANTHROPIC_API_KEY is configured in this environment (same situation as
-`tests/unit/test_anthropic_client.py`) — the LLM client's `complete_structured` is therefore
+No real GOOGLE_API_KEY is configured in this environment (same situation as
+`tests/unit/test_google_client.py`) — the LLM client's `complete_structured` is therefore
 replaced with a fake that returns hand-written source strings standing in for what a real model
-would generate, exactly the way `test_anthropic_client.py` mocks the transport layer rather than
+would generate, exactly the way `test_google_client.py` mocks the transport layer rather than
 faking "a real call happened." Everything downstream of that one substitution — the sandbox
 execution, the conformance/train/evaluate pipeline, the registry writes, the fidelity comparison
 — is REAL, unmocked code, run for real against a small hand-built D1-shaped history.
@@ -23,7 +23,7 @@ from src.common.config import load_settings
 from src.dt_models.d1_model_store import D1Store
 from src.dt_models.throughput import ThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
@@ -92,7 +92,7 @@ class RebuiltThroughput(DTComponent):
 
 
 class _FakeLLMClient:
-    """Stands in for AnthropicClient — only `complete_structured` is exercised by this agent."""
+    """Stands in for GoogleClient — only `complete_structured` is exercised by this agent."""
 
     def __init__(self, responses=None, source_map=None, raise_on_call: Exception | None = None):
         self._responses = list(responses) if responses is not None else None

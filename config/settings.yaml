@@ -1,6 +1,6 @@
 # Central configuration for the AI-Driven Self-Adaptive Network Digital Twin.
 #
-# Secrets (e.g. ANTHROPIC_API_KEY) are NEVER stored here — see .env.example.
+# Secrets (e.g. GOOGLE_API_KEY) are NEVER stored here — see .env.example.
 # Every tunable referenced anywhere in src/ must be sourced from this file (via
 # src/common/config.py) rather than hardcoded. See CLAUDE.md for the module map.
 
@@ -124,6 +124,14 @@ fidelity:
   mk_mmd:
     kernel: rbf
     gamma: null # null => median-heuristic bandwidth
+  # Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a) — a system-health
+  # signal aggregating every component's FidelityScore_c into one number, and the deterministic
+  # (never LLM/PPO) trigger derived from it. Does NOT replace module 17's per-component acceptance
+  # gate.
+  unified_weights: null # null => equal weighting across all currently-enabled components (never hardcode unequal weights)
+  unified_min_components: 2 # fewer well-defined component scores than this -> UnifiedFidelityScore is None (insufficient_history), same never-fabricate discipline as the per-component formula
+  trigger_threshold: 0.5 # trigger fires when UnifiedFidelityScore drops below this...
+  trigger_min_consecutive_evaluations: 3 # ...for this many consecutive evaluation cycles in a row (debounce/hysteresis — a single bad cycle must never fire a spurious adaptation)
 
 # ---------------------------------------------------------------------------
 # Module 11 — Drift detection interface (algorithm itself is external, prompt.md §0.19)
@@ -242,21 +250,22 @@ rag:
   embedding_model: "all-MiniLM-L6-v2"
 
 # ---------------------------------------------------------------------------
-# LLM (Anthropic direct API) — module name/version only; key lives in .env. Read via
-# src/llm/anthropic_client.py:AnthropicClient — never hardcode a model ID or key in agent code.
+# LLM (Google AI / Gemini direct API) — module name/version only; key lives in .env. Read via
+# src/llm/google_client.py:GoogleClient — never hardcode a model ID or key in agent code.
 # ---------------------------------------------------------------------------
 llm:
-  model: "claude-sonnet-5" # never a hardcoded deprecated model ID — this is the ONLY place it's set
+  model: "gemini-2.5-flash" # never a hardcoded deprecated model ID — this is the ONLY place it's set
   max_tokens: 8000
-  # The installed Anthropic API version has NO temperature/top_p/top_k sampling-randomness
-  # control (verified directly against anthropic-sdk-python's real MessageCreateParams, not
-  # assumed from older docs) — `effort` (reasoning depth) is the closest available knob and is
-  # NOT a determinism control. See src/llm/anthropic_client.py's module docstring for the full
-  # explanation. null disables sending output_config.effort entirely (API default).
+  # Unlike the old Anthropic Messages API, google-genai's GenerateContentConfig DOES expose a
+  # real temperature control (verified directly against the installed SDK's types.py, not
+  # assumed) — low temperature genuinely reduces sampling randomness on this provider.
+  temperature: 0.2
+  # `effort` maps onto Gemini's ThinkingLevel (MINIMAL/LOW/MEDIUM/HIGH — no xhigh/max; both clamp
+  # to HIGH). See src/llm/google_client.py's module docstring. null omits thinking_config entirely.
   effort: medium
   timeout_seconds: 90
   max_retries: 3 # shared budget: this client's own transport retry loop AND its structured-output validation retry loop
-  retry_backoff_seconds: 1.0 # base for this client's own exponential backoff (capped at 30s internally); the SDK's own internal retry is disabled (max_retries=0) so this is the only retry/backoff path
+  retry_backoff_seconds: 1.0 # base for this client's own exponential backoff (capped at 30s internally); the SDK's own transport retry defaults to "never retry" so this is the only retry/backoff path
 
 # ---------------------------------------------------------------------------
 # Logging

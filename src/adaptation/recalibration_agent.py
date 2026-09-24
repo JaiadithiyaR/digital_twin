@@ -30,7 +30,7 @@ this concretely: a real background synchronizer thread's `records_synced` count 
 repeatedly WHILE a real (foreground) recalibration call is in progress and shown to keep growing.
 
 **LLM reasoning is optional and off by default** (prompt.md §23: "the agent MAY use LLM
-reasoning... if beneficial", CLAUDE.md §7). When an `AnthropicClient` is supplied and
+reasoning... if beneficial", CLAUDE.md §7). When an `GoogleClient` is supplied and
 `use_llm_window_reasoning=True`, this agent asks it to suggest a training-window length given a
 short summary of recent history — but the suggestion is always clamped to a bounded, sane range
 around the deterministic config default before use, and any LLM failure degrades gracefully
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from src.common.config import Settings
     from src.dt_models.base import DTComponent
     from src.dt_models.d1_model_store import D1Store
-    from src.llm.anthropic_client import AnthropicClient
+    from src.llm.google_client import GoogleClient
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class RecalibrationAgent:
         d1_store: "D1Store",
         model_registry: ModelRegistry,
         fidelity_evaluator: FidelityEvaluator | None = None,
-        llm_client: "AnthropicClient | None" = None,
+        llm_client: "GoogleClient | None" = None,
     ) -> None:
         self._settings = settings
         self._d1_store = d1_store
@@ -113,7 +113,7 @@ class RecalibrationAgent:
         settings: "Settings",
         d1_store: "D1Store",
         model_registry: ModelRegistry,
-        llm_client: "AnthropicClient | None" = None,
+        llm_client: "GoogleClient | None" = None,
     ) -> "RecalibrationAgent":
         return cls(
             settings,

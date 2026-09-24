@@ -96,6 +96,13 @@ class FidelityConfig(BaseModel):
     min_history_for_normalization: int
     metrics: list[str]
     mk_mmd: MkMmdConfig
+    # Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a). `unified_weights`
+    # null means equal weighting across all currently-enabled components — never hardcode unequal
+    # weights in code (prompt.md §16a's own explicit rule).
+    unified_weights: dict[str, float] | None
+    unified_min_components: int
+    trigger_threshold: float
+    trigger_min_consecutive_evaluations: int  # debounce/hysteresis — a single bad cycle must never fire the trigger
 
 
 class MockDriftConfig(BaseModel):
@@ -212,14 +219,16 @@ class RagConfig(BaseModel):
 class LlmConfig(BaseModel):
     model: str
     max_tokens: int
-    # The installed Anthropic API version (anthropic-sdk-python's real MessageCreateParams, not
-    # assumed from older docs) has no temperature/top_p/top_k sampling-randomness control at all
-    # — verified directly against the SDK. `effort` (reasoning depth) is the closest available
-    # knob; it is NOT a determinism control. See src/llm/anthropic_client.py's module docstring.
+    # Unlike the old Anthropic Messages API, the installed google-genai SDK's GenerateContentConfig
+    # DOES expose a real sampling-determinism control (verified directly against types.py, not
+    # assumed) — `temperature` is genuine here, not a fiction. `None` omits it (API default).
+    temperature: float | None
+    # `effort` maps onto Gemini's ThinkingLevel (MINIMAL/LOW/MEDIUM/HIGH — no xhigh/max; those two
+    # clamp down to HIGH). See src/llm/google_client.py's module docstring for the full mapping.
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None
     timeout_seconds: int
     max_retries: int  # shared budget for both this client's transport retry loop and its structured-output validation retry loop
-    retry_backoff_seconds: float  # base for this client's own exponential backoff (capped internally); the SDK's own internal retry is disabled so this is the only retry/backoff path
+    retry_backoff_seconds: float  # base for this client's own exponential backoff (capped internally); the SDK's own internal retry defaults to "never retry" so this is the only retry/backoff path
 
 
 class LoggingConfig(BaseModel):
@@ -266,19 +275,19 @@ class Settings(BaseModel):
 class Secrets(BaseModel):
     """Loaded from environment/.env only. Never logged, never merged into Settings."""
 
-    anthropic_api_key: str | None = Field(default=None, repr=False)
+    google_api_key: str | None = Field(default=None, repr=False)
 
-    def require_anthropic_key(self) -> str:
-        if not self.anthropic_api_key:
+    def require_google_key(self) -> str:
+        if not self.google_api_key:
             raise RuntimeError(
-                "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in "
-                "before using any LLM-driven agent (regeneration, expand-scope, verification "
-                "reasoning, lifecycle explanations)."
+                "GOOGLE_API_KEY (or GEMINI_API_KEY) is not set. Copy .env.example to .env and "
+                "fill it in before using any LLM-driven agent (decision & root-cause analysis, "
+                "regeneration, expand-scope, verification reasoning, lifecycle explanations)."
             )
-        return self.anthropic_api_key
+        return self.google_api_key
 
     def __repr__(self) -> str:  # never let a stray print/log leak the key
-        return "Secrets(anthropic_api_key=<redacted>)"
+        return "Secrets(google_api_key=<redacted>)"
 
 
 @lru_cache(maxsize=1)
@@ -292,4 +301,7 @@ def load_settings(path: Path | None = None) -> Settings:
 @lru_cache(maxsize=1)
 def load_secrets() -> Secrets:
     load_dotenv(REPO_ROOT / ".env", override=False)
-    return Secrets(anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None)
+    # GOOGLE_API_KEY takes precedence over GEMINI_API_KEY, matching google-genai's own SDK
+    # precedence (verified in google.genai._api_client.get_env_api_key).
+    key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or None
+    return Secrets(google_api_key=key)

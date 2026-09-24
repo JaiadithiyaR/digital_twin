@@ -5,7 +5,7 @@ already-built module together into one real, continuously-running system.
 **This file is integration only** — it constructs already-tested components (D1Store,
 DTModelRegistry/DTOrchestrator, FidelityEvaluator, ContinuousSynchronizer, DriftDetectorInterface,
 the PPO runtime, Modules 14/15/16's agents, VerificationAgent, LifecycleAgent, RagKnowledgeBase,
-AnthropicClient) and calls their already-tested public methods in exactly the order prompt.md §39
+GoogleClient) and calls their already-tested public methods in exactly the order prompt.md §39
 specifies. No new model, fidelity, verification, or agent logic is written here.
 
 Canonical loop (CLAUDE.md §2):
@@ -39,8 +39,8 @@ does, adapted for a live/streaming window instead of a precomputed pool). Reusin
 itself for this would be WRONG — it always fabricates synthetic prediction fidelity internally
 for training purposes, which would silently ignore the real system's actual fidelity.
 
-**LLM availability**: no real `ANTHROPIC_API_KEY` is configured in this development environment.
-This orchestrator constructs a real `AnthropicClient` when a key IS configured; when PPO selects
+**LLM availability**: no real `GOOGLE_API_KEY` is configured in this development environment.
+This orchestrator constructs a real `GoogleClient` when a key IS configured; when PPO selects
 `regenerate`/`expand_scope` and no client is available, the cycle is skipped with a clear WARNING
 (never a silent substitute, never a fabricated LLM response) — telemetry ingestion and the next
 drift event are entirely unaffected. `recalibrate` never needs an LLM at all.
@@ -81,7 +81,7 @@ from src.dt_models.throughput import ThroughputModel
 from src.drift.drift_detector import DriftDetectorInterface
 from src.drift.mock_drift_source import MockDriftSource
 from src.fidelity.evaluator import FidelityEvaluator
-from src.llm.anthropic_client import AnthropicClient
+from src.llm.google_client import GoogleClient
 from src.rag.rag_kb import RagKnowledgeBase
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
@@ -165,11 +165,11 @@ class ContinuousOrchestrator:
         self.lifecycle_agent = LifecycleAgent.from_settings(settings)
 
         try:
-            self.llm_client: AnthropicClient | None = AnthropicClient.from_settings(settings, self._secrets)
+            self.llm_client: GoogleClient | None = GoogleClient.from_settings(settings, self._secrets)
         except RuntimeError as exc:
             self.llm_client = None
             logger.warning(
-                "no ANTHROPIC_API_KEY configured — regenerate/expand_scope adaptation cycles "
+                "no GOOGLE_API_KEY configured — regenerate/expand_scope adaptation cycles "
                 "will be skipped (with a clear warning) if PPO ever selects them; recalibrate is "
                 "unaffected",
                 extra={"component": "main", "error": str(exc)},
@@ -451,7 +451,7 @@ class ContinuousOrchestrator:
 
         if action_name in ("regenerate", "expand_scope") and self.llm_client is None:
             logger.warning(
-                "PPO selected an LLM-driven strategy but no ANTHROPIC_API_KEY is configured — "
+                "PPO selected an LLM-driven strategy but no GOOGLE_API_KEY is configured — "
                 "skipping this adaptation cycle (telemetry ingestion and the next drift event are "
                 "entirely unaffected)",
                 extra={"component": "main", "action": action_name, "affected_component": component},

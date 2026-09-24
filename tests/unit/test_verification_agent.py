@@ -1,7 +1,7 @@
 """Unit tests for Module 17 — Agentic Verification Agent (prompt.md §31-34, rule 9).
 
-No real ANTHROPIC_API_KEY is configured in this environment (same situation as every other
-LLM-driven agent's tests in this repo) — `_FakeLLMClient` stands in for `AnthropicClient`,
+No real GOOGLE_API_KEY is configured in this environment (same situation as every other
+LLM-driven agent's tests in this repo) — `_FakeLLMClient` stands in for `GoogleClient`,
 implementing only `complete_structured` (the one method this agent calls), exactly the pattern
 `tests/unit/test_regeneration_agent.py`/`test_expand_scope_agent.py` already established.
 Everything else — the deterministic gate, the real `FidelityEvaluator`/Module 12 recomputation,
@@ -32,7 +32,7 @@ from src.common.config import load_settings
 from src.dt_models.base import DTComponent
 from src.dt_models.throughput import ThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RetrievedChunk
 from src.registry.model_registry import ModelRegistry
 
@@ -152,7 +152,7 @@ class _TinyComponent(DTComponent):
 
 
 class _FakeLLMClient:
-    """Stands in for `AnthropicClient` — only `complete_structured` is exercised by this agent."""
+    """Stands in for `GoogleClient` — only `complete_structured` is exercised by this agent."""
 
     def __init__(self, explanation: str = "", key_observations: str = "", raise_on_call: Exception | None = None):
         self._explanation = explanation

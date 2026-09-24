@@ -21,7 +21,7 @@ from src.drift.schema import DriftEvent
 from src.main import _DT_COMPONENT_CLASSES, _OUTPUT_FIELDS, _TARGET_COLUMNS, ContinuousOrchestrator
 
 SETTINGS = load_settings()
-NO_KEY_SECRETS = Secrets(anthropic_api_key=None)
+NO_KEY_SECRETS = Secrets(google_api_key=None)
 
 
 def _event(component: str, severity: float) -> DriftEvent:

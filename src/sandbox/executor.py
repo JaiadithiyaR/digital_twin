@@ -13,7 +13,7 @@ isolation):**
   process — a candidate that raises, hangs, or does something exotic like `sys.exit()` at import
   time only ever affects its own subprocess, never this one.
 - The subprocess is given a MINIMAL environment (`PATH` + a `PYTHONPATH` pointing only at this
-  repo) — NOT `os.environ.copy()`. Concretely and testably: `ANTHROPIC_API_KEY` and any other
+  repo) — NOT `os.environ.copy()`. Concretely and testably: `GOOGLE_API_KEY` and any other
   secret present in the parent's environment is NEVER inherited by the sandboxed subprocess
   (prompt.md §16 "never hardcode API keys" extended here — a candidate must not even be *able* to
   read one via `os.environ`, whether that candidate is malicious or just careless).

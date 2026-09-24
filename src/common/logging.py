@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 _CONFIGURED = False
-_REDACTED_KEYS = {"api_key", "anthropic_api_key", "secret", "token", "password", "authorization"}
+_REDACTED_KEYS = {"api_key", "google_api_key", "secret", "token", "password", "authorization"}
 _REDACTED_VALUE = "<redacted>"
 
 # Attributes that already exist on a standard LogRecord — anything else passed via `extra=`

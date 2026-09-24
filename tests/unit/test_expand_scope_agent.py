@@ -1,6 +1,6 @@
 """Unit tests for ExpandScopeAgent (Module 16, prompt.md §27).
 
-No real ANTHROPIC_API_KEY is configured in this environment (same situation as Modules 15/
+No real GOOGLE_API_KEY is configured in this environment (same situation as Modules 15/
 "LLM Infrastructure") — the LLM client's `complete_structured` is replaced with a fake that
 dispatches on the requested schema (design proposal vs. implementation), returning hand-written
 values standing in for real model output. Everything downstream — deterministic design
@@ -28,7 +28,7 @@ from src.dt_models.d1_model_store import D1Store
 from src.dt_models.model_registry import DTModelRegistry
 from src.dt_models.throughput import ThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
-from src.llm.anthropic_client import LLMClientError
+from src.llm.google_client import LLMClientError
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality

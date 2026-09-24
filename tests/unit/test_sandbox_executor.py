@@ -1,7 +1,7 @@
 """Unit tests for SandboxExecutor (prompt.md §45) — the isolation boundary Modules 15/16's
 LLM-generated code must run inside. Drives the REAL subprocess/sandbox mechanism against real
 (hand-written, standing in for LLM output — see test_regeneration_agent.py for the note on why no
-real ANTHROPIC_API_KEY is available in this environment) candidate source strings, never mocked
+real GOOGLE_API_KEY is available in this environment) candidate source strings, never mocked
 out — this is exactly the deterministic, non-LLM code that judges untrusted code, so it needs to
 be proven correct for real.
 """

@@ -23,7 +23,7 @@ from src.adaptation.regeneration_agent import RegenerationResult
 from src.adaptation.verification_agent import DeterministicCheckResult, VerificationResult
 from src.common.config import load_settings
 from src.drift.schema import DriftEvent
-from src.llm.anthropic_client import LLMResponse, LLMUsage
+from src.llm.google_client import LLMResponse, LLMUsage
 from src.rag.rag_kb import RetrievedChunk
 from src.registry.model_registry import ModelVersionMetadata
 from src.sandbox.executor import SandboxResult

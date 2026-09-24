@@ -28,7 +28,7 @@ def test_json_formatter_includes_extra_fields():
 
 
 def test_redact_filter_scrubs_secret_like_fields():
-    record = _make_record("calling anthropic", api_key="sk-ant-super-secret")
+    record = _make_record("calling google ai", api_key="AIzaSySuperSecret")
     _RedactFilter().filter(record)
     assert record.api_key == "<redacted>"
 

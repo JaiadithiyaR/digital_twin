@@ -8,7 +8,7 @@ day-to-day validation — this one is the real-NS-3 counterpart).
 
 Requires the vendored ns-3 tree built (`./scripts/setup_ns3.sh`).
 
-**Why the drift severity range is narrowed for this run**: no real `ANTHROPIC_API_KEY` is
+**Why the drift severity range is narrowed for this run**: no real `GOOGLE_API_KEY` is
 configured in this development environment. Narrowing `MockDriftSource`'s generated severity to
 a low range (real Module 13 held-out evidence: low severity reliably selects `recalibrate`, which
 needs no LLM at all) lets this run complete with zero fakes anywhere else — a genuinely real NS-3
@@ -165,7 +165,7 @@ def main() -> int:
 
         # Process drift events one at a time until one produces a completed lifecycle record
         # (Module 19). A "skip" (PPO selected regenerate/expand_scope but no real
-        # ANTHROPIC_API_KEY is configured — logged, never faked, telemetry unaffected) is a
+        # GOOGLE_API_KEY is configured — logged, never faked, telemetry unaffected) is a
         # legitimate outcome of a real event, not a failure — the orchestrator's own documented
         # behavior is to move on to the next drift event, exactly what this loop does. Real
         # Module 11 drift severities are genuinely random even within the narrowed low range, so
@@ -181,7 +181,7 @@ def main() -> int:
                 break
             print(
                 f"[e2e] attempt {attempt} did not complete a full cycle (PPO likely selected an "
-                "LLM-needing strategy and no real ANTHROPIC_API_KEY is configured in this "
+                "LLM-needing strategy and no real GOOGLE_API_KEY is configured in this "
                 "environment) — moving on to the next real drift event..."
             )
 

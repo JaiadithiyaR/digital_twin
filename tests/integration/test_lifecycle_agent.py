@@ -5,7 +5,7 @@ verified by a real Module 17 `VerificationAgent`, and finally recorded by this m
 resulting `LifecycleRecord` is then inspected field-by-field for completeness against prompt.md
 §37's exact list.
 
-No real ANTHROPIC_API_KEY is configured in this environment — Regeneration/Expand-Scope's LLM
+No real GOOGLE_API_KEY is configured in this environment — Regeneration/Expand-Scope's LLM
 calls (only reached if PPO happens to select that branch) are driven by fake clients returning
 hand-written source, exactly Modules 15/16's own established testing convention (recalibration
 needs no LLM at all). Whichever branch executes, everything else — the real trained PPO policy,

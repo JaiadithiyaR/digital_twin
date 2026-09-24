@@ -7,7 +7,7 @@ cycle completes without error, and (2) live D1 telemetry synchronization never s
 cycle — the same real-background-thread-plus-sampler-thread proof Modules 14/15/16/19 already
 established for individual agents, applied here to the real orchestrator.
 
-No real ANTHROPIC_API_KEY is configured in this environment — the drift severity range is
+No real GOOGLE_API_KEY is configured in this environment — the drift severity range is
 narrowed to bias PPO toward `recalibrate` (real Module 13 held-out evidence: low severity
 reliably selects it), which needs no LLM at all, exactly like `scripts/run_orchestrator_demo.py`'s
 own documented rationale.

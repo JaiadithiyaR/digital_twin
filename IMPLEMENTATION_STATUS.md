@@ -696,6 +696,49 @@ a negative square root) is exactly the standard, correct handling — not a bug 
 via `tests/unit/test_fidelity_metrics.py::test_mk_mmd_near_zero_for_identical_distributions`
 that this same clamping behavior is intentional and tested with synthetic data too.
 
+### Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a) — this revision
+- [x] Implementation status: `FidelityEvaluator.compute_unified_score()` (new) aggregates every
+  currently-well-defined `FidelityScore_c` into one `UnifiedFidelityScore = Σ(w_c*Score_c)/Σw_c`
+  (`config.fidelity.unified_weights`, `None` -> equal weighting; components with `None`/
+  `insufficient_history` scores are excluded from both sum and weight, never treated as 0); fewer
+  than `config.fidelity.unified_min_components` defined -> `status="insufficient_history"`,
+  `unified_score=None` — same never-fabricate discipline as the per-component formula.
+  `FidelityEvaluator.check_fidelity_trigger()` (new) derives a deterministic, debounced adaptation
+  trigger from it: fires only after `config.fidelity.trigger_min_consecutive_evaluations`
+  CONSECUTIVE cycles with `UnifiedFidelityScore < config.fidelity.trigger_threshold` (persistent
+  counter state on the evaluator instance — a single bad cycle can never fire a spurious
+  adaptation), resets on any at-or-above-threshold cycle AND immediately after firing (sustained
+  degradation must accumulate a fresh run of bad cycles to fire again, not fire every cycle once
+  past threshold). Fired triggers carry `component` = argmin over defined per-component scores,
+  `severity = clip((threshold - unified)/threshold, 0, 1)`. New `src/fidelity/trigger.py` defines
+  the canonical `AdaptationTrigger` shape (`component`/`severity`/`timestamp`/`trigger_type`/
+  `metadata`) both this trigger (`trigger_type="fidelity_degradation"`) and the existing external
+  `DriftEvent` (via `trigger_from_drift_event()`, `trigger_type="external_drift"`) are normalized
+  into, so the new Module 13 (Decision & Root-Cause Analysis Agent, being rebuilt this same
+  revision — see below) can consume either source uniformly. Module 11's own `DriftEvent`/
+  `DriftDetectorInterface`/`MockDriftSource` are completely unmodified — this only adds a
+  normalization step downstream of them. New config: `config.fidelity.{unified_weights,
+  unified_min_components,trigger_threshold,trigger_min_consecutive_evaluations}`
+  (`config/settings.yaml` + `LlmConfig`'s sibling `FidelityConfig` in `src/common/config.py`).
+- [x] Tests: 22 new tests, all passing — `tests/unit/test_fidelity_evaluator.py` (+18: hand-computed
+  equal-weighting and explicitly-weighted unified-score cases, `None`-components excluded not
+  treated as 0, insufficient-history withholding, and the full debounce state machine — a single
+  below-threshold cycle does NOT fire, fires exactly at
+  `trigger_min_consecutive_evaluations`, resets on any at/above-threshold cycle, resets after
+  firing and can fire again after a fresh run, never fires from `insufficient_history` [and resets
+  the counter rather than advancing it], severity clipped to `[0,1]` for a far-below-zero score,
+  fired component is the true argmin) and `tests/unit/test_fidelity_trigger.py` (+4: drift-event
+  normalization preserves component/severity/timestamp and records provenance in metadata without
+  dropping the original metadata, `AdaptationTrigger` is frozen, both trigger sources produce the
+  exact same field shape so Module 13 needs no type-specific branching).
+- Known blockers: none — this is pure deterministic code, no LLM/API dependency.
+- Last verified command: `.venv/bin/python -m pytest tests/unit/test_fidelity_evaluator.py
+  tests/unit/test_fidelity_trigger.py tests/unit/test_fidelity_metrics.py tests/unit/test_config.py
+  -v` → `60 passed`.
+- Next task (this revision): wire `check_fidelity_trigger()` as `src/main.py`'s SECOND trigger
+  source (alongside the existing external-drift path) — tracked under the Module 13 rebuild /
+  Phase 11 rewiring entries below, not done as part of this Module 12 addendum itself.
+
 ## Module 13 — RL Decision Agent (Agent 1: PPO)
 - [x] Implementation status: `src/adaptation/{rl_env.py,rl_agent.py}`. `AdaptationEnv(gym.Env)`
   — `Discrete(3)` action space (0=Recalibrate/1=Regenerate/2=Expand Scope, from
@@ -1380,7 +1423,8 @@ that this same clamping behavior is intentional and tested with synthetic data t
   `torch 2.14.0+cu130` with `cuda_available=True` (NVIDIA GPU detected via `nvidia-smi`, driver
   592.82, CUDA 13.1 — used where beneficial for PPO training, never required; CPU path unaffected).
 - [x] `config/settings.yaml` + `.env.example` — every tunable in prompt.md §40 covered; secrets
-  excluded (`ANTHROPIC_API_KEY` only in `.env`/env vars, never YAML). `.env` scaffolded locally
+  excluded (`GOOGLE_API_KEY`/`GEMINI_API_KEY` only in `.env`/env vars, never YAML — updated this
+  revision from `ANTHROPIC_API_KEY`, see the LLM provider pivot below). `.env` scaffolded locally
   by `scripts/setup.py` (gitignored, placeholder key only).
 - [x] Structured logging (`src/common/logging.py`) — JSON/text formatter, secret-key redaction
   filter, rotating file handler; smoke-tested (`tests/unit/test_logging.py`, 3 tests passing).
@@ -1391,28 +1435,56 @@ that this same clamping behavior is intentional and tested with synthetic data t
   (built this turn as shared versioned-artifact-storage infrastructure for Modules 14-16).
 - [x] Sandbox executor (`src/sandbox/{executor.py,_sandbox_driver.py}`) — see Module 15's entry
   below (built this turn as shared infrastructure for Modules 15-16's LLM-generated code).
-- [x] **Anthropic client (`src/llm/anthropic_client.py`) — implemented and tested.** Centralized
-  `AnthropicClient` that Modules 14 (optional), 15, 16, 17, and 19 will all call through, never
-  constructing their own `anthropic.Anthropic()` (prompt.md §24/§42). Infrastructure only — no
-  agent logic, no prompt templates, no per-agent output schemas (those belong to Modules 14-19
-  when built). Model ID and API key are never hardcoded — `config.llm.model` /
-  `Secrets.require_anthropic_key()` only. A real, load-bearing discovery made while building
-  this: the installed Anthropic API version (verified directly against
-  `anthropic-sdk-python`'s actual `MessageCreateParams`/`OutputConfigParam` types, not assumed
-  from older docs) has **no `temperature`/`top_p`/`top_k` parameter anywhere** — prompt.md §42's
-  "deterministic/non-deterministic settings where appropriate" is satisfied honestly via
-  `config.llm.effort` (`output_config.effort`, reasoning depth: low/medium/high/xhigh/max),
-  explicitly documented as NOT a determinism control (there isn't one in this API). Structured
-  output uses the API's own native `output_config.format={"type":"json_schema","schema":...}`
-  constraint (a real SDK feature), independently re-validated against the caller's pydantic
-  schema afterward regardless (CLAUDE.md §7 — LLM output is always untrusted). All retry/backoff
-  is our own explicit code (`_call_with_retry`, exponential with a 30s cap, honoring a
-  `Retry-After` header when the API provides one) — the SDK's own internal retry is deliberately
-  disabled (`max_retries=0`) so there is exactly one retry schedule, not two silently compounding.
-  Non-retryable failures (bad auth/request) fail fast instead of burning the retry budget.
-  `complete_safe`/`complete_structured_safe` provide the graceful-degradation path (return `None`
-  instead of raising, always logged at WARNING) — mirroring Module 13's `decide_adaptation_
-  strategy_safe` pattern. Full design rationale in `CLAUDE.md`'s "LLM Infrastructure" entry.
+- [x] **[SUPERSEDED — see CLAUDE.md §12 design-pivot notice] Anthropic client
+  (`src/llm/anthropic_client.py`)** — deleted this revision, replaced by `GoogleClient` below.
+  Kept here (struck from active status) only so the git history/reasoning trail isn't lost; do
+  not resurrect this file or re-add the `anthropic` dependency.
+- [x] **Google AI (Gemini) client (`src/llm/google_client.py`) — implemented and tested (LLM
+  provider pivot, this revision).** Centralized `GoogleClient` that Module 13 (Decision &
+  Root-Cause Analysis), Module 14 (optional), 15, 16, 17, and 19 all call through, never
+  constructing their own `google.genai.Client()` (prompt.md §24/§42). Same infrastructure-only
+  scope as the Anthropic client it replaces — no agent logic, no prompt templates, no per-agent
+  output schemas. Model ID and API key are never hardcoded — `config.llm.model` /
+  `Secrets.require_google_key()` only (`GOOGLE_API_KEY` takes precedence over `GEMINI_API_KEY`,
+  matching the SDK's own precedence). Public surface (`LLMResponse`/`LLMUsage`/`LLMClientError`/
+  `LLMTransportError`/`LLMStructuredOutputError`/`complete`/`complete_structured`/`complete_safe`/
+  `complete_structured_safe`) is deliberately identical to the old client's, so every consumer
+  agent needed only an import/class-name swap, not a rewrite. Real, load-bearing SDK discoveries
+  made while building this (verified directly against the installed `google-genai` 2.25.0's
+  `types.py`/`errors.py`/`_api_client.py`, not assumed): (1) unlike Anthropic, this SDK's
+  `GenerateContentConfig` DOES expose a genuine `temperature` determinism control — the opposite
+  conclusion from the old client's own documented finding; (2) the SDK's own transport retry
+  defaults to "never retry" unless `http_options.retry_options` is explicitly set, so — exactly
+  like the old client's explicit `max_retries=0` — there is exactly one retry schedule in this
+  system, never two silently compounding; (3) exception shape is structurally different: no named
+  exception per failure type, only `APIError`/`ClientError`(4xx)/`ServerError`(5xx), with the real
+  HTTP status on `.code` — retry classification is done on `.code` (retryable: any `ServerError`,
+  or `ClientError` with `.code==429`), not exception identity; raw `httpx.TimeoutException`/
+  `httpx.ConnectError` can also propagate uncaught from this SDK's transport and are treated as
+  retryable too; (4) `config.llm.effort` maps onto Gemini's `ThinkingConfig(thinking_level=...)`,
+  clamped (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH` only — `"xhigh"`/`"max"` both clamp to `HIGH`);
+  (5) `HttpOptions.timeout` is in MILLISECONDS, not seconds. Structured output uses the API's own
+  native `response_mime_type="application/json"` + `response_json_schema=schema.
+  model_json_schema()` (a real field on `GenerateContentConfig` accepting a plain JSON Schema
+  dict), independently re-validated against the caller's pydantic schema afterward regardless
+  (CLAUDE.md §7 — LLM output is always untrusted). `complete_safe`/`complete_structured_safe`
+  provide the same graceful-degradation path as before. Full design rationale in
+  `src/llm/google_client.py`'s own module docstring.
+  - **No real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured in this environment** (only the
+    placeholder from `.env.example`) — exactly the same situation the Anthropic client was in.
+    Every test drives `GoogleClient` against a mocked transport using REAL `google.genai.errors.*`
+    exception types and REAL `httpx.Request`/`httpx.Response` objects, never a stub. One live-API
+    smoke test exists (`test_live_api_smoke_if_key_configured`) and auto-skips until a real key is
+    ever configured — live-API validation of this client is explicitly still pending, per
+    prompt.md §0.24/§0.25: this status entry does not, and must not, claim a live call succeeded.
+  - Tests: `tests/unit/test_google_client.py` (28 tests, all passing, 1 live-smoke test skipped —
+    successful completion + configured-model/effort/temperature/system-instruction plumbing,
+    retryable-server-error / rate-limited-429 / transient-httpx-exception retry-then-succeed,
+    non-retryable-client-error fails fast, retry-budget exhaustion, unclassified-`APIError`
+    fail-safe, empty-text-response rejection, `Retry-After`-header vs. exponential backoff,
+    structured output round-trip + native JSON-schema request + validation-failure retry +
+    validation-retry exhaustion + missing-required-field rejection, both `_safe` wrappers'
+    graceful degradation, API-key-never-in-logs, and `from_settings` raising clearly with no key).
 - [~] Adaptation lock / concurrency policy — `config.adaptation.lock_policy` exists and
   `ContinuousOrchestrator` processes one drift event fully before the next (never overlapping
   adaptations), which is safe, but the actual "queue/coalesce/defer" policy semantics the config
@@ -1423,9 +1495,11 @@ that this same clamping behavior is intentional and tested with synthetic data t
 - [~] Test suite: unit / integration / e2e — `tests/unit/` (443 tests: config, logging, mock
   source, zmq source, preprocessing, D1 interface/stub, synchronizer, D1 component registry,
   D1Store [incl. 4 dtype-integrity regression tests], DT model registry, orchestrator, all five
-  DT prediction components, Module 12's fidelity metrics/evaluator, Module 11's mock drift
-  source + drift detector interface, Module 13's `AdaptationEnv` + `rl_agent` plumbing, the
-  centralized Anthropic client [mocked transport — no real API key is configured in this
+  DT prediction components, Module 12's fidelity metrics/evaluator/unified-score/fidelity-trigger
+  [STALE test count — see the LLM-pivot and fidelity-trigger entries below for what changed this
+  revision], Module 11's mock drift source + drift detector interface, Module 13's `AdaptationEnv`
+  + `rl_agent` plumbing [STALE — see CLAUDE.md §12 design-pivot notice], the
+  centralized Google AI (Gemini) client [mocked transport — no real API key is configured in this
   environment; one live-smoke test exists and auto-skips until a real key is ever set], the
   versioned `ModelRegistry`, the `RecalibrationAgent`, the shared `data_selection` helpers, the
   `SandboxExecutor`, the `RegenerationAgent`, the `ExpandScopeAgent`, D2's `RagKnowledgeBase`/
