@@ -35,6 +35,12 @@ rag_data/**/*.chroma
 # Model registry artifacts (large binaries — tracked via registry metadata, not git)
 data/models/
 
+# Standalone single-agent demo scripts' storage (scripts/demo_*.py) — wiped and rebuilt fresh on
+# every run, never checked in, never the main application's real storage paths.
+data/demo_recalibration/
+data/demo_regeneration/
+data/demo_expand_scope/
+
 # Candidate sandbox workspaces
 sandbox_workspaces/
 /tmp_candidates/

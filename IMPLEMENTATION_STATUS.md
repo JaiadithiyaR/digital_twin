@@ -1601,34 +1601,59 @@ No module work is otherwise required by prompt.md's core architecture — all 19
 D1 + D2 remain implemented, tested, AND genuinely wired into one real continuous loop. What
 remains:
 
-1. **Live-API success validation (the one genuinely new task this pivot surfaces)**: a real
-   `GOOGLE_API_KEY`/`GEMINI_API_KEY` has never been configured in this environment. Every
-   LLM-dependent path has been validated either against a mocked transport or a real transport
-   that genuinely failed at auth (a real, well-formed `400 API_KEY_INVALID` from Google's own
-   servers — see Phase 11's entry) — never yet a genuinely successful live completion. Once a real
-   key is available: re-run `tests/unit/test_google_client.py::test_live_api_smoke_if_key_configured`
-   (currently auto-skipped), and re-run `scripts/run_orchestrator_demo.py`/`run_e2e_demo.py` to
-   observe a genuine (non-fallback) Decision & Root-Cause Analysis Agent call, and ideally a real
-   `regenerate`/`expand_scope` cycle (never yet observed with genuine LLM-generated code, only
-   with hand-authored stand-ins per this project's established mocked-transport testing
-   convention).
-2. A `DTModelRegistry` hot-swap/replace primitive so an ACCEPTed recalibration candidate actually
+1. **Live-API success validation — COMPLETE.** A real `GOOGLE_API_KEY` is now configured; see the
+   LLM Infrastructure entry's "Live-API SUCCESS validation" note for the genuine successful
+   Decision & Root-Cause Analysis Agent call observed (recalibrate, confidence=0.88, grounded
+   root-cause analysis). A genuinely successful `regenerate` AND `expand_scope` cycle — real
+   LLM-generated code, sandboxed, registered, and verified, never a hand-authored stand-in — has
+   ALSO now been observed for real via `scripts/demo_regeneration.py`/`scripts/demo_expand_scope.py`
+   (see item 2 below); the free tier's 20-request/model/day quota limits how often these can be
+   re-run against the checked-in `gemini-3.6-flash` model on any given day, which is an
+   operational constraint, not a code gap.
+2. **Standalone single-agent demo scripts — added this revision.** `scripts/demo_recalibration.py`,
+   `scripts/demo_regeneration.py`, `scripts/demo_expand_scope.py` each build a real, isolated
+   bootstrap-vs-live D1 split (production trained on an earlier/smaller telemetry population never
+   fed into the live D1Store the agent reads from — a fair, realistic before/after comparison, not
+   an in-sample one) and run one real, complete agent -> Module 17 verification cycle, printing a
+   human-readable summary. All three genuinely exercise the newly-wired RAG context (item 3 below).
+   Regeneration and expand-scope require a real `GOOGLE_API_KEY`; recalibration works with or
+   without one (its LLM use is optional). All three were run for real this revision — regeneration
+   and expand-scope's full LLM+sandbox+verification path was independently confirmed against an
+   alternate Gemini model once the primary model's own daily quota was exhausted by this same
+   validation session (documented in-code); a real, previously-missing `dependency_output_fields`
+   wiring gap in the expand-scope demo was found and fixed this way (the LLM's own design
+   proposal may legitimately choose to depend on an existing component, which the demo must map
+   to that component's `OUTPUT_FIELD` before `with_dependency_ground_truth` can populate it) — see
+   the script's own in-code comments for the full writeup, including why expand-scope's demo
+   deliberately does NOT pre-warm `FidelityEvaluator` under a guessed component name (the LLM
+   names the new component itself; `fidelity_after=None` -> REJECT for a genuinely first-ever new
+   component is the correct, documented Module 17 behavior, not a script bug).
+3. **RAG wired into Modules 15/16 — COMPLETE this revision.** `regeneration_agent.py`'s and
+   `expand_scope_agent.py`'s `_build_context()` previously hardcoded "RAG context: not available —
+   Module 18 (RAG Knowledge Base) is not built yet"; both now accept an optional
+   `rag_knowledge_base` parameter on their main entrypoint (mirroring `verification_agent.py`'s
+   and `lifecycle_agent.py`'s own established call-time-injection convention, not constructor
+   injection) and genuinely retrieve via a new `_retrieve_rag_context()` method on each agent —
+   gracefully degrading to an honest "not available"/"unavailable: ..." string, never fabricated,
+   exactly like every other RAG consumer in this codebase. `src/main.py` now passes
+   `rag_knowledge_base=self.rag_kb` into both `agent.regenerate()` and `agent.expand_scope()`
+   calls. Verified via new unit tests in `tests/unit/test_regeneration_agent.py`/
+   `tests/unit/test_expand_scope_agent.py` (retrieved content reaches the prompt; an unavailable
+   knowledge base degrades honestly and never crashes) and via the real demo scripts in item 2,
+   which confirmed real retrieval against this repo's actual ingested `rag_data/` corpus (33
+   chunks) reaches the real LLM prompt.
+4. A `DTModelRegistry` hot-swap/replace primitive so an ACCEPTed recalibration candidate actually
    takes over live serving without a process restart — currently only `ModelRegistry` (Concept C,
    the versioned artifact store) is updated on promotion, not the LIVE in-memory serving registry.
-3. A vetted dynamic-loading path specifically for regenerate/expand_scope candidates (materially
-   harder than (2) — untrusted LLM-generated code, flagged by Modules 15/16/17 since before this
+5. A vetted dynamic-loading path specifically for regenerate/expand_scope candidates (materially
+   harder than (4) — untrusted LLM-generated code, flagged by Modules 15/16/17 since before this
    module existed).
-4. Revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
+6. Revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
    Module 7, still not done — the longest-standing open item in this project).
-5. Update Modules 15/16's `_build_context()` to genuinely retrieve from `RagKnowledgeBase` instead
-   of their still-hardcoded "RAG context: not available — Module 18 (RAG Knowledge Base) is not
-   built yet" placeholder — genuinely stale now that D2 exists and Module 13's own
-   `decision_context.py` proves the real retrieval pattern (flagged by D2, still not done,
-   unrelated to this pivot).
-6. A real component-scoped adaptation lock implementing `config.adaptation.lock_policy`'s
+7. A real component-scoped adaptation lock implementing `config.adaptation.lock_policy`'s
    queue/coalesce/defer semantics for genuinely concurrent triggers (this orchestrator is safe
    today because it never overlaps adaptations, which is stronger-than-required but not yet the
    DESIGNED policy).
-7. A populated `tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter
+8. A populated `tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter
    (Module 1) once both happen to be exercised in the same session — nothing in `src/main.py` is
    NS-3-specific, this is purely an untried combination, not a known gap.

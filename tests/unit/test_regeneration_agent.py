@@ -24,6 +24,7 @@ from src.dt_models.d1_model_store import D1Store
 from src.dt_models.throughput import ThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
+from src.rag.rag_kb import RetrievedChunk
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
@@ -108,6 +109,17 @@ class _FakeLLMClient:
             return self._responses[len(self.calls) - 1]
         source = self._source_map[len(self.calls)]
         return schema(class_name="RebuiltThroughput", source_code=source, reasoning=f"attempt {len(self.calls)}")
+
+
+class _FakeRagKb:
+    def __init__(self, chunks):
+        self.is_available = True
+        self._chunks = chunks
+        self.queries: list[str] = []
+
+    def retrieve(self, query, *, category=None, top_k=None):
+        self.queries.append(query)
+        return self._chunks
 
 
 def _clean_record(ue_id: str, cell_id: str, timestamp: datetime, **overrides) -> CleanTelemetryRecord:
@@ -304,4 +316,59 @@ def test_prompt_includes_current_source_and_drift_context(tmp_path):
     prompt = llm.calls[0]
     assert "class ThroughputModel" in prompt  # current production source code included
     assert "severity 0.87" in prompt
-    assert "Module 18 (RAG Knowledge Base) is not built yet" in prompt
+    assert "not available" in prompt  # no rag_knowledge_base supplied -> honestly reported, never faked
+
+
+def test_rag_context_is_retrieved_and_reaches_the_prompt(tmp_path):
+    store = _build_store(tmp_path)
+    registry, _ = _bootstrap_registry(tmp_path, store)
+    llm = _FakeLLMClient(source_map={1: VALID_SOURCE})
+    agent = _agent(tmp_path, store, registry, llm)
+    chunk = RetrievedChunk(
+        text="Recalibration is preferred over regeneration for isolated parameter drift.",
+        category="policies", source="config/settings.yaml", document_id="policies", chunk_index=0,
+        version="v1", distance=0.1,
+    )
+    rag_kb = _FakeRagKb([chunk])
+
+    agent.regenerate(
+        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        rag_knowledge_base=rag_kb,
+    )
+
+    assert rag_kb.queries  # the agent genuinely called retrieve(), not a stub
+    prompt = llm.calls[0]
+    assert "Recalibration is preferred over regeneration" in prompt
+    assert "[policies/config/settings.yaml]" in prompt
+
+
+def test_no_rag_knowledge_base_reports_not_available_and_never_crashes(tmp_path):
+    store = _build_store(tmp_path)
+    registry, _ = _bootstrap_registry(tmp_path, store)
+    llm = _FakeLLMClient(source_map={1: VALID_SOURCE})
+    agent = _agent(tmp_path, store, registry, llm)
+
+    result = agent.regenerate(
+        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        rag_knowledge_base=None,
+    )
+
+    assert result.version.status == "candidate"  # never crashes without a knowledge base
+    assert "not available" in llm.calls[0]
+
+
+def test_unavailable_rag_knowledge_base_degrades_honestly(tmp_path):
+    store = _build_store(tmp_path)
+    registry, _ = _bootstrap_registry(tmp_path, store)
+    llm = _FakeLLMClient(source_map={1: VALID_SOURCE})
+    agent = _agent(tmp_path, store, registry, llm)
+    rag_kb = _FakeRagKb([])
+    rag_kb.is_available = False
+
+    agent.regenerate(
+        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        rag_knowledge_base=rag_kb,
+    )
+
+    assert not rag_kb.queries  # is_available=False must short-circuit before any retrieve() call
+    assert "not available" in llm.calls[0]

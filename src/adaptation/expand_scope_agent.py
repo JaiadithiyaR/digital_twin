@@ -10,7 +10,9 @@ Module 15's `drift_context`.
 **Sixteen-step mapping (prompt.md §27), mirroring Modules 14/15's docstring convention**:
     1-5. inspect the component registry / interface / existing components / telemetry+features /
          RAG context -> `_build_context()` (identical spirit to Module 15's `_build_context`,
-         reusing `DTModelRegistry` — Module 5 — this time, not just `ModelRegistry`)
+         reusing `DTModelRegistry` — Module 5 — this time, not just `ModelRegistry`; RAG context is
+         now genuinely retrieved via `_retrieve_rag_context()` when a knowledge base is supplied,
+         same pattern as Module 15)
     6-9. determine a suitable new component, derive its inputs/output, define feature-extraction
          requirements -> `_propose_design()`, a DESIGN LLM call producing a structured
          `_ProposedComponentDesign` (component_name, target_column, dependencies,
@@ -85,6 +87,7 @@ from src.adaptation.data_selection import (
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
 from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
+from src.rag.rag_kb import RagUnavailableError
 from src.sandbox.executor import SandboxExecutor, SandboxResult
 
 if TYPE_CHECKING:
@@ -93,6 +96,7 @@ if TYPE_CHECKING:
     from src.dt_models.d1_model_store import D1Store
     from src.dt_models.model_registry import DTModelRegistry
     from src.llm.google_client import GoogleClient
+    from src.rag.rag_kb import RagKnowledgeBase
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +192,7 @@ class ExpandScopeAgent:
         window_hours: float | None = None,
         held_out_fraction: float = 0.2,
         expand_scope_context: str | None = None,
+        rag_knowledge_base: "RagKnowledgeBase | None" = None,
     ) -> ExpandScopeResult:
         """Design, implement, sandbox, and register a genuinely NEW DT component.
 
@@ -218,8 +223,9 @@ class ExpandScopeAgent:
                 f"need >= {min_rows} (config.adaptation.expand_scope.min_training_rows)"
             )
 
-        # 2, 4, 5. interface + telemetry/feature context + RAG (unavailable, reported honestly)
-        context = self._build_context(existing_components, example_instance, history, expand_scope_context)
+        # 2, 4, 5. interface + telemetry/feature context + RAG (genuinely retrieved, or honestly
+        # reported as unavailable — see `_retrieve_rag_context`)
+        context = self._build_context(existing_components, example_instance, history, expand_scope_context, rag_knowledge_base)
 
         # 6-9. propose + validate a NEW component design (self-correcting on validation failure)
         design, design_attempts = self._propose_and_validate_design(context, existing_component_names, window_df)
@@ -374,6 +380,7 @@ class ExpandScopeAgent:
         example_instance: "DTComponent",
         history: pd.DataFrame,
         expand_scope_context: str | None,
+        rag_knowledge_base: "RagKnowledgeBase | None",
     ) -> dict[str, Any]:
         try:
             example_source = inspect.getsource(type(example_instance))
@@ -397,8 +404,25 @@ class ExpandScopeAgent:
             "feature_statistics": feature_statistics,
             "available_columns": available_columns,
             "expand_scope_context": expand_scope_context or "not provided",
-            "rag_context": "not available — Module 18 (RAG Knowledge Base) is not built yet",
+            "rag_context": self._retrieve_rag_context(expand_scope_context, rag_knowledge_base),
         }
+
+    def _retrieve_rag_context(self, expand_scope_context: str | None, rag_knowledge_base: "RagKnowledgeBase | None") -> str:
+        """Read-only RAG retrieval, gracefully degrading to an honest 'not available'/'unavailable'
+        string — never fabricated content — mirroring `regeneration_agent.py`'s (and
+        `verification_agent.py`'s/`lifecycle_agent.py`'s) own established RAG-consultation pattern."""
+        if rag_knowledge_base is None or not rag_knowledge_base.is_available:
+            return "not available"
+        query = "digital twin component design patterns for a network phenomenon not yet represented by any existing component"
+        if expand_scope_context:
+            query += f" (context: {expand_scope_context})"
+        try:
+            chunks = rag_knowledge_base.retrieve(query, top_k=3)
+        except RagUnavailableError as exc:
+            return f"unavailable: {exc}"
+        if not chunks:
+            return "no relevant knowledge retrieved"
+        return "; ".join(f"[{c.category}/{c.source}] {c.text[:400]}" for c in chunks)
 
     # --- steps 6-9: design proposal + deterministic validation --------------------------------
 

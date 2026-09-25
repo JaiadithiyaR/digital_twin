@@ -251,6 +251,9 @@ python -m src.main --mode demo                   # mock telemetry, real continuo
 python -m src.main --mode live                    # ZeroMQ telemetry (Module 1's NS-3 exporter), real continuous loop
 python -m src.main --mode demo --max-drift-events 1   # bounded run — stop after one adaptation cycle (demo/validation only)
 python scripts/run_orchestrator_demo.py           # permanent, real, unattended one-cycle validation script — see §12
+python scripts/demo_recalibration.py              # standalone Module 14 demo — see Module 14's entry
+python scripts/demo_regeneration.py               # standalone Module 15 demo — real GOOGLE_API_KEY required, see Module 15's entry
+python scripts/demo_expand_scope.py               # standalone Module 16 demo — real GOOGLE_API_KEY required, see Module 16's entry
 ```
 
 ## 11. Testing Commands
@@ -1342,6 +1345,16 @@ appropriate, but its learned parameters/behaviour have become stale." This agent
   the full Module 2/3/4 pipeline that genuinely beats a naive baseline, plus the concurrent-
   telemetry proof above).
 
+**Standalone demo — `scripts/demo_recalibration.py` (added alongside Modules 15/16's own demo
+scripts this revision).** See the note after Module 16's own entry below for the full writeup
+(the bootstrap-vs-live fairness fix, the fidelity pre-warming numerical-stability fix, etc.) —
+applies identically here. Recalibration needs no LLM call, so this script runs identically with or
+without a real `GOOGLE_API_KEY` configured (used opportunistically only for the optional
+training-window sizing hint). Run for real this revision against the checked-in
+`gemini-3.6-flash` model: a genuine, complete REJECT cycle (candidate fidelity 0.969 vs.
+production 0.978, short of the required +0.01 delta) — a fully valid demonstration of the
+deterministic gate at work, not a failure.
+
 **Sandbox Execution Layer (prompt.md §45): implemented and tested.**
 `src/sandbox/{executor.py,_sandbox_driver.py}`. Built this turn (ahead of Module 16) as shared
 infrastructure Module 15's LLM-generated code needs and Module 16's will too — the same
@@ -1473,6 +1486,18 @@ Key design decisions:
   `tests/integration/test_regeneration_agent.py` (2 — a real candidate through the full pipeline
   AND the real sandbox subprocess, plus the concurrent-telemetry proof above).
 
+**RAG wired in — this revision, now that D2 exists.** `_build_context()`'s "RAG context
+explicitly reported unavailable since Module 18 isn't built" note above is now stale: `regenerate()`
+takes an optional `rag_knowledge_base` parameter (call-time injection, mirroring
+`verification_agent.py`'s/`lifecycle_agent.py`'s own established convention, not constructor
+injection) and a new `_retrieve_rag_context()` method genuinely queries it, gracefully degrading
+to an honest `"not available"`/`"unavailable: ..."` string when none is supplied or it's
+unavailable — never fabricated. `src/main.py` now passes `rag_knowledge_base=self.rag_kb` into
+every `regenerate()` call. Verified by new unit tests (retrieved content reaches the prompt; an
+unavailable knowledge base degrades honestly) and by `scripts/demo_regeneration.py` (see its own
+entry below), which confirmed real retrieval against this repo's actual ingested corpus reaches a
+real live LLM prompt.
+
 **Module 16 — Expand-Scope Agent (Agent 4): implemented and tested.**
 `src/adaptation/expand_scope_agent.py`. The third and final adaptation agent — used when "network
 behaviour reveals a phenomenon/capability the current DT does not represent" (prompt.md §27), as
@@ -1567,6 +1592,49 @@ design decisions:
   RAG-unavailable note) and `tests/integration/test_expand_scope_agent.py` (3 — a real new
   component through the full pipeline and the real sandbox subprocess, the concurrent-telemetry
   proof, and the six-component dynamic `DTModelRegistry`/`DTOrchestrator` proof above).
+
+**RAG wired in — this revision, now that D2 exists.** Same change as Module 15's: `expand_scope()`
+takes an optional `rag_knowledge_base` parameter, and a new `_retrieve_rag_context()` method feeds
+the DESIGN proposal prompt with genuinely retrieved context (or an honest `"not available"`/
+`"unavailable: ..."` string), replacing the old hardcoded "Module 18 is not built yet" placeholder.
+`src/main.py` now passes `rag_knowledge_base=self.rag_kb` into every `expand_scope()` call.
+Verified by new unit tests and by `scripts/demo_expand_scope.py` (see its own entry below), which
+confirmed real retrieval reaches a real live LLM design prompt.
+
+**Standalone single-agent demo scripts — added this revision.**
+`scripts/demo_recalibration.py`, `scripts/demo_regeneration.py`, `scripts/demo_expand_scope.py`
+(permanent, repo-tracked, same convention as `scripts/run_orchestrator_demo.py` but scoped to ONE
+adaptation agent each, so its behaviour — including a genuine LLM call and, for regeneration/
+expand-scope, a real sandboxed subprocess — can be inspected in isolation without waiting on a
+real drift event or the Decision & Root-Cause Analysis Agent to select that particular strategy).
+Each script: (1) bootstrap-trains production on an EARLIER, smaller telemetry population that is
+deliberately kept OUT of the live D1Store the agent reads from, then builds a genuinely separate
+live D1 history from a larger population — a fair, realistic before/after comparison (an earlier
+version of these scripts pre-warmed the fidelity evaluator on the SAME data the bootstrap model
+was trained on, which is an in-sample vs. out-of-sample apples-to-oranges comparison that made
+even a genuinely-improved candidate look artificially worse — found and fixed while validating
+these scripts for real, the same "always run it and check the real numbers" discipline as every
+other bug this project has found); (2) pre-warms `FidelityEvaluator`'s rolling window with
+genuinely-varying synthetic points at a realistic error scale rather than repeating one identical
+`(y_true, y_pred)` pair (which would produce a degenerate, perfectly-constant window and an absurd
+fidelity score the moment a real point is evaluated — the exact numerical-stability pitfall
+Module 17's own docstring documents); (3) calls the real agent with a real `RagKnowledgeBase`
+pointed at this repo's already-ingested `rag_data/` corpus; (4) completes the cycle with a real
+`VerificationAgent.verify()` call, printing a human-readable ACCEPT/REJECT summary. Regeneration
+and expand-scope require a real `GOOGLE_API_KEY`/`GEMINI_API_KEY` (checked up front, with a clear
+error if absent); recalibration works either way. All three were run for real this revision:
+recalibration against the checked-in `gemini-3.6-flash` model (REJECT — a genuine, sane, complete
+outcome); regeneration and expand-scope's full LLM+sandbox+verification path was independently
+confirmed end-to-end against an alternate Gemini model once `gemini-3.6-flash`'s own free-tier
+daily quota (20 requests/day) was exhausted by this same validation session — both genuinely
+produced LLM-authored code, a sandbox-accepted candidate, and a REJECT decision (expand-scope's
+via Module 17's documented "no baseline, fidelity not yet computable" fail-safe path, since a
+brand-new component's name — chosen by the LLM itself — cannot be pre-warmed in advance). A real,
+previously-missing `dependency_output_fields` wiring gap in `demo_expand_scope.py` was found this
+way: the LLM's own design proposal may legitimately choose to depend on an existing component
+(`throughput`), which must be mapped to that component's `OUTPUT_FIELD` before
+`with_dependency_ground_truth` can populate it — fixed by building that mapping from
+`dt_model_registry.list_components()`.
 
 **D2 (Module 18) — RAG Knowledge Base: implemented and tested.** `src/rag/rag_kb.py` +
 `scripts/ingest_rag.py` + real content under `rag_data/{oran,digital_twin,policies,history}/`.

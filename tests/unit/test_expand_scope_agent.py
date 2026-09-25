@@ -29,6 +29,7 @@ from src.dt_models.model_registry import DTModelRegistry
 from src.dt_models.throughput import ThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
+from src.rag.rag_kb import RetrievedChunk
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
@@ -122,6 +123,17 @@ class _FakeLLMClient:
         if self._implementations is not None:
             return self._implementations[len(self.implementation_calls) - 1]
         return schema(class_name="SinrQualityModel", source_code=VALID_SOURCE, reasoning="linear model")
+
+
+class _FakeRagKb:
+    def __init__(self, chunks):
+        self.is_available = True
+        self._chunks = chunks
+        self.queries: list[str] = []
+
+    def retrieve(self, query, *, category=None, top_k=None):
+        self.queries.append(query)
+        return self._chunks
 
 
 def _clean_record(ue_id: str, cell_id: str, timestamp: datetime, **overrides) -> CleanTelemetryRecord:
@@ -379,4 +391,39 @@ def test_design_prompt_includes_existing_components_and_rag_note(tmp_path):
     prompt = llm.design_calls[0]
     assert '"component_name": "throughput"' in prompt
     assert "SINR anomaly" in prompt
-    assert "Module 18 (RAG Knowledge Base) is not built yet" in prompt
+    assert "not available" in prompt  # no rag_knowledge_base supplied -> honestly reported, never faked
+
+
+def test_rag_context_is_retrieved_and_reaches_the_design_prompt(tmp_path):
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    llm = _FakeLLMClient()
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    chunk = RetrievedChunk(
+        text="SINR quality prediction supports proactive handover decisions in O-RAN.",
+        category="oran", source="https://docs.o-ran-sc.org/", document_id="oran", chunk_index=0,
+        version="v1", distance=0.1,
+    )
+    rag_kb = _FakeRagKb([chunk])
+
+    agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="SINR anomaly", rag_knowledge_base=rag_kb)
+
+    assert rag_kb.queries  # the agent genuinely called retrieve(), not a stub
+    prompt = llm.design_calls[0]
+    assert "SINR quality prediction supports proactive handover" in prompt
+    assert "[oran/https://docs.o-ran-sc.org/]" in prompt
+
+
+def test_unavailable_rag_knowledge_base_degrades_honestly(tmp_path):
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    llm = _FakeLLMClient()
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    rag_kb = _FakeRagKb([])
+    rag_kb.is_available = False
+
+    result = agent.expand_scope(_example_factory(), window_hours=48, rag_knowledge_base=rag_kb)
+
+    assert not rag_kb.queries  # is_available=False must short-circuit before any retrieve() call
+    assert result.version.status == "candidate"  # never crashes without usable RAG
+    assert "not available" in llm.design_calls[0]

@@ -467,7 +467,8 @@ class ContinuousOrchestrator:
             elif action_name == "regenerate":
                 agent = RegenerationAgent(settings, self.d1_store, self.model_registry, self.llm_client, self.sandbox_executor, fidelity_evaluator=None)
                 agent_result = agent.regenerate(
-                    component_factory, target_column, dependency_output_fields=_OUTPUT_FIELDS, drift_context=drift_context
+                    component_factory, target_column, dependency_output_fields=_OUTPUT_FIELDS, drift_context=drift_context,
+                    rag_knowledge_base=self.rag_kb,
                 )
                 window_hours = settings.adaptation.regeneration.training_window_hours
             else:  # expand_scope
@@ -476,7 +477,8 @@ class ContinuousOrchestrator:
                     fidelity_evaluator=None,
                 )
                 agent_result = agent.expand_scope(
-                    component_factory, dependency_output_fields=_OUTPUT_FIELDS, expand_scope_context=drift_context
+                    component_factory, dependency_output_fields=_OUTPUT_FIELDS, expand_scope_context=drift_context,
+                    rag_knowledge_base=self.rag_kb,
                 )
                 window_hours = settings.adaptation.expand_scope.training_window_hours
         except (RecalibrationError, RegenerationError, ExpandScopeError) as exc:

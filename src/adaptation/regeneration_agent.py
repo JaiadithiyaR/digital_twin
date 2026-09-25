@@ -12,8 +12,9 @@ does not decide *whether* to regenerate — PPO already decided that; it only ex
        `inspect.getsource()` on the currently-registered production class (prompt.md §25)
     3. gather regeneration context              -> `_build_context()`: current metadata, recent
        feature statistics, error patterns (residuals of the CURRENT production model on a held-out
-       window), fidelity metrics, drift context (caller-supplied), RAG context (Module 18 not
-       built yet — explicitly reported as unavailable, never faked)
+       window), fidelity metrics, drift context (caller-supplied), RAG context (Module 18, now
+       wired — genuinely retrieved via `_retrieve_rag_context()` when a knowledge base is
+       supplied, honestly reported as unavailable/empty otherwise, never faked)
     4. generate candidate source via the LLM     -> `_generate_candidate()`, using the centralized
        `GoogleClient` built for this project ("Use the direct Google AI (Gemini) API" per
        prompt.md §24 — the centralized client where LLM-assisted pipeline generation is needed)
@@ -76,6 +77,7 @@ from src.adaptation.data_selection import (
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
 from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
+from src.rag.rag_kb import RagUnavailableError
 from src.sandbox.executor import SandboxExecutor, SandboxResult
 
 if TYPE_CHECKING:
@@ -83,6 +85,7 @@ if TYPE_CHECKING:
     from src.dt_models.base import DTComponent
     from src.dt_models.d1_model_store import D1Store
     from src.llm.google_client import GoogleClient
+    from src.rag.rag_kb import RagKnowledgeBase
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +168,7 @@ class RegenerationAgent:
         window_hours: float | None = None,
         held_out_fraction: float = 0.2,
         drift_context: str | None = None,
+        rag_knowledge_base: "RagKnowledgeBase | None" = None,
     ) -> RegenerationResult:
         """Rebuild `component_factory()`'s component's pipeline from scratch via LLM-generated,
         sandboxed code, and register the accepted result as a new candidate version.
@@ -214,7 +218,9 @@ class RegenerationAgent:
         # REQUIRED_FEATURES, exactly like every existing DTComponent already does internally. This
         # is what lets a candidate legitimately redeclare REQUIRED_FEATURES/DEPENDENCIES: the
         # caller never has to know in advance what the rebuilt pipeline will actually use.
-        context = self._build_context(current_instance, current_version, history, held_out_df, held_out_target, drift_context)
+        context = self._build_context(
+            current_instance, current_version, history, held_out_df, held_out_target, drift_context, rag_knowledge_base
+        )
 
         # 3-6: generate -> sandbox -> self-correct on rejection, up to max_llm_iterations.
         max_attempts = self._settings.adaptation.regeneration.max_llm_iterations
@@ -360,10 +366,12 @@ class RegenerationAgent:
         held_out_df: pd.DataFrame,
         held_out_target: pd.Series,
         drift_context: str | None,
+        rag_knowledge_base: "RagKnowledgeBase | None",
     ) -> dict[str, Any]:
         """Everything prompt.md §25 lists the LLM may receive, gathered from real sources — never
-        fabricated. RAG context (Module 18) is explicitly reported as unavailable rather than
-        silently omitted, since a future reader should know it wasn't just forgotten."""
+        fabricated. RAG context (Module 18) is genuinely retrieved when a knowledge base is
+        supplied, and honestly reported as unavailable/empty otherwise — never silently omitted,
+        since a future reader should know it wasn't just forgotten."""
         try:
             current_source = inspect.getsource(type(current_instance))
         except (OSError, TypeError):
@@ -398,13 +406,33 @@ class RegenerationAgent:
             "feature_statistics": feature_statistics,
             "error_patterns": error_patterns,
             "drift_context": drift_context or "not provided",
-            "rag_context": "not available — Module 18 (RAG Knowledge Base) is not built yet",
+            "rag_context": self._retrieve_rag_context(current_instance.COMPONENT_NAME, drift_context, rag_knowledge_base),
             "available_columns": available_columns,
             "constraints": {
                 "min_training_rows": self._settings.adaptation.regeneration.min_training_rows,
                 "sandbox_timeout_seconds": self._settings.sandbox.timeout_seconds,
             },
         }
+
+    def _retrieve_rag_context(
+        self, component: str, drift_context: str | None, rag_knowledge_base: "RagKnowledgeBase | None"
+    ) -> str:
+        """Read-only RAG retrieval, gracefully degrading to an honest 'not available'/'unavailable'
+        string — never fabricated content — mirroring `verification_agent.py`'s and
+        `lifecycle_agent.py`'s own established RAG-consultation pattern (CLAUDE.md §7 / prompt.md
+        §61: RAG unavailable -> continue without it, never invent a plausible answer)."""
+        if rag_knowledge_base is None or not rag_knowledge_base.is_available:
+            return "not available"
+        query = f"pipeline architecture and modeling guidance for regenerating the {component!r} digital twin component"
+        if drift_context:
+            query += f" (context: {drift_context})"
+        try:
+            chunks = rag_knowledge_base.retrieve(query, top_k=3)
+        except RagUnavailableError as exc:
+            return f"unavailable: {exc}"
+        if not chunks:
+            return "no relevant knowledge retrieved"
+        return "; ".join(f"[{c.category}/{c.source}] {c.text[:400]}" for c in chunks)
 
     def _generate_candidate(
         self,
