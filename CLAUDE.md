@@ -259,10 +259,10 @@ python scripts/demo_expand_scope.py               # standalone Module 16 demo �
 ## 11. Testing Commands
 
 ```bash
-.venv/bin/python -m pytest tests/unit -v          # 466 collected: 465 passed, 1 skipped (live Google AI smoke test, no real key configured) — confirmed clean this revision (post LLM/RL design pivot)
-.venv/bin/python -m pytest tests/integration -v   # 42 passed (Module 2 pipeline + Module 3 continuous sync + D1 wiring + orchestrator<-D1 + all five DT models' training+orchestrator + fidelity engine vs. real predictions, mock + real zmq + Module 11 drift pipeline vs. real config + Module 13's rebuilt Decision & Root-Cause Analysis Agent exercised via the real full-cycle proof + Module 14 real candidate + concurrent-telemetry proof + Module 15 real sandboxed candidate + concurrent-telemetry proof + Module 16 real sandboxed new component + concurrent-telemetry proof + six-component dynamic orchestrator proof + D2 real rag_data/ corpus ingestion + genuine semantic embeddings + Module 17 real candidate verified end-to-end + Module 19 real full trigger->decision-agent->agent->verification->lifecycle cycle + Phase 11 real orchestrator cycle w/ continuous-telemetry proof) — confirmed clean this revision
+.venv/bin/python -m pytest tests/unit -v          # 471 collected (was 466 pre-RAG-integration; +5 new tests for Modules 15/16's RAG wiring). test_live_api_smoke_if_key_configured now genuinely calls the live API (real GOOGLE_API_KEY configured) rather than auto-skipping — passes when the free tier's 20-request/model/day quota has headroom, genuinely FAILS (never silently skipped) if that day's quota is already exhausted by other real calls made the same day, e.g. by running the demo scripts below repeatedly — this is deliberate test design (prompt.md §0.24: never hide a genuine failure behind a skip), not a bug to "fix" by tolerating 429s
+.venv/bin/python -m pytest tests/integration -v   # 42 passed (Module 2 pipeline + Module 3 continuous sync + D1 wiring + orchestrator<-D1 + all five DT models' training+orchestrator + fidelity engine vs. real predictions, mock + real zmq + Module 11 drift pipeline vs. real config + Module 13's rebuilt Decision & Root-Cause Analysis Agent exercised via the real full-cycle proof + Module 14 real candidate + concurrent-telemetry proof + Module 15 real sandboxed candidate + concurrent-telemetry proof + Module 16 real sandboxed new component + concurrent-telemetry proof + six-component dynamic orchestrator proof + D2 real rag_data/ corpus ingestion + genuine semantic embeddings + Module 17 real candidate verified end-to-end + Module 19 real full trigger->decision-agent->agent->verification->lifecycle cycle + Phase 11 real orchestrator cycle w/ continuous-telemetry proof) — confirmed clean this revision, genuinely exercising the real live API via `test_main_orchestrator.py`'s own `load_secrets()`
 .venv/bin/python -m pytest tests/e2e -v           # empty so far
-.venv/bin/python -m pytest tests -q               # 508 total tests collected, 0 collection errors — 507 passing/1 skipped confirmed this revision across two separate clean invocations (tests/unit then tests/integration; this environment intermittently can't sustain one single combined run without its own memory manager killing it — a genuine environment constraint observed repeatedly across this whole project, not a code issue, per prompt.md §0.24's own "report honestly, never fabricate" rule)
+.venv/bin/python -m pytest tests -q               # 513 total tests collected, 0 collection errors — 512 passing/1 genuinely-failing-on-exhausted-daily-quota confirmed this revision across two separate clean invocations (tests/unit then tests/integration; this environment intermittently can't sustain one single combined run without its own memory manager killing it — a genuine environment constraint observed repeatedly across this whole project, not a code issue, per prompt.md §0.24's own "report honestly, never fabricate" rule)
 ```
 
 ## 12. Current State
@@ -1624,17 +1624,28 @@ pointed at this repo's already-ingested `rag_data/` corpus; (4) completes the cy
 and expand-scope require a real `GOOGLE_API_KEY`/`GEMINI_API_KEY` (checked up front, with a clear
 error if absent); recalibration works either way. All three were run for real this revision:
 recalibration against the checked-in `gemini-3.6-flash` model (REJECT — a genuine, sane, complete
-outcome); regeneration and expand-scope's full LLM+sandbox+verification path was independently
-confirmed end-to-end against an alternate Gemini model once `gemini-3.6-flash`'s own free-tier
-daily quota (20 requests/day) was exhausted by this same validation session — both genuinely
-produced LLM-authored code, a sandbox-accepted candidate, and a REJECT decision (expand-scope's
-via Module 17's documented "no baseline, fidelity not yet computable" fail-safe path, since a
-brand-new component's name — chosen by the LLM itself — cannot be pre-warmed in advance). A real,
-previously-missing `dependency_output_fields` wiring gap in `demo_expand_scope.py` was found this
-way: the LLM's own design proposal may legitimately choose to depend on an existing component
-(`throughput`), which must be mapped to that component's `OUTPUT_FIELD` before
-`with_dependency_ground_truth` can populate it — fixed by building that mapping from
-`dt_model_registry.list_components()`.
+outcome). Regeneration and expand-scope were first independently confirmed end-to-end against an
+alternate Gemini model once `gemini-3.6-flash`'s own free-tier daily quota (20 requests/day) was
+exhausted by this same validation session — both genuinely produced LLM-authored code, a
+sandbox-accepted candidate, and a REJECT decision (expand-scope's via Module 17's documented "no
+baseline, fidelity not yet computable" fail-safe path, since a brand-new component's name —
+chosen by the LLM itself — cannot be pre-warmed in advance). A real, previously-missing
+`dependency_output_fields` wiring gap in `demo_expand_scope.py` was found this way: the LLM's own
+design proposal may legitimately choose to depend on an existing component (`throughput`), which
+must be mapped to that component's `OUTPUT_FIELD` before `with_dependency_ground_truth` can
+populate it — fixed by building that mapping from `dt_model_registry.list_components()`. **Once
+the daily quota reset, both were re-run and completed successfully against the actual checked-in
+`gemini-3.6-flash` model too** (a transient real `503 UNAVAILABLE` — Google's servers under high
+demand — was hit and correctly retried/reported along the way, not a code issue): regeneration
+produced a genuine LLM-authored ensemble candidate (HistGradientBoosting/GradientBoosting/
+ExtraTrees with engineered physical-domain features) on its first attempt, sandbox-accepted,
+REJECTed by verification for a marginal +0.0015 fidelity gain (short of the required +0.01
+delta); expand-scope proposed a genuinely new `sinr` component (predicting `sinr_db` from
+RSRP/RSRQ/PRB-utilization/mobility features) on its first design AND first implementation attempt
+— no self-correction needed either time — sandbox-accepted, REJECTed via the same documented
+"no baseline yet" fail-safe path. Confirms this whole pipeline (RAG retrieval included) genuinely
+works end-to-end against the project's own actually-configured model, not just an ad hoc
+substitute.
 
 **D2 (Module 18) — RAG Knowledge Base: implemented and tested.** `src/rag/rag_kb.py` +
 `scripts/ingest_rag.py` + real content under `rag_data/{oran,digital_twin,policies,history}/`.
