@@ -766,9 +766,17 @@ that this same clamping behavior is intentional and tested with synthetic data t
   `tests/integration/test_main_orchestrator.py`/`scripts/run_orchestrator_demo.py` (see Phase
   11's entry below — this one genuinely hit Google's live servers and received a real
   `400 API_KEY_INVALID` response, correctly classified and gracefully degraded).
-- Known blockers: none for the rebuild itself. Live-API *success* validation (a real key
-  returning a real completion, never yet observed) remains genuinely pending — see Overall Next
-  Task.
+- Known blockers: none. **Live-API success validation — genuinely completed** (real
+  `GOOGLE_API_KEY` configured): observed a real, successful `DecisionAgent.decide()` call
+  (strategy `recalibrate`, confidence=0.88, root-cause analysis genuinely grounded in that run's
+  real telemetry figures, not template text). Also surfaced two real, previously-undetected
+  issues while validating against the real live API — see the LLM Infrastructure entry's
+  "Live-API SUCCESS validation" note for full detail: (1) the configured model
+  (`gemini-2.5-flash`) had been deprecated server-side, fixed by switching to `gemini-3.6-flash`
+  after verifying it directly; (2) `LifecycleAgent` was never actually receiving `self.llm_client`
+  in `src/main.py`'s wiring, fixed with a regression test added. The free tier's daily quota
+  (20 requests/model/day) was exhausted by cumulative testing the same day — correctly classified
+  retryable (429) and gracefully degraded, not a code defect.
 - Last verified command: `.venv/bin/python -m pytest tests/unit/test_decision_context.py
   tests/unit/test_decision_agent.py -v` → `23 passed`.
 
@@ -1385,8 +1393,10 @@ longer exist in this repo — do not cite these numbers as current behavior)</su
   full-cycle-plus-continuous-telemetry proof the demo script performs at full scale, against temp
   storage paths) — both re-run against the rebuilt Module 13, confirmed passing this revision.
 - Known blockers: none for this revision's scope. The hot-swap limitation above is the one open
-  follow-up specific to this module. Live-API *success* validation remains genuinely pending — see
-  Overall Next Task.
+  follow-up specific to this module. Live-API *success* validation is genuinely complete — see the
+  LLM Infrastructure entry's "Live-API SUCCESS validation" note, and the Overall Next Task entry
+  below for what genuinely still needs a real key (a real end-to-end NS-3 demo run has not yet
+  been re-run against a real key at time of writing).
 - Last verified command: `.venv/bin/python -m pytest tests/unit/test_main.py
   tests/integration/test_main_orchestrator.py -v` → 5 passed, 0 failed (this revision); full
   suite → 507 passed, 1 skipped across two clean separate unit/integration invocations (this

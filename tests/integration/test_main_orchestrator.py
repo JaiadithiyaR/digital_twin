@@ -8,12 +8,15 @@ synchronization never stops during that cycle — the same real-background-threa
 thread proof Modules 14/15/16/19 already established for individual agents, applied here to the
 real orchestrator.
 
-No real GOOGLE_API_KEY is configured in this environment — unlike the old PPO design, the decision
-itself now always requires a genuine LLM call, which genuinely fails here (no real key) and
+Reads whatever `GOOGLE_API_KEY`/`GEMINI_API_KEY` is actually configured in this environment's real
+`.env` via `load_secrets()` — if none is set, the decision call genuinely fails and
 `DecisionAgent.decide_safe()` degrades to `config.decision_agent.fallback.default_strategy`
-(`recalibrate`, which needs no LLM to execute) every time, logged at WARNING. The narrowed drift
-severity range is kept only for otherwise-stable test behavior — it no longer influences which
-strategy is selected, since the fallback is severity-independent.
+(`recalibrate`, which needs no LLM to execute), logged at WARNING; if a real key IS set, this test
+genuinely exercises a live decision call (observed real behavior: `recalibrate` selected both with
+and without a real key, so this test's assertions are written to hold either way — never assuming
+which). The narrowed drift severity range is kept only for otherwise-stable test behavior — it no
+longer influences which strategy is selected either way, since the fallback is
+severity-independent and the real decision agent judges the actual context, not just severity.
 """
 
 from __future__ import annotations
@@ -55,6 +58,14 @@ def test_full_orchestrator_cycle_never_stops_telemetry_synchronization(tmp_path)
 
     orchestrator = ContinuousOrchestrator(fast_settings, SECRETS, drift_severity_range_override=(0.05, 0.2))
     orchestrator.initialize()
+
+    # Regression test for a real bug found running the live end-to-end demo against a genuine
+    # GOOGLE_API_KEY: LifecycleAgent.from_settings() was being called BEFORE self.llm_client even
+    # existed, and without passing it at all — so generate_maintenance_report()'s optional
+    # LLM-enhanced prose was silently unreachable forever, regardless of whether a working client
+    # existed, with no warning ever logged (a call that's never attempted can't log a failure).
+    assert orchestrator.lifecycle_agent._llm_client is orchestrator.llm_client  # noqa: SLF001 - read-only wiring check
+
     orchestrator.start()
 
     try:

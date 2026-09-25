@@ -177,7 +177,6 @@ class ContinuousOrchestrator:
         self.model_registry = ModelRegistry.from_settings(settings)
         self.sandbox_executor = SandboxExecutor.from_settings(settings)
         self.fidelity_evaluator = FidelityEvaluator(settings.fidelity)
-        self.lifecycle_agent = LifecycleAgent.from_settings(settings)
 
         try:
             self.llm_client: GoogleClient | None = GoogleClient.from_settings(settings, self._secrets)
@@ -196,6 +195,14 @@ class ContinuousOrchestrator:
         # key is configured (DecisionAgent accepts llm_client=None and degrades via decide_safe()
         # exactly as if a configured client's call had failed).
         self.decision_agent = DecisionAgent.from_settings(settings, self.llm_client)
+        # Real bug found and fixed while validating against a genuine live key: this MUST be
+        # constructed AFTER self.llm_client above and passed it explicitly — LifecycleAgent's own
+        # optional LLM-enhanced maintenance-report prose (prompt.md §38) is unreachable without it,
+        # silently falling back to the deterministic template every time regardless of whether a
+        # working client exists, with no warning ever logged (generate_maintenance_report() only
+        # warns on an LLM call that was actually attempted and failed, never on one that was never
+        # attempted at all).
+        self.lifecycle_agent = LifecycleAgent.from_settings(settings, llm_client=self.llm_client)
 
         self._bootstrap_dt_models()
 

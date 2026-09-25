@@ -218,7 +218,12 @@ rag:
 # src/llm/google_client.py:GoogleClient — never hardcode a model ID or key in agent code.
 # ---------------------------------------------------------------------------
 llm:
-  model: "gemini-2.5-flash" # never a hardcoded deprecated model ID — this is the ONLY place it's set
+  # "gemini-2.5-flash" was tried first (matched this project's original design intent) but a real
+  # live API call against it returned a genuine 404: "This model ... is no longer available to
+  # new users ... use models/gemini-3.6-flash" — verified directly against the real API with a
+  # real key (2026-09-24), not assumed. Never a hardcoded deprecated model ID — this is the ONLY
+  # place it's set.
+  model: "gemini-3.6-flash"
   max_tokens: 8000
   # Unlike the old Anthropic Messages API, google-genai's GenerateContentConfig DOES expose a
   # real temperature control (verified directly against the installed SDK's types.py, not

@@ -1180,16 +1180,45 @@ consumer needed only an import/class-name swap, not a rewrite. Key design decisi
   validation failure then succeeds, raises after exhausting validation retries, and rejects JSON
   missing a required field; both `_safe` wrappers degrade to `None` and log a WARNING on failure;
   and a dedicated test asserts a real-looking API key string never appears in ANY log record.
-  **A subsequent real, unattended end-to-end run** (`scripts/run_orchestrator_demo.py`, this
-  revision) genuinely exercised this client against the REAL live Google AI endpoint with the
-  placeholder key still configured — it received a real, well-formed `400 INVALID_ARGUMENT
-  (API_KEY_INVALID)` response from Google's actual servers, was correctly classified
-  non-retryable, and the caller (Module 13's `DecisionAgent`) correctly degraded to its
-  deterministic fallback, logged at WARNING — genuine evidence the request-construction/
-  auth-header/endpoint/error-classification path is wired correctly end-to-end, even though a
-  valid key was never available to confirm a successful live call. Live-API *success* validation
-  (a real key returning a real completion) is explicitly still pending — see the Overall Next
-  Task entry.
+  **A subsequent real, unattended end-to-end run** (`scripts/run_orchestrator_demo.py`, with only
+  a placeholder key configured) genuinely exercised this client against the REAL live Google AI
+  endpoint — it received a real, well-formed `400 INVALID_ARGUMENT (API_KEY_INVALID)` response
+  from Google's actual servers, was correctly classified non-retryable, and the caller (Module
+  13's `DecisionAgent`) correctly degraded to its deterministic fallback, logged at WARNING.
+
+  **Live-API SUCCESS validation — genuinely completed, real key configured this revision.** Three
+  real, load-bearing findings from actually running against Google's live servers with a real key,
+  none of which could have been discovered any other way (prompt.md §0.24 — "actually run it"):
+  (1) **`gemini-2.5-flash` (this project's originally configured model) returned a real live `404
+  NOT_FOUND`**: "This model ... is no longer available to new users ... use models/
+  gemini-3.6-flash" — the model catalog moved on since this model ID was chosen. Verified the
+  replacement directly (`client.models.list()` + a real `generate_content()` call) before
+  switching `config.llm.model` to `"gemini-3.6-flash"`. (2) **A real, previously-undetected wiring
+  bug**: `src/main.py`'s `initialize()` constructed `self.lifecycle_agent = LifecycleAgent.
+  from_settings(settings)` BEFORE `self.llm_client` even existed, and never passed it at all —
+  `LifecycleAgent`'s own optional LLM-enhanced maintenance-report prose (prompt.md §38) was
+  therefore silently unreachable regardless of whether a working client existed, with no warning
+  ever logged (a call that's never attempted can't log a failure) — invisible under the mocked-
+  transport test suite because those tests construct `LifecycleAgent` directly with an explicit
+  fake client, never through `ContinuousOrchestrator.initialize()`'s own wiring. Fixed by
+  reordering construction and passing `llm_client=self.llm_client` explicitly; a regression
+  assertion (`orchestrator.lifecycle_agent._llm_client is orchestrator.llm_client`) was added to
+  `tests/integration/test_main_orchestrator.py` so this can't silently regress again. (3) **A
+  genuine, successful live Decision & Root-Cause Analysis Agent call was observed**: strategy
+  `recalibrate`, confidence=0.88, with a `root_cause_analysis` genuinely grounded in the real
+  supplied context (citing the actual UE speed, offered load, and throughput figures from that
+  run's real telemetry) — not generic template text. The deterministic verification gate still
+  correctly REJECTed the resulting candidate (fidelity regressed) regardless of the LLM's stated
+  confidence, once again confirming rule 9 holds under genuine (not just adversarial-mocked)
+  live conditions. **A real, external constraint also surfaced**: the free tier's daily quota
+  (`generate_content_free_tier_requests`, limit 20/model/day) was exhausted partway through this
+  same validation session by the cumulative real calls across testing — subsequent calls
+  genuinely received `429 RESOURCE_EXHAUSTED`, correctly classified retryable, correctly degraded
+  to the deterministic fallback after exhausting the retry budget (the configured backoff is too
+  short to outlast a *daily* quota reset, which is expected and appropriate — retrying a daily
+  quota exhaustion for seconds can never succeed; only genuine rate limiting within a request
+  budget is meant to be recovered by this retry loop). Not a code defect — an operational
+  constraint worth knowing before running further live validation the same day.
 
 **Versioned Model Registry (Concept C — prompt.md §46/§29): implemented and tested.**
 `src/registry/model_registry.py`. Built now (ahead of Module 15/16) because the user's explicit
