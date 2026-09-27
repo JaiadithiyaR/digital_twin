@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from src.adaptation.decision_agent import DecisionOutput
@@ -106,6 +107,7 @@ def _regeneration_result(version: ModelVersionMetadata) -> RegenerationResult:
         evaluation_window={"n_rows": 150},
         fidelity_before=0.6,
         fidelity_after=0.85,
+        held_out_df=pd.DataFrame(),  # not read by LifecycleAgent — irrelevant to what this test covers
     )
 
 
@@ -124,6 +126,7 @@ def _expand_scope_result(version: ModelVersionMetadata) -> ExpandScopeResult:
         design_attempts=1, implementation_attempts=1,
         training_window={"n_rows": 800, "window_hours": 48}, evaluation_window={"n_rows": 150},
         fidelity_after=0.7,
+        held_out_df=pd.DataFrame(),  # not read by LifecycleAgent — irrelevant to what this test covers
     )
 
 

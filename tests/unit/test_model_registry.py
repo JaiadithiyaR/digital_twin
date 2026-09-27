@@ -289,3 +289,51 @@ def test_versions_are_independent_across_components(tmp_path):
     assert registry.get_current_version("packet_loss").version_id == "packet_loss-v1"
     assert len(registry.list_versions("throughput")) == 1
     assert len(registry.list_versions("packet_loss")) == 1
+
+
+# --- source_path() / list_component_names() — used by ContinuousOrchestrator's hot-swap path -----
+
+
+def test_source_path_is_none_for_a_recalibration_bootstrap_version(tmp_path):
+    registry = _registry(tmp_path)
+    version = registry.register_version(
+        component_instance=_trained_model(), adaptation_type="bootstrap", parent_version_id=None,
+        training_window={}, evaluation_window={}, evaluation_metrics={}, status="production",
+    )
+    assert registry.source_path(version) is None
+
+
+def test_source_path_resolves_to_the_real_saved_source_file(tmp_path):
+    registry = _registry(tmp_path)
+    artifact = tmp_path / "candidate.joblib"
+    artifact.write_bytes(b"not a real joblib file, just bytes for this path-resolution test")
+    source = tmp_path / "candidate.py"
+    source.write_text("class Rebuilt: pass\n")
+
+    version = registry.register_version_from_artifact(
+        component="throughput", model_class="Rebuilt", artifact_source_path=artifact, source_code_path=source,
+        dependencies=(), feature_schema=(), output_field="throughput_mbps_pred", adaptation_type="regenerate",
+        parent_version_id="throughput-v1", training_window={}, evaluation_window={}, evaluation_metrics={},
+    )
+
+    resolved = registry.source_path(version)
+    assert resolved is not None
+    assert resolved.exists()
+    assert resolved.read_text() == "class Rebuilt: pass\n"
+
+
+def test_list_component_names_returns_every_tracked_component(tmp_path):
+    from src.dt_models.packet_loss import PacketLossModel
+
+    registry = _registry(tmp_path)
+    assert registry.list_component_names() == []
+
+    registry.register_version(
+        component_instance=_trained_model(), adaptation_type="bootstrap", parent_version_id=None,
+        training_window={}, evaluation_window={}, evaluation_metrics={}, status="production",
+    )
+    registry.register_version(
+        component_instance=PacketLossModel.from_settings(SETTINGS), adaptation_type="bootstrap", parent_version_id=None,
+        training_window={}, evaluation_window={}, evaluation_metrics={}, status="candidate",
+    )
+    assert set(registry.list_component_names()) == {"throughput", "packet_loss"}

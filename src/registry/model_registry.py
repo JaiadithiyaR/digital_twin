@@ -223,13 +223,16 @@ class ModelRegistry:
         entirely. Instead this just COPIES the already-produced artifact (and, if given, the
         candidate's source for audit — prompt.md §29) into this registry's managed storage.
 
-        Because the candidate's class was never imported here, this registry cannot later
+        Because the candidate's class was never imported HERE, this registry cannot itself
         reconstruct a live instance of it either (`load_artifact_into` needs an
-        already-constructed instance of the matching class, which no code in this process can
-        safely produce for LLM-generated candidates) — promoting a regenerated/expand-scope
-        version to actually SERVE production predictions is therefore a follow-up concern for
-        whenever Module 17 (verification) and a vetted dynamic-loading path exist, out of scope
-        here. This method only ever creates `"candidate"`-or-explicitly-stated-status records.
+        already-constructed instance of the matching class) — this registry deliberately stays
+        agnostic to how or whether one ever gets constructed. `source_path()` (below) is the read
+        -only hook a caller with its OWN vetted loading path uses to do so: `ContinuousOrchestrator`
+        (`src/main.py`)'s hot-swap mechanism dynamically imports the saved source ONLY after a real
+        ACCEPT (prompt.md §28/§70 rule 10 — never before), the one point in this whole system
+        LLM-generated code is imported into the trusted, long-running process rather than only
+        ever run inside the sandbox subprocess. This method only ever creates
+        `"candidate"`-or-explicitly-stated-status records.
         """
         with self._lock:
             existing = self._versions.get(component, [])
@@ -375,3 +378,21 @@ class ModelRegistry:
         loads") without importing or unpickling it — this registry never trusts an artifact's
         bytes as executable in this process (see `register_version_from_artifact`'s docstring)."""
         return self._models_dir / version.artifact_path
+
+    def source_path(self, version: ModelVersionMetadata) -> Path | None:
+        """Resolve `version`'s saved LLM-generated source file (regenerate/expand_scope only —
+        `None` for a recalibration/bootstrap version, which reuses an already-imported class and
+        was never given its own source file) to an absolute path — same read-only resolution as
+        `artifact_path`, still never imports or executes anything itself. Used by
+        `ContinuousOrchestrator`'s hot-swap path (`src/main.py`) to dynamically load an ACCEPTed
+        candidate's class into live serving for the first time."""
+        if version.source_path is None:
+            return None
+        return self._models_dir / version.source_path
+
+    def list_component_names(self) -> list[str]:
+        """Every component name this registry has EVER tracked at least one version for —
+        including one produced by expand_scope, whose name did not exist when this process first
+        started. Used at boot to restore any such component (see `ContinuousOrchestrator.
+        _bootstrap_dt_models`) alongside the five originally-known ones."""
+        return list(self._versions.keys())

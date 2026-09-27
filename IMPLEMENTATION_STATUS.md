@@ -1148,17 +1148,15 @@ longer exist in this repo — do not cite these numbers as current behavior)</su
   adaptation event (including this module's `VerificationResult`) as an auditable lifecycle
   record plus a human-readable vendor maintenance report (RAG-assisted). Still-open follow-ups,
   unrelated to Module 17's own scope: (1) revisit `LatencyModel.DEPENDENCIES` to add
-  `"packet_loss"` now that Module 8 exists (flagged by Module 7, still not done); (2) update
-  Modules 15/16's `_build_context()` to genuinely retrieve from `RagKnowledgeBase` instead of
-  their hardcoded "RAG context: not available" placeholder (flagged by D2, still not done); (3)
-  wire a verified/promoted candidate into the LIVE `DTModelRegistry`/`DTOrchestrator` so it
-  actually SERVES predictions — this module intentionally only updates `ModelRegistry` (Concept
-  C); Modules 15/16 both flagged that a vetted dynamic-loading path into the live orchestrator is
-  a separate, still-open concern even now that Module 17 (verification) exists, since a
-  regenerated/expand-scope candidate's CLASS was never imported by this process and still can't
-  safely be reconstructed here without a deliberately-hardened loading path; (4) the
-  component-scoped adaptation lock (prompt.md §30) — this module assumed exclusive access per
-  call, a real lock is a follow-up for whenever the main continuous loop exists.
+  `"packet_loss"` now that Module 8 exists (flagged by Module 7, still not done); (2) DONE, see
+  the "RAG wired in" notes on Modules 15/16's own entries below — `_build_context()` now
+  genuinely retrieves from `RagKnowledgeBase` instead of the old hardcoded placeholder; (3) DONE,
+  see CLAUDE.md's "Hot Swap — Live Promotion Without a Restart" entry — a verified/promoted
+  candidate now genuinely takes over the LIVE `DTModelRegistry`/`DTOrchestrator`'s serving via
+  `ContinuousOrchestrator._hot_swap_candidate()`, including a vetted dynamic-loading path for
+  regenerate/expand_scope's LLM-generated class; (4) the component-scoped adaptation lock
+  (prompt.md §30) — this module assumed exclusive access per call, a real lock is a follow-up for
+  whenever the main continuous loop exists.
 
 ## D2 (Module 18) — RAG Knowledge Base
 - [x] Implementation status: `src/rag/rag_kb.py` + `scripts/ingest_rag.py` + real corpus content
@@ -1313,17 +1311,11 @@ longer exist in this repo — do not cite these numbers as current behavior)</su
   data/seed, only the decision layer changed); the resulting `LifecycleRecord` was confirmed to
   contain every one of prompt.md §37's AND §20's fields with correct, non-fabricated values.
 - Next task: **Phase 11 is now also complete** — see its own entry below. All 19 numbered modules
-  + D1 + D2 are implemented, tested, and wired into one real continuous loop. What remains is
-  live-API validation (a real `GOOGLE_API_KEY` has never been configured in this environment —
-  see Overall Next Task). Three still-open follow-ups, unrelated to Module 19's
-  own scope: (1) revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8
-  exists (flagged by Module 7, still not done); (2) update Modules 15/16's `_build_context()` to
-  genuinely retrieve from `RagKnowledgeBase` instead of their hardcoded "RAG context: not
-  available" placeholder (flagged by D2, still not done); (3) a vetted dynamic-loading path for
-  promoting a regenerated/expand-scope candidate into the LIVE `DTModelRegistry`/`DTOrchestrator`
-  so it actually SERVES predictions (flagged by Modules 15/16/17, still not done — `src/main.py`
-  is the natural place this finally gets resolved, since it's the first code that needs a
-  promoted candidate to actually serve).
+  + D1 + D2 are implemented, tested, and wired into one real continuous loop, including live-API
+  validation and hot-swap promotion (see CLAUDE.md's Phase 11 and "Hot Swap" entries — both DONE,
+  not still-pending as earlier revisions of this note said). One still-open follow-up, unrelated
+  to Module 19's own scope: revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that
+  Module 8 exists (flagged by Module 7, still not done — see Overall Next Task).
 
 ---
 
@@ -1429,26 +1421,15 @@ longer exist in this repo — do not cite these numbers as current behavior)</su
   deleting the old data.
 - Next task: none required by prompt.md's core architecture for the LLM/RL design pivot itself —
   all 19 numbered modules + D1 + D2 are implemented, tested, AND wired into one real continuous
-  loop that has been re-validated end-to-end against the rebuilt Module 13. The one genuinely new
-  remaining task the pivot itself surfaces: **live-API success validation** — a real
-  `GOOGLE_API_KEY`/`GEMINI_API_KEY` has never been configured in this environment, so no test or
-  run in this project has yet observed a genuinely successful (non-error) live Google AI response;
-  every "LLM available" path validated so far is either a mocked transport or a real transport
-  that genuinely failed at auth (see `test_live_api_smoke_if_key_configured`, which auto-skips
-  until a real key exists). Remaining, explicitly-scoped follow-ups from before the pivot, still
-  open and unaffected by it: (1) the `DTModelRegistry` hot-swap/replace primitive flagged above,
-  so an ACCEPTed recalibration candidate actually takes over live serving without a process
-  restart; (2) a vetted dynamic-loading path for regenerate/expand_scope candidates specifically;
-  (3) revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged
-  by Module 7, still not done); (4) update Modules 15/16's `_build_context()` to genuinely
-  retrieve from `RagKnowledgeBase` instead of their still-hardcoded "RAG context: not available —
-  Module 18 (RAG Knowledge Base) is not built yet" placeholder — genuinely stale text now (D2
-  exists and Module 13's own `decision_context.py` proves the real retrieval pattern), flagged by
-  D2 originally, still not done, unaffected by and unrelated to this pivot; (5) a real
-  component-scoped adaptation lock (prompt.md §30) for genuine concurrent-trigger handling — this
-  orchestrator processes one trigger fully before the next, which is safe but not yet the
-  "queue/coalesce/defer" policy `config.adaptation.lock_policy` already anticipates; (6)
-  `tests/e2e/` is still empty.
+  loop that has been re-validated end-to-end against the rebuilt Module 13. **Live-API success
+  validation, RAG wiring into Modules 15/16, and hot-swap live promotion — all flagged as open
+  here in earlier revisions of this note — are now DONE**; see CLAUDE.md's own "Live-API SUCCESS
+  validation", "RAG wired in", and "Hot Swap — Live Promotion Without a Restart" entries. Genuinely
+  still-open follow-ups: (1) revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that
+  Module 8 exists (flagged by Module 7, still not done); (2) a real component-scoped adaptation
+  lock (prompt.md §30) for genuine concurrent-trigger handling — this orchestrator processes one
+  trigger fully before the next, which is safe but not yet the "queue/coalesce/defer" policy
+  `config.adaptation.lock_policy` already anticipates; (3) `tests/e2e/` is still empty.
 
 ---
 
@@ -1651,18 +1632,37 @@ remains:
    knowledge base degrades honestly and never crashes) and via the real demo scripts in item 2,
    which confirmed real retrieval against this repo's actual ingested `rag_data/` corpus (33
    chunks) reaches the real LLM prompt.
-4. A `DTModelRegistry` hot-swap/replace primitive so an ACCEPTed recalibration candidate actually
-   takes over live serving without a process restart — currently only `ModelRegistry` (Concept C,
-   the versioned artifact store) is updated on promotion, not the LIVE in-memory serving registry.
-5. A vetted dynamic-loading path specifically for regenerate/expand_scope candidates (materially
-   harder than (4) — untrusted LLM-generated code, flagged by Modules 15/16/17 since before this
-   module existed).
-6. Revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
+4. **Hot swap + vetted dynamic-loading path — COMPLETE this revision.** Both of the two items
+   previously listed here (the `DTModelRegistry` hot-swap/replace primitive, and a vetted
+   dynamic-loading path for regenerate/expand_scope's untrusted LLM-generated code) are done. See
+   CLAUDE.md's own "Hot Swap — Live Promotion Without a Restart" entry for the full writeup:
+   `DTModelRegistry.replace()` (atomic swap-in for an already-registered name),
+   `ModelRegistry.source_path()`/`list_component_names()` (new read-only accessors),
+   `ContinuousOrchestrator._hot_swap_candidate()`/`_load_dynamic_class()`/`_component_class_for()`
+   (called only on a real ACCEPT — never before), and `_bootstrap_dt_models()` extended so a
+   hot-swapped component (regenerated class OR a genuinely new expand_scope component) survives a
+   process restart too, not just the current process's own lifetime. A real, previously-latent bug
+   was found and fixed while validating this against genuinely fast-flowing live telemetry: for
+   regenerate/expand_scope, `_run_adaptation_cycle` was re-deriving the verification held-out
+   window independently, AFTER the (potentially long) agent call returned — since real telemetry
+   keeps flowing for that call's entire duration by design, the re-derived window could end up a
+   different size than the one the sandboxed candidate's predictions were actually computed
+   against, causing verification to REJECT on a length mismatch unrelated to the candidate's real
+   quality. Fixed by having `RegenerationResult`/`ExpandScopeResult` carry their own `held_out_df`
+   directly, so the orchestrator reuses the EXACT frame instead of re-deriving it. Verified by a
+   new `tests/integration/test_hot_swap.py` (a real ACCEPT genuinely hot-swaps a dynamically-loaded
+   class into live serving AND survives a fresh orchestrator instance pointed at the same storage;
+   a real REJECT leaves live serving completely untouched) plus 15 new unit tests across
+   `tests/unit/test_main.py`/`test_dt_model_registry.py`/`test_model_registry.py` — one of which
+   caught a real bug in `_component_class_for`'s own priority order before this ever reached the
+   integration test (`_DT_COMPONENT_CLASSES.get(name) or self._dynamic_component_classes.get(name)`
+   always short-circuited to the original static class, since a class object is always truthy).
+5. Revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
    Module 7, still not done — the longest-standing open item in this project).
-7. A real component-scoped adaptation lock implementing `config.adaptation.lock_policy`'s
+6. A real component-scoped adaptation lock implementing `config.adaptation.lock_policy`'s
    queue/coalesce/defer semantics for genuinely concurrent triggers (this orchestrator is safe
    today because it never overlaps adaptations, which is stronger-than-required but not yet the
    DESIGNED policy).
-8. A populated `tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter
+7. A populated `tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter
    (Module 1) once both happen to be exercised in the same session — nothing in `src/main.py` is
    NS-3-specific, this is purely an untried combination, not a known gap.

@@ -71,3 +71,37 @@ def test_list_components_returns_all_regardless_of_enabled_state():
     registry.register(DummyAdder(), enabled=False)
     names = {c.COMPONENT_NAME for c in registry.list_components()}
     assert names == {"dummy_doubler", "dummy_adder"}
+
+
+# --- replace() — the hot-swap primitive (src/main.py's ContinuousOrchestrator._hot_swap_candidate) --
+
+
+def test_replace_swaps_in_a_new_instance_under_the_same_name():
+    registry = DTModelRegistry()
+    original = DummyDoubler()
+    registry.register(original)
+    replacement = DummyDoubler()
+    registry.replace(replacement)
+    assert registry.get("dummy_doubler") is replacement
+    assert registry.get("dummy_doubler") is not original
+
+
+def test_replace_preserves_current_enabled_state_by_default():
+    registry = DTModelRegistry()
+    registry.register(DummyDoubler(), enabled=False)
+    registry.replace(DummyDoubler())
+    assert not registry.is_enabled("dummy_doubler")
+    assert "dummy_doubler" not in registry.enabled_components()
+
+
+def test_replace_with_explicit_enabled_overrides_preserved_state():
+    registry = DTModelRegistry()
+    registry.register(DummyDoubler(), enabled=True)
+    registry.replace(DummyDoubler(), enabled=False)
+    assert not registry.is_enabled("dummy_doubler")
+
+
+def test_replace_on_an_unregistered_name_raises_keyerror():
+    registry = DTModelRegistry()
+    with pytest.raises(KeyError):
+        registry.replace(DummyDoubler())

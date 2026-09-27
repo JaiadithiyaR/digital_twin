@@ -46,17 +46,20 @@ must exactly match what's "expected") works identically whether "expected" came 
 production version (Module 15) or a freshly-validated, not-yet-used design proposal (this
 module) — the driver has no idea which agent called it, by design.
 
-**Why this agent does NOT wire its candidate into the live `DTModelRegistry`/`DTOrchestrator`
-(Module 5), even though prompt.md §27 says "register the candidate" as one of its own steps —
-a deliberate, documented safety boundary, not an oversight**: doing so would require this
-process to actually IMPORT (or `joblib.load()` the pickled artifact of) the LLM-generated class,
-which is exactly what prompt.md §28/§70 rule 10 forbid before verification — and Module 17
-(verification) doesn't exist yet. "Register... dynamically through the registry" is satisfied by
-`ModelRegistry` (Concept C, Module 14's versioned artifact store — genuinely dynamic, no
-hardcoded component list, proven directly by this module registering a component name that has
-never existed before). Wiring a verified candidate into the LIVE orchestrator so it actually
-SERVES predictions is a follow-up concern for whenever Module 17 and a vetted dynamic-loading
-path exist — the exact same boundary Module 15 already documented for regenerated candidates.
+**Why this agent itself does NOT wire its candidate into the live `DTModelRegistry`/
+`DTOrchestrator` (Module 5), even though prompt.md §27 says "register the candidate" as one of
+its own steps — a deliberate, documented safety boundary, not an oversight**: doing so would
+require this process to actually IMPORT (or `joblib.load()` the pickled artifact of) the
+LLM-generated class, which is exactly what prompt.md §28/§70 rule 10 forbid before verification.
+"Register... dynamically through the registry" is satisfied by `ModelRegistry` (Concept C,
+Module 14's versioned artifact store — genuinely dynamic, no hardcoded component list, proven
+directly by this module registering a component name that has never existed before). Wiring a
+verified candidate into the LIVE orchestrator so it actually SERVES predictions now DOES happen —
+`ContinuousOrchestrator._hot_swap_candidate` (`src/main.py`), called ONLY after a real ACCEPT,
+dynamically loads and registers it into `self.dt_model_registry` — but that live-registry wiring
+still deliberately lives entirely OUTSIDE this agent, in the one place (the orchestrator, strictly
+after Module 17's decision) that has the standing to grant that trust; this module's own
+`expand_scope()` still only ever returns an evaluated candidate, exactly as before.
 `tests/integration/test_expand_scope_agent.py` separately proves `DTModelRegistry`/
 `DTOrchestrator`'s OWN registration mechanism has no hardcoded component-count/name limit (using
 a trusted, test-authored component — mirroring Module 5's own original test pattern — never the
@@ -140,6 +143,10 @@ class ExpandScopeResult:
     training_window: dict[str, Any]
     evaluation_window: dict[str, Any]
     fidelity_after: float | None
+    # The EXACT held-out DataFrame `sandbox_result.eval_predictions` was computed against — see
+    # RegenerationResult's identical field for why a caller doing its own downstream verification
+    # must reuse this directly rather than re-deriving a "most recent window" a second time.
+    held_out_df: pd.DataFrame
 
 
 class ExpandScopeAgent:
@@ -342,6 +349,13 @@ class ExpandScopeAgent:
                 status="candidate",
                 llm_metadata={
                     "model": self._settings.llm.model,
+                    # Recorded so a hot-swapped-in component can still be resumed correctly after
+                    # a future process restart (src/main.py's _bootstrap_dt_models): this is the
+                    # one piece of the original design proposal needed to keep computing real
+                    # fidelity for a genuinely new component going forward — there is no other
+                    # record of it once the in-memory _ProposedComponentDesign this call produced
+                    # goes out of scope.
+                    "target_column": design.target_column,
                     "design_purpose": design.purpose,
                     "design_feature_extraction_notes": design.feature_extraction_notes,
                     "implementation_reasoning": generated.reasoning,
@@ -370,6 +384,7 @@ class ExpandScopeAgent:
             training_window=training_window,
             evaluation_window=evaluation_window,
             fidelity_after=fidelity_after,
+            held_out_df=held_out_df,
         )
 
     # --- context gathering (steps 1-5) --------------------------------------------------------

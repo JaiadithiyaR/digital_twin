@@ -123,6 +123,14 @@ class RegenerationResult:
     evaluation_window: dict[str, Any]
     fidelity_before: float | None
     fidelity_after: float | None
+    # The EXACT held-out DataFrame `sandbox_result.eval_predictions` was computed against
+    # (dependency-ground-truth columns already populated) — a caller doing its own downstream
+    # verification (e.g. ContinuousOrchestrator) MUST reuse this directly rather than re-deriving
+    # a "most recent window" a second time: real telemetry keeps flowing for this call's entire
+    # duration by design (prompt.md §0.6/§0.8), so an independently re-derived window can end up a
+    # DIFFERENT size than this one — a real bug found and fixed while validating the hot-swap path
+    # (see ContinuousOrchestrator._run_adaptation_cycle).
+    held_out_df: pd.DataFrame
 
 
 class RegenerationAgent:
@@ -354,6 +362,7 @@ class RegenerationAgent:
             evaluation_window=evaluation_window,
             fidelity_before=fidelity_before,
             fidelity_after=fidelity_after,
+            held_out_df=held_out_df,
         )
 
     # --- LLM context + generation ---------------------------------------------------------------

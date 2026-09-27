@@ -38,6 +38,21 @@ class DTModelRegistry:
             raise ValueError(f"component '{name}' is already registered")
         self._components[name] = _RegisteredComponent(component=component, enabled=enabled)
 
+    def replace(self, component: DTComponent, enabled: bool | None = None) -> None:
+        """Atomically swaps in a new instance/version under an ALREADY-registered name — the
+        primitive a hot-swapped recalibration/regeneration/expand-scope candidate uses to take
+        over live prediction serving the moment it's ACCEPTed, without a process restart. Unlike
+        `register()`, this requires the name to already exist (a replace has nothing to replace
+        otherwise — use `register()` for a genuinely new component); `enabled` defaults to
+        preserving whatever the current registration's enabled state already is."""
+        name = component.COMPONENT_NAME
+        if name not in self._components:
+            raise KeyError(f"no component registered under '{name}' to replace — use register() for a new component")
+        current_enabled = self._components[name].enabled
+        self._components[name] = _RegisteredComponent(
+            component=component, enabled=current_enabled if enabled is None else enabled
+        )
+
     def get(self, name: str) -> DTComponent:
         try:
             return self._components[name].component

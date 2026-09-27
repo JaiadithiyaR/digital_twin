@@ -259,10 +259,10 @@ python scripts/demo_expand_scope.py               # standalone Module 16 demo �
 ## 11. Testing Commands
 
 ```bash
-.venv/bin/python -m pytest tests/unit -v          # 471 collected (was 466 pre-RAG-integration; +5 new tests for Modules 15/16's RAG wiring). test_live_api_smoke_if_key_configured now genuinely calls the live API (real GOOGLE_API_KEY configured) rather than auto-skipping — passes when the free tier's 20-request/model/day quota has headroom, genuinely FAILS (never silently skipped) if that day's quota is already exhausted by other real calls made the same day, e.g. by running the demo scripts below repeatedly — this is deliberate test design (prompt.md §0.24: never hide a genuine failure behind a skip), not a bug to "fix" by tolerating 429s
-.venv/bin/python -m pytest tests/integration -v   # 42 passed (Module 2 pipeline + Module 3 continuous sync + D1 wiring + orchestrator<-D1 + all five DT models' training+orchestrator + fidelity engine vs. real predictions, mock + real zmq + Module 11 drift pipeline vs. real config + Module 13's rebuilt Decision & Root-Cause Analysis Agent exercised via the real full-cycle proof + Module 14 real candidate + concurrent-telemetry proof + Module 15 real sandboxed candidate + concurrent-telemetry proof + Module 16 real sandboxed new component + concurrent-telemetry proof + six-component dynamic orchestrator proof + D2 real rag_data/ corpus ingestion + genuine semantic embeddings + Module 17 real candidate verified end-to-end + Module 19 real full trigger->decision-agent->agent->verification->lifecycle cycle + Phase 11 real orchestrator cycle w/ continuous-telemetry proof) — confirmed clean this revision, genuinely exercising the real live API via `test_main_orchestrator.py`'s own `load_secrets()`
+.venv/bin/python -m pytest tests/unit -v          # 487 collected (was 471; +16 new tests for the hot-swap mechanism — see CLAUDE.md's "Hot Swap" entry). test_live_api_smoke_if_key_configured genuinely calls the live API (real GOOGLE_API_KEY configured) rather than auto-skipping — passes when the free tier's 20-request/model/day quota has headroom, genuinely FAILS (never silently skipped) if that day's quota is already exhausted by other real calls made the same day, e.g. by running the demo scripts below repeatedly — this is deliberate test design (prompt.md §0.24: never hide a genuine failure behind a skip), not a bug to "fix" by tolerating 429s
+.venv/bin/python -m pytest tests/integration -v   # 44 passed (was 42; +2 for tests/integration/test_hot_swap.py) (Module 2 pipeline + Module 3 continuous sync + D1 wiring + orchestrator<-D1 + all five DT models' training+orchestrator + fidelity engine vs. real predictions, mock + real zmq + Module 11 drift pipeline vs. real config + Module 13's rebuilt Decision & Root-Cause Analysis Agent exercised via the real full-cycle proof + Module 14 real candidate + concurrent-telemetry proof + Module 15 real sandboxed candidate + concurrent-telemetry proof + Module 16 real sandboxed new component + concurrent-telemetry proof + six-component dynamic orchestrator proof + D2 real rag_data/ corpus ingestion + genuine semantic embeddings + Module 17 real candidate verified end-to-end + Module 19 real full trigger->decision-agent->agent->verification->lifecycle cycle + Phase 11 real orchestrator cycle w/ continuous-telemetry proof + a real hot-swap ACCEPT/REJECT proof) — confirmed clean this revision, genuinely exercising the real live API via `test_main_orchestrator.py`'s own `load_secrets()`
 .venv/bin/python -m pytest tests/e2e -v           # empty so far
-.venv/bin/python -m pytest tests -q               # 513 total tests collected, 0 collection errors — 512 passing/1 genuinely-failing-on-exhausted-daily-quota confirmed this revision across two separate clean invocations (tests/unit then tests/integration; this environment intermittently can't sustain one single combined run without its own memory manager killing it — a genuine environment constraint observed repeatedly across this whole project, not a code issue, per prompt.md §0.24's own "report honestly, never fabricate" rule)
+.venv/bin/python -m pytest tests -q               # 531 total tests collected, 0 collection errors — 530 passing/1 genuinely-failing-on-exhausted-daily-quota confirmed this revision across two separate clean invocations (tests/unit then tests/integration; this environment intermittently can't sustain one single combined run without its own memory manager killing it — a genuine environment constraint observed repeatedly across this whole project, not a code issue, per prompt.md §0.24's own "report honestly, never fabricate" rule)
 ```
 
 ## 12. Current State
@@ -2111,5 +2111,125 @@ decisions:
   still fully real re-run of the exact same proof `scripts/run_orchestrator_demo.py` performs at
   full scale, against temp storage paths, as an automated regression test — re-run this revision
   against the rebuilt Decision & Root-Cause Analysis Agent, confirmed passing).
+
+**Hot Swap — Live Promotion Without a Restart: implemented and tested, this revision.** Until
+this revision, `VerificationAgent.verify()`'s ACCEPT only updated the versioned `ModelRegistry`
+(Concept C) on disk — the live, already-running `ContinuousOrchestrator` kept serving whatever it
+had loaded at boot until the next process restart. This closes that gap for all three adaptation
+strategies, genuinely making an ACCEPTed candidate "permanent" in the sense that matters: it takes
+over live prediction serving immediately, in the SAME running process, AND is correctly resumed by
+a future process restart.
+
+- **`DTModelRegistry.replace()`** (`src/dt_models/model_registry.py`) — the missing primitive:
+  `register()` deliberately raises on a duplicate name (never a silent upsert), so hot-swapping an
+  ALREADY-registered component needed its own explicit method. `replace()` requires the name to
+  already exist (a replace has nothing to replace otherwise — `register()` is still what a
+  genuinely new expand_scope component uses) and preserves the current `enabled` state unless
+  explicitly overridden.
+- **`ModelRegistry.source_path()`/`list_component_names()`** (`src/registry/model_registry.py`) —
+  two new read-only accessors. `source_path(version)` resolves a regenerate/expand_scope
+  candidate's saved LLM-generated source file to an absolute path (mirroring the already-existing
+  `artifact_path()`, same "read-only resolution, never imports or executes anything itself"
+  discipline) — `None` for a recalibration/bootstrap version, which reuses an already-imported
+  class and was never given its own source file. `list_component_names()` returns every component
+  name the registry has EVER tracked a version for, including one an expand_scope candidate
+  created that this process may never have heard of yet (used to resume it at boot — see below).
+- **`ContinuousOrchestrator._hot_swap_candidate()`** (`src/main.py`) — called ONLY on a real
+  ACCEPT (prompt.md §28/§70 rule 10: only after verification has granted that trust, never
+  before), from `_run_adaptation_cycle` right after `VerificationAgent.verify()` returns. Three
+  distinct cases, matching the three strategies: **recalibrate** — `RecalibrationResult.
+  candidate_component` is ALREADY a live, trained instance of an already-imported, trusted class
+  (the SAME class already backing production) — no dynamic code loading at all, just
+  `dt_model_registry.replace(instance)`. **regenerate** — until this exact moment, the
+  candidate's class has only ever existed as saved source on disk plus a sandboxed,
+  fidelity-gate-ACCEPTed artifact; `_load_dynamic_class()` imports it for the first time in this
+  trusted process (via `importlib.util.spec_from_file_location`/`module_from_spec`/
+  `exec_module` — the ONE point in this whole system LLM-generated code is imported into the
+  trusted, long-running process rather than only ever run inside the sandbox subprocess,
+  `src/sandbox/executor.py`), then `load_artifact_into()` restores its trained state, then
+  `dt_model_registry.replace()` swaps it in. **expand_scope** — same dynamic load, but
+  `dt_model_registry.register()` (first-time registration — `_validate_design` already
+  guaranteed this name didn't already exist) plus recording the new component's `target_column`
+  (from `agent_result.design.target_column`) so ongoing fidelity tracking can cover it too.
+- **`_component_class_for()`/`_dynamic_component_classes`/`_target_columns`/`_output_fields`** —
+  `ContinuousOrchestrator` now keeps three per-component dispatch dicts as INSTANCE state (seeded
+  from the five originals' module-level defaults, but growable at runtime), and
+  `_component_class_for(name)` is the one place that decides which class currently backs a
+  component — checking the dynamic table FIRST. **A real bug was caught here by a test, not by
+  inspection**: the first version wrote `_DT_COMPONENT_CLASSES.get(name) or self.
+  _dynamic_component_classes.get(name)` — since a class object is always truthy, this silently
+  kept returning the ORIGINAL static class for any of the five originals even after a real
+  regenerate hot swap had replaced it, completely defeating the swap for exactly the case most
+  likely to actually occur. Fixed by checking dynamic first; `tests/unit/test_main.py::
+  test_component_class_for_prefers_a_dynamically_loaded_class_once_one_exists` pins this
+  invariant so it can't silently regress.
+- **A dynamically-loaded class only ever guarantees a no-arg constructor** — the sandbox's own
+  conformance contract for LLM-generated code (`src/sandbox/_sandbox_driver.py`), never a
+  `from_settings(settings)` classmethod the way the five hand-authored originals provide.
+  `_run_adaptation_cycle`'s `component_factory` closure now branches on `component in self.
+  _dynamic_component_classes` to construct it the right way either way.
+- **"Permanent" also means surviving a restart, not just this process's own lifetime** —
+  `_bootstrap_dt_models()` is extended (not replaced): for each of the five originals, it now
+  additionally checks whether the CURRENT production version's `source_path` is set (i.e. it was
+  produced by a regenerate, not the original class) and dynamically loads the ACTUAL trained
+  class in that case, rather than blindly loading a fresh instance of the original static class
+  and feeding it an artifact trained by a completely different implementation (a real correctness
+  bug this would otherwise silently reintroduce on every restart). PLUS, for any OTHER component
+  name `ModelRegistry.list_component_names()` reveals beyond the five originals — i.e. one an
+  expand_scope candidate created in a PRIOR process's lifetime — it's loaded too, via the same
+  `_load_and_restore()` helper; there is never a "bootstrap-train it fresh" case for one of these,
+  only "load what a real, already-ACCEPTed process already produced." The new component's
+  `target_column` (needed for ongoing fidelity tracking) is recovered from `ModelVersionMetadata.
+  llm_metadata["target_column"]` — a new field `ExpandScopeAgent.expand_scope()` now records for
+  exactly this reason (there is no other durable record of it once the original in-memory design
+  proposal goes out of scope); if genuinely absent (an older record, or `llm_metadata=None`),
+  this degrades to a logged WARNING and predictions-still-work/fidelity-tracking-skipped, never a
+  crash.
+- **A real, previously-latent bug was found and fixed while validating this against genuinely
+  fast-flowing live telemetry** (the same "always run it end-to-end" discipline this project's
+  whole history is built on): for regenerate/expand_scope, `_run_adaptation_cycle` was
+  re-deriving the verification held-out window INDEPENDENTLY, via `select_recent_window()` +
+  `time_split()` a second time, AFTER the agent's (potentially long: LLM call(s) + real sandboxed
+  subprocess training) call had already returned. Real telemetry keeps flowing for that entire
+  duration by design (prompt.md §0.6/§0.8) — so the re-derived "most recent window, last 20%"
+  slice could easily end up a DIFFERENT SIZE than the sandbox's fixed `eval_predictions` array,
+  and verification would REJECT on a length mismatch entirely unrelated to the candidate's real
+  quality. A first fix attempt (reconstructing the slice from the agent's own recorded
+  `evaluation_window` timestamp range) turned out to still be subtly wrong: a single telemetry
+  tick spans multiple UEs, and the agent's own ROW-count-based 80/20 split can legally cut a
+  tick's rows between train and held-out, so filtering by timestamp range alone could pull in MORE
+  rows than were actually in the original held-out slice. The real fix: `RegenerationResult`/
+  `ExpandScopeResult` now carry their own `held_out_df` field — the EXACT DataFrame (dependency
+  ground-truth columns already populated) `sandbox_result.eval_predictions` was computed against
+  — and `_run_adaptation_cycle` reuses it directly for regenerate/expand_scope instead of
+  re-deriving anything. (Recalibrate is unaffected and unchanged: its candidate_predictions are
+  computed FRESH against whatever held_out_df the orchestrator builds, so there's no staleness to
+  guard against there.)
+- **Tests**: 15 new unit tests across `tests/unit/test_dt_model_registry.py` (4 — `replace()`
+  swaps in a new instance under the same name, preserves/overrides the enabled state correctly,
+  raises on an unregistered name), `tests/unit/test_model_registry.py` (3 — `source_path()` is
+  `None` for a recalibration version and resolves correctly for a regenerated one,
+  `list_component_names()` returns every tracked name), and `tests/unit/test_main.py` (8 —
+  `_component_class_for` in all three states [unknown/static/dynamic-overridden, including the
+  real bug above], a real recalibrate hot swap replacing the live instance, a real regenerate hot
+  swap dynamically loading a hand-written candidate class and genuinely serving predictions
+  through it via a real `DTOrchestrator`, a real expand_scope hot swap registering a genuinely new
+  component and recording its target_column/output_field, a restart correctly restoring a
+  regenerated component's ACTUAL class rather than the original static one, a restart correctly
+  restoring an extra expand_scope component including its recovered target_column, and the
+  missing-metadata case degrading to a warning rather than a crash) plus the REQUIRED real,
+  non-scripted "run one full cycle" proof: `tests/integration/test_hot_swap.py` (2 — a real
+  ACCEPT, against a deliberately weakened production baseline [the same established technique
+  `tests/integration/test_verification_agent.py` uses for a reliably-reachable genuine ACCEPT],
+  genuinely hot-swaps a dynamically-loaded `RebuiltThroughput` class into live serving in the SAME
+  running orchestrator — confirmed both by direct registry inspection AND by a real
+  `DTOrchestrator.run_predictions()` call genuinely returning that class's distinctive
+  predictions — AND survives a freshly-constructed `ContinuousOrchestrator` pointed at the same
+  storage; a real REJECT, using the SAME real machinery with no baseline-weakening, correctly
+  leaves live serving completely untouched — the original class still registered, nothing in
+  `_dynamic_component_classes`). Also re-run for real against genuine production storage this
+  revision: `scripts/run_orchestrator_demo.py` (recalibrate → REJECT this run — a legitimate,
+  complete outcome proving the hot-swap wiring correctly does nothing on REJECT against real,
+  already-accumulated production state, not just fresh test fixtures).
 
 See `IMPLEMENTATION_STATUS.md` for the full module-by-module table and the exact next task.
