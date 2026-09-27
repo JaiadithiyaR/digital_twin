@@ -1,0 +1,2 @@
+index,event_id,timestamp,affected_component,rl_action,fidelity_before,fidelity_after,verification_result
+1,93a83982-8f35-464f-893d-72945015721d,2026-09-07T17:55:34.226380Z,jitter,recalibrate,3.7486860256251173,2.579852470135865,REJECT
