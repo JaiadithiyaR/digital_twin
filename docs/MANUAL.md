@@ -66,8 +66,6 @@ folder.
 | `README.md` | The very first thing anyone sees. A short "what is this, how do I start" page that points to the more detailed guides below. |
 | `CLAUDE.md` | The architecture rulebook. Explains the 19 "modules" (building blocks) of the system, the safety rules (e.g. "the AI can never override the safety check"), and a running diary of exactly how each module was built and validated. Read this to understand *why* the code is shaped the way it is. |
 | `IMPLEMENTATION_STATUS.md` | A big checklist/status board: which modules are done, what tests exist, what's left to do. Like a project tracker, but living inside the repo. |
-| `HOW_TO_RUN.md` | Step-by-step instructions: install dependencies, run the tests, build the network simulator, run the whole system. This is the "just tell me the commands" file. |
-| `MANUAL.md` | This file — plain-English explanation of every file. |
 | `prompt.md` | The original specification this whole project was built from — the "brief" that was handed over describing exactly what the finished system must do. Treated as the ultimate source of truth if anything else disagrees with it. |
 | `pyproject.toml` | A small configuration file that tells Python tools (like the test runner and the code-formatter "ruff") basic facts about this project: its name, where the tests live, what Python version it needs. |
 | `requirements.txt` | The shopping list of external software libraries this project depends on (e.g. `pandas` for data tables, `xgboost` for machine learning, `google-genai` for talking to the AI). Running `pip install -r requirements.txt` installs everything on this list. |
@@ -75,8 +73,8 @@ folder.
 | `.env` | Your actual secrets file (copied from `.env.example`). Currently holds a placeholder key, not a real working one. |
 | `.gitignore` | Tells the version-control system (git) which files/folders to *never* track — generated data, secrets, build outputs, virtual environments, log files, etc. Keeps the repository clean of things that shouldn't be shared. |
 | `fig-dataflow.png` | The original hand-drawn/diagram picture showing how data is supposed to flow through all 19 modules. This is the master architecture diagram every module was built to match. |
-| `fig-dataflow (1)-1.png:Zone.Identifier` | Not a real project file — a tiny leftover marker Windows creates when a file is downloaded from the internet. Harmless, ignored by git. |
-| `prompt.md:Zone.Identifier` | Same as above — a Windows download marker for `prompt.md`, not project content. |
+
+The step-by-step run guide and this file itself now live in `docs/` — see section 9 below.
 
 ---
 
@@ -260,8 +258,10 @@ Plain text/Markdown reference material, loaded into the searchable library by
 
 | File | What it's for |
 |---|---|
+| `docs/HOW_TO_RUN.md` | Step-by-step instructions: install dependencies, run the tests, build the network simulator, run the whole system. This is the "just tell me the commands" file. |
+| `docs/MANUAL.md` | This file — plain-English explanation of every file. |
 | `docs/FORMULAS.pdf` | An 11-page PDF collecting every mathematical formula actually used in this project (prediction-accuracy math, the reinforcement-learning math, telemetry-derived formulas) with the exact source-code location each one came from. |
-| `docs/IEEE_Research_Paper.md` and `docs/IEEE_Research_Paper.docx` | A formal, publication-style research paper describing this project's design and real measured results, written in the standard two-column academic format used by IEEE journals/conferences. The `.md` is the plain-text source; the `.docx` is a ready-to-open Microsoft Word version. |
+| `docs/IEEE_Digital_Twin_Paper.docx` | A formal, publication-style research paper describing this project's design and real measured results, written in the standard two-column academic format used by IEEE journals/conferences — a ready-to-open Microsoft Word version. |
 
 ---
 

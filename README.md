@@ -37,7 +37,7 @@ python -m src.main --mode demo   # mock telemetry + mock drift, full pipeline ex
 python -m src.main --mode live   # real NS-3/5G-LENA telemetry over ZeroMQ
 ```
 
-See **`HOW_TO_RUN.md`** for a full step-by-step guide (setup, tests, individual module
+See **`docs/HOW_TO_RUN.md`** for a full step-by-step guide (setup, tests, individual module
 validation scripts, and the two real end-to-end demo runners).
 
 ## Testing
