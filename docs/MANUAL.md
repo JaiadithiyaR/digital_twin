@@ -233,7 +233,7 @@ training, or demonstrations.
 | `scripts/ingest_rag.py` | Reads every document in `rag_data/` and loads it into the searchable AI reference library (`src/rag/rag_kb.py`'s storage) — run this once (or whenever the documents change) so the AI agents have something to search. |
 | `scripts/run_orchestrator_demo.py` | A ready-to-run demo that starts the whole system using **fake (mock) telemetry**, lets it run through one full "drift → fix → verify → record" cycle unattended, and prints exactly what happened — good for a quick, fast sanity check. |
 | `scripts/run_e2e_demo.py` | The more serious demo — starts the **real** ns-3/5G-LENA network simulator as an actual running program, connects the whole system to its real live telemetry, and runs a full real adaptation cycle against genuinely simulated 5G behavior (not fake data). |
-| `scripts/visualize_metrics.py` | A stand-alone charting tool. Reads whatever real data the system has already produced (telemetry history, prediction accuracy, past fix outcomes) and draws PNG graphs — network metrics over time, prediction-accuracy over time, and a before/after chart of every automatic fix that's ever been attempted. Never runs the system itself, only reads and draws pictures of what already happened. |
+| `scripts/visualize_metrics.py` | A stand-alone charting and export tool. Reads whatever real data the system has already produced (telemetry history, prediction accuracy, past fix outcomes) and produces both PNG graphs (network metrics over time, prediction-accuracy over time, a before/after chart of every automatic fix ever attempted) and CSV files — including the real, as-recorded telemetry and the digital twin's own predictions for that same telemetry, as two separate files you can open or compare directly. Never runs the system itself, only reads and reports on what already happened. |
 
 ---
 
@@ -277,7 +277,7 @@ so you know what you're looking at if you open it:
 | `data/artifacts/d1_current_state.parquet` / `d1_history.parquet` / `d1_quarantine.parquet` | The digital twin's actual memory (D1) — current readings, full history, and any rejected/bad readings — saved to disk. |
 | `data/artifacts/lifecycle_records.jsonl` | The permanent audit log of every single automatic fix attempt ever made (Module 19's output). |
 | `data/artifacts/maintenance_reports/` | Human-readable summary reports, one per fix attempt. |
-| `data/artifacts/plots/` | Charts produced by `scripts/visualize_metrics.py`. |
+| `data/artifacts/plots/` | Charts and CSVs produced by `scripts/visualize_metrics.py`, including `telemetry_original.csv` (the real telemetry as recorded) and `telemetry_predicted.csv` (the digital twin's own predictions for that same telemetry). |
 | `data/models/` | Every version of every trained prediction model. |
 | `data/e2e_ns3_demo/` | A completely separate copy of all of the above, used only by `scripts/run_e2e_demo.py` so its real-simulator run never gets mixed up with fake/mock-telemetry runs. |
 

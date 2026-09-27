@@ -19,14 +19,17 @@ Usage:
     python scripts/visualize_metrics.py --history-path data/e2e_ns3_demo/d1_history.parquet \\
         --models-dir data/e2e_ns3_demo/models --lifecycle-path data/e2e_ns3_demo/lifecycle_records.jsonl
 
-Output: PNG files under --output-dir (default data/artifacts/plots/), plus a printed summary.
+Output: PNG charts plus CSVs under --output-dir (default data/artifacts/plots/), plus a printed
+summary — including telemetry_original.csv (the real D1 history, exactly as ingested) and
+telemetry_predicted.csv (the DT's own predictions for that same history, from one real
+DTOrchestrator.run_predictions() pass through the current production models — dependency-chained
+live, not ground-truth-fed) as two separate, directly comparable files.
 Nothing here writes back into D1, the model registry, or the lifecycle log — read-only throughout.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 import textwrap
@@ -43,6 +46,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.adaptation.data_selection import with_dependency_ground_truth
+from src.adaptation.lifecycle_agent import LifecycleAgent, LifecycleRecord
 # Display-range clamp for the (theoretically unbounded-below) Module 12 fidelity score — a
 # cosmetic choice for readable charts only, never a change to the underlying data (the full
 # unclipped values are always written to the companion CSVs, see save_fidelity_csvs()). Previously
@@ -51,8 +55,11 @@ from src.adaptation.data_selection import with_dependency_ground_truth
 # display concern now, not shared RL-training-stability infrastructure.
 _FIDELITY_SCORE_CLIP: tuple[float, float] = (-3.0, 1.0)
 from src.common.config import Settings, load_settings
+from src.dt_models.base import DTComponent
 from src.dt_models.jitter import JitterModel
 from src.dt_models.latency import LatencyModel
+from src.dt_models.model_registry import DTModelRegistry
+from src.dt_models.orchestrator import DTOrchestrator, OrchestratorError
 from src.dt_models.packet_loss import PacketLossModel
 from src.dt_models.prb_utilization import PrbUtilizationModel
 from src.dt_models.throughput import ThroughputModel
@@ -131,18 +138,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def resolve_paths(args: argparse.Namespace, settings: Settings) -> tuple[Path, Path, Path, Path]:
-    """Returns (history_path, models_dir, lifecycle_path, output_dir), applying --preset defaults
-    and then any explicit --history-path/--models-dir/--lifecycle-path/--output-dir overrides."""
+def resolve_paths(args: argparse.Namespace, settings: Settings) -> tuple[Path, Path, Path, Path, Path]:
+    """Returns (history_path, models_dir, lifecycle_path, reports_dir, output_dir), applying
+    --preset defaults and then any explicit --history-path/--models-dir/--lifecycle-path/
+    --output-dir overrides."""
     if args.preset == "e2e_ns3_demo":
         base = settings.resolve_path("data/e2e_ns3_demo")
         history_path = base / "d1_history.parquet"
         models_dir = base / "models"
         lifecycle_path = base / "lifecycle_records.jsonl"
+        reports_dir = base / "maintenance_reports"
     else:
         history_path = settings.resolve_path(settings.storage.d1_history_path)
         models_dir = settings.resolve_path(settings.storage.models_dir)
         lifecycle_path = settings.resolve_path(settings.lifecycle.records_path)
+        reports_dir = settings.resolve_path(settings.lifecycle.reports_dir)
     output_dir = settings.resolve_path("data/artifacts/plots")
 
     if args.history_path is not None:
@@ -153,7 +163,7 @@ def resolve_paths(args: argparse.Namespace, settings: Settings) -> tuple[Path, P
         lifecycle_path = args.lifecycle_path
     if args.output_dir is not None:
         output_dir = args.output_dir
-    return history_path, models_dir, lifecycle_path, output_dir
+    return history_path, models_dir, lifecycle_path, reports_dir, output_dir
 
 
 def load_telemetry_history(history_path: Path) -> pd.DataFrame:
@@ -168,17 +178,16 @@ def load_telemetry_history(history_path: Path) -> pd.DataFrame:
     return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
-def load_lifecycle_records(lifecycle_path: Path) -> list[dict]:
+def load_lifecycle_records(lifecycle_path: Path, reports_dir: Path) -> list[LifecycleRecord]:
+    """Reuses the real `LifecycleAgent.list_records()` (never a hand-rolled JSONL parser here) so
+    this tool automatically inherits its schema-compatibility handling — a real, load-bearing
+    need: this project's own lifecycle log mixes lines from before and after the LLM/RL design
+    pivot's field rename, and `list_records()` already skips/logs whichever lines don't match the
+    CURRENT `LifecycleRecord` schema instead of crashing on them (see its own docstring)."""
     if not lifecycle_path.exists():
         logger.warning("no lifecycle records found at %s — the lifecycle panel will be empty", lifecycle_path)
         return []
-    records = []
-    with lifecycle_path.open() as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+    return LifecycleAgent(records_path=lifecycle_path, reports_dir=reports_dir).list_records()
 
 
 # ---------------------------------------------------------------------------
@@ -241,30 +250,40 @@ def plot_telemetry(history: pd.DataFrame, output_dir: Path, show: bool) -> list[
 
 
 # ---------------------------------------------------------------------------
+# Shared production-model loading — both the fidelity replay and the predicted-telemetry export
+# below need the SAME "whichever of the 5 real components currently has a production version"
+# set, loaded from the SAME real ModelRegistry artifacts; written once here so the two never drift
+# against each other.
+# ---------------------------------------------------------------------------
+def load_production_components(models_dir: Path) -> dict[str, DTComponent]:
+    index_path = models_dir / "registry_index.json"
+    if not index_path.exists():
+        logger.warning("no model registry found at %s", index_path)
+        return {}
+    registry = ModelRegistry(models_dir=models_dir, index_path=index_path)
+    loaded: dict[str, DTComponent] = {}
+    for name, cls in _DT_COMPONENT_CLASSES.items():
+        version = registry.get_current_version(name)
+        if version is None:
+            logger.warning("no production version registered for %r — skipping", name)
+            continue
+        instance = cls()
+        registry.load_artifact_into(instance, version)
+        loaded[name] = instance
+    return loaded
+
+
+# ---------------------------------------------------------------------------
 # Fidelity recomputation — replays real history through the real, current production models via
 # the real Module 12 FidelityEvaluator, exactly mirroring ContinuousOrchestrator's own runtime
 # prediction+fidelity cycle, just walked across the FULL stored history instead of one live batch.
 # ---------------------------------------------------------------------------
 def compute_fidelity_timeseries(
-    history: pd.DataFrame, models_dir: Path, settings: Settings, window: int, stride: int
+    history: pd.DataFrame, loaded: dict[str, DTComponent], settings: Settings, window: int, stride: int
 ) -> dict[str, pd.DataFrame]:
-    index_path = models_dir / "registry_index.json"
-    if not index_path.exists():
-        logger.warning("no model registry found at %s — fidelity panel will be empty", index_path)
+    if not loaded:
         return {}
-    registry = ModelRegistry(models_dir=models_dir, index_path=index_path)
     evaluator = FidelityEvaluator(settings.fidelity)  # ONE shared evaluator, matching runtime's single instance
-
-    loaded: dict[str, object] = {}
-    for name, cls in _DT_COMPONENT_CLASSES.items():
-        version = registry.get_current_version(name)
-        if version is None:
-            logger.warning("no production version registered for %r — skipping in fidelity plots", name)
-            continue
-        instance = cls()
-        registry.load_artifact_into(instance, version)
-        loaded[name] = instance
-
     results: dict[str, list[dict]] = {name: [] for name in loaded}
     n = len(history)
     i = 0
@@ -299,6 +318,55 @@ def compute_fidelity_timeseries(
             )
 
     return {name: pd.DataFrame(rows) for name, rows in results.items() if rows}
+
+
+# ---------------------------------------------------------------------------
+# Original vs. predicted telemetry export — two separate, directly comparable CSVs: the real D1
+# history exactly as ingested, and the DT's own predictions for that same history, computed via
+# ONE real DTOrchestrator.run_predictions() pass (dependency-chained through each component's own
+# LIVE prediction — throughput's prediction feeds latency/prb_utilization/jitter, matching how
+# ContinuousOrchestrator actually serves predictions — never the ground-truth-fed shortcut
+# compute_fidelity_timeseries above uses for independent per-component fidelity windows).
+# ---------------------------------------------------------------------------
+def compute_predicted_telemetry(history: pd.DataFrame, loaded: dict[str, DTComponent]) -> pd.DataFrame | None:
+    if not loaded:
+        logger.warning("no production components loaded — predicted-telemetry CSV will be skipped")
+        return None
+    dt_registry = DTModelRegistry()
+    for component in loaded.values():
+        dt_registry.register(component)
+    try:
+        predictions = DTOrchestrator(dt_registry).run_predictions(history)
+    except OrchestratorError as exc:
+        # A partially-populated registry (e.g. latency's production version exists but
+        # throughput's doesn't) can produce an invalid dependency graph — fail soft here since
+        # this is a read-only reporting tool, not the live system (prompt.md's "one bad thing
+        # must never abort a whole replay" discipline, same as compute_fidelity_timeseries above).
+        logger.warning("could not compute predicted telemetry: %s", exc)
+        return None
+
+    identity_cols = [c for c in ("timestamp", "ue_id", "cell_id") if c in history.columns]
+    result = history[identity_cols].copy()
+    for name, series in predictions.items():
+        output_field = _DT_COMPONENT_CLASSES[name].OUTPUT_FIELD
+        result[output_field] = series.to_numpy()
+    return result
+
+
+def save_telemetry_csvs(history: pd.DataFrame, predicted: pd.DataFrame | None, output_dir: Path) -> list[Path]:
+    """The two files this tool exists to produce: the real, as-ingested telemetry and the DT's own
+    predictions for it, kept as separate files (never merged into one) so each can be opened,
+    diffed, or plotted independently — join them on (timestamp, ue_id, cell_id) if a side-by-side
+    comparison is needed."""
+    saved = []
+    original_path = output_dir / "telemetry_original.csv"
+    history.to_csv(original_path, index=False)
+    saved.append(original_path)
+    if predicted is not None and not predicted.empty:
+        predicted_path = output_dir / "telemetry_predicted.csv"
+        predicted.to_csv(predicted_path, index=False)
+        saved.append(predicted_path)
+    return saved
 
 
 def _iqr_fence(values: np.ndarray, whisker: float = 3.0, floor: float = 1.0) -> float:
@@ -417,14 +485,14 @@ def _annotate_bar(ax, rect, value: float, ylim: tuple[float, float]) -> bool:
     return False
 
 
-def plot_lifecycle(records: list[dict], output_dir: Path, show: bool) -> Path | None:
+def plot_lifecycle(records: list[LifecycleRecord], output_dir: Path, show: bool) -> Path | None:
     if not records:
         return None
-    records = sorted(records, key=lambda r: r["timestamp"])
-    labels = [f"#{i+1}\n{r['affected_component']}\n({r['rl_action']})" for i, r in enumerate(records)]
-    before = [r["fidelity_before"] if r["fidelity_before"] is not None else np.nan for r in records]
-    after = [r["fidelity_after"] if r["fidelity_after"] is not None else np.nan for r in records]
-    verdicts = [r["verification_result"] for r in records]
+    records = sorted(records, key=lambda r: r.timestamp)
+    labels = [f"#{i+1}\n{r.affected_component}\n({r.decision_strategy})" for i, r in enumerate(records)]
+    before = [r.fidelity_before if r.fidelity_before is not None else np.nan for r in records]
+    after = [r.fidelity_after if r.fidelity_after is not None else np.nan for r in records]
+    verdicts = [r.verification_result for r in records]
 
     x = np.arange(len(records))
     width = 0.35
@@ -483,10 +551,10 @@ def plot_lifecycle(records: list[dict], output_dir: Path, show: bool) -> Path | 
     pd.DataFrame(
         {
             "index": [i + 1 for i in range(len(records))],
-            "event_id": [r.get("event_id") for r in records],
-            "timestamp": [r["timestamp"] for r in records],
-            "affected_component": [r["affected_component"] for r in records],
-            "rl_action": [r["rl_action"] for r in records],
+            "event_id": [r.event_id for r in records],
+            "timestamp": [r.timestamp for r in records],
+            "affected_component": [r.affected_component for r in records],
+            "decision_strategy": [r.decision_strategy for r in records],
             "fidelity_before": before,
             "fidelity_after": after,
             "verification_result": verdicts,
@@ -494,7 +562,7 @@ def plot_lifecycle(records: list[dict], output_dir: Path, show: bool) -> Path | 
     ).to_csv(csv_path, index=False)
     print(f"  lifecycle raw values (unclipped): {csv_path}")
     for i, (b, a, v) in enumerate(zip(before, after, verdicts), 1):
-        print(f"    #{i} {records[i-1]['affected_component']:16s} before={b:.4f}  after={a:.4f}  {v}")
+        print(f"    #{i} {records[i-1].affected_component:16s} before={b:.4f}  after={a:.4f}  {v}")
 
     return out_path
 
@@ -502,7 +570,7 @@ def plot_lifecycle(records: list[dict], output_dir: Path, show: bool) -> Path | 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     settings = load_settings(args.config) if args.config else load_settings()
-    history_path, models_dir, lifecycle_path, output_dir = resolve_paths(args, settings)
+    history_path, models_dir, lifecycle_path, reports_dir, output_dir = resolve_paths(args, settings)
     output_dir.mkdir(parents=True, exist_ok=True)
     stride = args.stride if args.stride is not None else args.window
 
@@ -513,15 +581,25 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Reading model registry from:    {models_dir}")
     print(f"Reading lifecycle records from: {lifecycle_path}")
-    records = load_lifecycle_records(lifecycle_path)
+    records = load_lifecycle_records(lifecycle_path, reports_dir)
     print(f"  -> {len(records)} lifecycle record(s)")
 
     saved: list[Path] = []
     saved += plot_telemetry(history, output_dir, args.show)
 
+    loaded_components = load_production_components(models_dir)
+    predicted = compute_predicted_telemetry(history, loaded_components)
+    telemetry_csvs = save_telemetry_csvs(history, predicted, output_dir)
+    saved += telemetry_csvs
+    print(f"  original telemetry ({len(history)} rows):  {telemetry_csvs[0]}")
+    if len(telemetry_csvs) > 1:
+        print(f"  predicted telemetry ({len(predicted)} rows): {telemetry_csvs[1]}")
+    else:
+        print("  predicted telemetry: skipped — see warning above")
+
     print(f"Recomputing fidelity over {len(history)} rows (window={args.window}, stride={stride}) "
           f"via the real FidelityEvaluator against each component's current production model...")
-    fidelity_series = compute_fidelity_timeseries(history, models_dir, settings, args.window, stride)
+    fidelity_series = compute_fidelity_timeseries(history, loaded_components, settings, args.window, stride)
     fid_path = plot_fidelity(fidelity_series, output_dir, args.show)
     if fid_path:
         saved.append(fid_path)
@@ -536,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
     if lc_path:
         saved.append(lc_path)
         saved.append(output_dir / "lifecycle_outcomes.csv")
-        n_accept = sum(1 for r in records if r["verification_result"] == "ACCEPT")
+        n_accept = sum(1 for r in records if r.verification_result == "ACCEPT")
         print(f"  lifecycle: {n_accept}/{len(records)} ACCEPTed")
 
     print("\nSaved plots:")
