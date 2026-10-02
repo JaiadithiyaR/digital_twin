@@ -1,2 +1,2 @@
-index,event_id,timestamp,affected_component,rl_action,fidelity_before,fidelity_after,verification_result
-1,93a83982-8f35-464f-893d-72945015721d,2026-09-07T17:55:34.226380Z,jitter,recalibrate,3.7486860256251173,2.579852470135865,REJECT
+index,event_id,timestamp,affected_component,decision_strategy,fidelity_before,fidelity_after,verification_result
+1,dea0a8a3-39e0-4a9c-b5b0-84906e6af670,2026-09-28 12:15:29.302554+00:00,jitter,recalibrate,19.908790579961384,2.9841327786772953,REJECT

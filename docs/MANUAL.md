@@ -262,6 +262,7 @@ Plain text/Markdown reference material, loaded into the searchable library by
 | `docs/MANUAL.md` | This file — plain-English explanation of every file. |
 | `docs/FORMULAS.pdf` | An 11-page PDF collecting every mathematical formula actually used in this project (prediction-accuracy math, the reinforcement-learning math, telemetry-derived formulas) with the exact source-code location each one came from. |
 | `docs/IEEE_Digital_Twin_Paper.docx` | A formal, publication-style research paper describing this project's design and real measured results, written in the standard two-column academic format used by IEEE journals/conferences — a ready-to-open Microsoft Word version. |
+| `docs/architecture_diagram.drawio` | A single-figure, presentation-ready system architecture / data-flow diagram covering all 19 numbered modules plus D1/D2, both adaptation-trigger sources, all three adaptation strategies, the sandbox isolation boundary, the deterministic verification gate, and the hot-swap/lifecycle loop — with real source file paths labeled on every box. Open it free at [app.diagrams.net](https://app.diagrams.net) (File → Open From → Device) or the draw.io desktop/VS Code app; export to PNG/SVG/PDF from there for slides. |
 
 ---
 

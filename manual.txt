@@ -1,0 +1,384 @@
+================================================================================
+ AI-DRIVEN SELF-ADAPTIVE NETWORK DIGITAL TWIN
+ SETUP, RUN, AND TEST MANUAL
+================================================================================
+
+This file tells you exactly how to set up, run, and test the entire system from
+a clean checkout, using the exact commands that were run and confirmed working
+on this machine. For architecture/design background, see CLAUDE.md. For a
+plain-English explanation of every individual file, see docs/MANUAL.md.
+
+Everything below was actually executed end to end (not just written down) on
+2026-09-28, including a REAL NS-3/5G-LENA simulation run, immediately before
+this manual was written:
+  - 487 unit tests: PASSED
+  - 44 integration tests: PASSED
+  - ns3_sim/validate_e2e.py (real NS-3 producer sanity check): PASSED
+  - scripts/run_e2e_demo.py (real NS-3 full adaptation cycle): PASSED
+  - scripts/run_orchestrator_demo.py (mock-telemetry full adaptation cycle): PASSED
+  - scripts/visualize_metrics.py (real-data plotting): PASSED
+
+--------------------------------------------------------------------------------
+ 0. WHAT THIS SYSTEM IS
+--------------------------------------------------------------------------------
+
+A modular AI-driven self-adaptive Digital Twin (DT) of a 5G network. It:
+  - Ingests telemetry from a real NS-3 / 5G-LENA simulation (or a mock
+    generator when NS-3 isn't built/running).
+  - Keeps a continuously synchronized DT state (D1).
+  - Runs 5 dependency-aware prediction models (throughput, latency, packet
+    loss, PRB utilization, jitter).
+  - Computes a deterministic per-component and system-wide fidelity score.
+  - Detects two kinds of adaptation triggers (external drift events, and an
+    internal fidelity-degradation trigger) and reacts using a Google
+    Gemini-backed Decision & Root-Cause Analysis Agent.
+  - Executes one of three adaptation strategies (recalibrate / regenerate /
+    expand_scope) inside an isolated sandbox, deterministically verifies the
+    result, and only then promotes it to production (with rollback safety).
+  - Records every adaptation event in an auditable lifecycle log and generates
+    a human-readable maintenance report.
+  - Runs continuously and autonomously (no human in the loop).
+
+19 modules + 2 extra components (D1 state store, D2 RAG knowledge base) + 6
+agents. Full detail in CLAUDE.md.
+
+--------------------------------------------------------------------------------
+ 1. PREREQUISITES
+--------------------------------------------------------------------------------
+
+  - Linux (this was built/tested on WSL2 / Ubuntu-family).
+  - Python 3.10+ (this machine uses 3.14.4).
+  - git.
+  - A C++ toolchain if you want to build the real NS-3 simulator:
+      g++ >= 11.1, cmake >= 3.25, ninja (or make), python3 >= 3.10.
+  - (Optional but recommended) a real Google AI Studio API key, so the LLM
+    agents genuinely run instead of falling back to their deterministic
+    default. Get one free at https://aistudio.google.com/apikey
+  - No GPU is required anywhere in this system.
+
+--------------------------------------------------------------------------------
+ 2. ONE-TIME SETUP
+--------------------------------------------------------------------------------
+
+  cd dt_adaptation
+
+  # Create and activate a virtual environment
+  python3 -m venv .venv
+  source .venv/bin/activate
+
+  # Install all Python dependencies (idempotent, safe to re-run)
+  pip install -r requirements.txt
+
+  # Create your local secrets file (never committed to git)
+  cp .env.example .env
+
+  # Edit .env and set a real key:
+  #   GOOGLE_API_KEY=your-real-key-here
+  # (GEMINI_API_KEY is also accepted; GOOGLE_API_KEY wins if both are set.)
+  # Without a real key the system still runs correctly: every LLM call
+  # degrades gracefully to a deterministic fallback and logs a WARNING every
+  # time it does so — it never fakes an LLM response.
+
+  # Verify the environment is genuinely ready (directories, .env, deps,
+  # config all load) — this is non-destructive, safe to run any time
+  python scripts/setup.py
+
+  # Expected final line: "[setup] OK — environment ready"
+
+All tunable parameters live in config/settings.yaml. You should not need to
+edit it for a normal run.
+
+--------------------------------------------------------------------------------
+ 3. RUN THE AUTOMATED TEST SUITE
+--------------------------------------------------------------------------------
+
+  # Fast, isolated unit tests (~2-3 minutes)
+  .venv/bin/python -m pytest tests/unit -q
+
+  # Slower integration tests: real pipelines, real (small) model training,
+  # real sandboxed subprocess runs (~3 minutes)
+  .venv/bin/python -m pytest tests/integration -q
+
+  # Everything in one call (~530 tests total). On a memory-constrained
+  # machine (under ~8GB RAM) prefer running unit and integration SEPARATELY
+  # as above — a single combined run can occasionally be OOM-killed by the
+  # OS on small machines; this is an environment limit, not a test failure.
+  .venv/bin/python -m pytest tests -q
+
+Expected result (confirmed on this machine, 2026-09-28):
+  487 passed   (tests/unit)
+   44 passed   (tests/integration)
+  531 passed total, 0 failures
+
+Notes:
+  - No test hits a real network/API by default. The Google AI client's
+    transport is mocked in every test except ONE: a live-smoke test in
+    tests/unit/test_google_client.py that genuinely calls the real API if
+    (and only if) a real GOOGLE_API_KEY/GEMINI_API_KEY is configured. It is
+    designed to genuinely FAIL (never silently skip) if that day's free-tier
+    quota (20 requests/day/model) has already been exhausted by other real
+    calls made the same day — e.g. by running the demo scripts below several
+    times. That is deliberate test design, not a bug: this project never
+    hides a genuine failure behind a skip.
+  - tests/e2e is currently empty ("no tests ran") — this is expected; the
+    real end-to-end validation for this project lives in the standalone
+    scripts in section 6 below (they need a running subprocess/simulator
+    and real wall-clock time, so they are not part of the pytest suite).
+
+--------------------------------------------------------------------------------
+ 4. BUILD THE REAL NS-3 / 5G-LENA SIMULATOR (for real telemetry, not mock)
+--------------------------------------------------------------------------------
+
+Only needed if you want REAL simulated 5G network telemetry (--mode live,
+scripts/run_e2e_demo.py). Everything else (--mode demo, all pytest tests, RAG
+ingestion) uses a mock telemetry generator and does not need this section.
+
+  # Idempotent: clones ns-3.48 + 5G-LENA "nr" v5.1 into ns3_sim/ns-3-dev,
+  # configures, and builds. First run takes a while (2000+ build targets);
+  # re-runs are fast (no-op if already built).
+  ./scripts/setup_ns3.sh
+
+Some of the nr module's own and this project's telemetry-exporter C++
+dependencies need root to install (only required once, per machine):
+
+  sudo apt-get update
+  sudo apt-get install -y sqlite3 libsqlite3-dev libeigen3-dev \
+      libzmq3-dev libzmq5 cppzmq-dev
+
+(scripts/setup_ns3.sh will warn, not fail, if these are missing — they are
+only required for the real NS-3 telemetry path, never for tests or mock mode.)
+
+Sanity-check the real compiled simulator + real ZeroMQ telemetry transport in
+isolation (no orchestrator, no LLM, no adaptation logic involved — just "does
+the simulator emit valid telemetry"):
+
+  python ns3_sim/validate_e2e.py
+
+Expected result (confirmed on this machine): a message ending in
+  "OK: 162 real SOURCE=NS3_5G_LENA records ... -> 162 clean records,
+   0 quarantined, 6 feature windows built."
+runtime ~15-20 seconds.
+
+--------------------------------------------------------------------------------
+ 5. (OPTIONAL) BUILD THE RAG KNOWLEDGE BASE
+--------------------------------------------------------------------------------
+
+The Decision & Root-Cause Analysis Agent and several other LLM-backed agents
+consult a read-only RAG knowledge base (ChromaDB, local, persisted to
+rag_data/chroma/). Build/refresh it (idempotent — safe to re-run any time):
+
+  python scripts/ingest_rag.py
+
+If you skip this step, the system still runs correctly: every RAG lookup
+degrades to an honest "not available" context (logged, never fabricated).
+
+--------------------------------------------------------------------------------
+ 6. RUN THE FULL SYSTEM
+--------------------------------------------------------------------------------
+
+The real continuous loop lives in src/main.py (ContinuousOrchestrator). It
+runs: telemetry -> preprocessing -> continuous D1 synchronization ->
+dependency-aware DT prediction -> fidelity evaluation -> drift/fidelity
+trigger -> Decision & Root-Cause Analysis Agent -> recalibrate / regenerate /
+expand_scope -> sandboxed candidate -> deterministic verification -> hot-swap
+promotion or rejection -> lifecycle record -> repeat, forever, without
+stopping (Ctrl-C to stop).
+
+  # Mock telemetry, runs forever
+  python -m src.main --mode demo
+
+  # REAL NS-3 telemetry over ZeroMQ (needs section 4 built, AND a separately
+  # running NS-3 process publishing on the configured endpoint — for a
+  # fully automated version of this, use scripts/run_e2e_demo.py instead,
+  # which launches the NS-3 subprocess for you — see section 7)
+  python -m src.main --mode live
+
+  # Bounded run for testing/demo purposes — stop after exactly one full
+  # adaptation cycle instead of running forever
+  python -m src.main --mode demo --max-drift-events 1
+
+It writes to this repo's real configured storage paths (see section 9) and
+logs structured JSON to logs/digital_twin.log as well as stdout.
+
+--------------------------------------------------------------------------------
+ 7. RUN THE TWO PERMANENT, REPO-TRACKED FULL END-TO-END DEMO SCRIPTS
+--------------------------------------------------------------------------------
+
+Both are unattended, single-adaptation-cycle runs. Each prints its own real
+observed results (LLM/RAG availability, live telemetry accumulation, real
+fidelity values, a concrete before/after proof that telemetry never stopped
+during the adaptation cycle, the full lifecycle record, and the maintenance
+report path) and exits non-zero if anything genuinely did not happen as
+claimed — there is no fabricated "success" message anywhere in this system.
+
+  # Mock telemetry — fast (~1-2 minutes), good for quick iteration
+  python scripts/run_orchestrator_demo.py
+
+  # REAL NS-3 telemetry — launches the compiled NS-3 binary from section 4
+  # as a subprocess, connects the orchestrator to it over real ZeroMQ, and
+  # runs one full real adaptation cycle end to end (~2-4 minutes). Writes to
+  # its OWN dedicated storage path (data/e2e_ns3_demo/) so it can never be
+  # confused with a mock-telemetry run's data.
+  python scripts/run_e2e_demo.py 2>&1 | tee logs/e2e_demo_output.log
+
+Confirmed real result on this machine, 2026-09-28 (real NS-3 run):
+  - Real compiled ns3.48-nr_5g_telemetry_sim binary launched, published 1170
+    real telemetry records over 20 simulated seconds.
+  - Real bootstrap training of all 5 DT models (throughput, packet_loss,
+    latency, prb_utilization, jitter).
+  - Real live D1 history accumulated purely from NS-3 telemetry (source
+    label confirmed NS3_5G_LENA only).
+  - Real external drift event fired on component "jitter" (severity 0.1846).
+  - Real Google Gemini API call succeeded: Decision & Root-Cause Analysis
+    Agent selected strategy "recalibrate" with confidence 0.88, and produced
+    a root-cause explanation genuinely grounded in that run's real PRB
+    utilization / UE speed figures (not generic template text).
+  - Real recalibration candidate (jitter-v2) trained and independently
+    re-verified by the deterministic verification gate: REJECTed (the
+    candidate was genuinely worse than production) — production
+    (jitter-v1) correctly, automatically preserved untouched.
+  - Telemetry ingestion proven NEVER blocked: records_synced grew from 380
+    to 720 strictly DURING the ~90-second adaptation cycle.
+  - Full lifecycle record and human-readable maintenance report written.
+  - Script printed: "[e2e] OK — one full real cycle completed unattended
+    over REAL NS-3 telemetry; telemetry never stopped synchronizing."
+  - Exit code: 0.
+
+(A REJECT outcome from the verification gate is just as valid and complete a
+demonstration as an ACCEPT would be — it proves the deterministic safety gate
+is genuinely protecting production, not rubber-stamping every candidate.)
+
+Note on the Google AI free tier: the free tier is capped at 20
+requests/day/model. Running both demo scripts back-to-back (each makes
+several real LLM calls: decision, verification explanation, maintenance
+report) can exhaust that daily quota partway through — when it does, every
+subsequent LLM call correctly, automatically falls back to the deterministic
+default strategy/explanation and logs a WARNING every time. This is expected,
+documented, fail-safe behavior, not a bug: a daily quota exhaustion can never
+be waited out by the built-in retry/backoff, so the system correctly gives up
+retrying and degrades instead of hanging.
+
+--------------------------------------------------------------------------------
+ 8. VISUALIZE RESULTS FROM A PREVIOUS RUN
+--------------------------------------------------------------------------------
+
+scripts/visualize_metrics.py is read-only — it never runs the pipeline
+itself, only reads and plots whatever real data the system has already
+produced. Run it any time after section 6 or 7 above:
+
+  # Production storage (config/settings.yaml's own paths -- what
+  # "python -m src.main" writes)
+  python scripts/visualize_metrics.py
+
+  # The dedicated real-NS-3 end-to-end demo's own storage subtree
+  python scripts/visualize_metrics.py --preset e2e_ns3_demo \
+      --output-dir data/e2e_ns3_demo/plots
+
+Produces, under --output-dir (default data/artifacts/plots/):
+  telemetry_core_metrics.png        throughput/latency/jitter/loss/PRB over time
+  telemetry_radio_conditions.png    SINR/RSRP/RSRQ/UE-speed over time
+  telemetry_original.csv            raw telemetry export
+  telemetry_predicted.csv           DT-predicted telemetry export
+  fidelity_over_time.png            composite FidelityScore + raw RMSE per component
+                                     (recomputed live via the real FidelityEvaluator
+                                     against each component's real production model)
+  fidelity_timeseries_<component>.csv   full unclipped numbers behind that chart
+  lifecycle_adaptation_outcomes.png     fidelity before/after per adaptation event,
+                                         green=ACCEPT / red=REJECT
+  lifecycle_outcomes.csv
+
+--------------------------------------------------------------------------------
+ 9. WHERE OUTPUT FILES END UP
+--------------------------------------------------------------------------------
+
+data/artifacts/d1_current_state.parquet    live DT current state (D1)
+data/artifacts/d1_history.parquet          live DT history
+data/artifacts/d1_quarantine.parquet       rejected telemetry (never silently dropped)
+data/models/<component>/<version>.joblib   versioned DT model artifacts
+data/models/registry_index.json            versioned model registry
+data/artifacts/lifecycle_records.jsonl     every adaptation event ever recorded
+data/artifacts/maintenance_reports/*.md    human-readable report per adaptation event
+rag_data/chroma/                           RAG vector store
+logs/digital_twin.log                      structured JSON log of every run
+logs/ns3_e2e_demo_stdout.log               real NS-3 simulator's own console output
+data/e2e_ns3_demo/                         the real-NS-3 demo script's OWN dedicated
+                                            D1/registry/lifecycle state (section 7) --
+                                            kept separate so it is never confused
+                                            with a mock-telemetry run's data
+
+All of the above are gitignored: they are real, regenerable runtime state,
+not source code, and are safe to delete and regenerate at any time.
+
+--------------------------------------------------------------------------------
+ 10. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+"pip install" fails on a system package
+  -> Make sure the venv is active (source .venv/bin/activate) before pip
+     install; system Python package conflicts are the usual cause.
+
+scripts/setup.py reports MISSING DEPENDENCIES
+  -> Run: pip install -r requirements.txt   (safe to re-run, idempotent)
+
+scripts/setup_ns3.sh warns about missing packages
+  -> Run the sudo apt-get command in section 4 once, then re-run
+     scripts/setup_ns3.sh.
+
+pytest gets OOM-killed on "pytest tests -q"
+  -> Run tests/unit and tests/integration as two separate invocations
+     instead (section 3). This is a known constraint on small/memory-
+     constrained machines (this project has observed it directly), not a
+     code defect.
+
+test_live_api_smoke_if_key_configured fails with a 429 / quota error
+  -> Expected if you already exhausted that day's 20-requests/day free-tier
+     quota (e.g. by running the demo scripts in section 7 several times the
+     same day). It will pass again once the quota resets (daily, UTC). This
+     is a genuine, honest failure by design -- not something to silence.
+
+Decision agent / LLM calls always fall back to the deterministic default
+  -> Check .env has a real, non-placeholder GOOGLE_API_KEY (or
+     GEMINI_API_KEY) set, and that you have not exhausted the daily free-tier
+     quota. The system is still fully functional and safe without a working
+     LLM -- every fallback is logged, never silent, and never fakes an LLM
+     response -- but you will not see genuine LLM-grounded root-cause
+     analysis until a real, working key with quota available is configured.
+
+scripts/run_e2e_demo.py: "FAIL: <binary> not built"
+  -> Run ./scripts/setup_ns3.sh first (section 4).
+
+Want a completely clean slate (fresh D1/model/lifecycle state)?
+  -> Everything under data/ and logs/ is gitignored, regenerable runtime
+     state. It is safe to delete data/artifacts/, data/models/,
+     data/e2e_ns3_demo/, and logs/ and re-run any of the commands above --
+     they will regenerate everything from scratch.
+
+--------------------------------------------------------------------------------
+ 11. QUICK REFERENCE -- MINIMUM COMMANDS TO GO FROM CLEAN CHECKOUT TO A
+     VALIDATED, RUNNING SYSTEM
+--------------------------------------------------------------------------------
+
+  cd dt_adaptation
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  cp .env.example .env                     # then edit in a real GOOGLE_API_KEY
+  python scripts/setup.py
+
+  .venv/bin/python -m pytest tests/unit -q
+  .venv/bin/python -m pytest tests/integration -q
+
+  ./scripts/setup_ns3.sh                   # only if you want real NS-3 telemetry
+  python ns3_sim/validate_e2e.py           # only if you built NS-3 above
+
+  python scripts/ingest_rag.py             # optional, improves LLM grounding
+
+  python scripts/run_orchestrator_demo.py  # fast, mock-telemetry full cycle
+  python scripts/run_e2e_demo.py           # real NS-3 full cycle (needs setup_ns3.sh)
+
+  python -m src.main --mode demo           # run forever, mock telemetry
+  python -m src.main --mode live           # run forever, real NS-3 telemetry
+
+================================================================================
+ END OF MANUAL
+================================================================================

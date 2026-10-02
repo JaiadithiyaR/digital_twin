@@ -8,14 +8,16 @@ day-to-day validation — this one is the real-NS-3 counterpart).
 
 Requires the vendored ns-3 tree built (`./scripts/setup_ns3.sh`).
 
-**Why the drift severity range is narrowed for this run**: no real `GOOGLE_API_KEY` is
-configured in this development environment. Narrowing `MockDriftSource`'s generated severity to
-a low range (real Module 13 held-out evidence: low severity reliably selects `recalibrate`, which
-needs no LLM at all) lets this run complete with zero fakes anywhere else — a genuinely real NS-3
-telemetry stream, a genuinely real drift event, a genuinely real PPO decision, a genuinely real
-recalibration candidate, real Module 17 verification, and a real lifecycle record. Module 11
-(drift) itself is out of scope per prompt.md §0.19 rule 7 — only a mock/interface exists, by
-design, regardless of this script.
+**Why the drift severity range is narrowed for this run**: narrowing `MockDriftSource`'s
+generated severity to a low range keeps this run fast and its strategy choice predictable
+regardless of whether a real `GOOGLE_API_KEY` is configured — Module 13 (the real LLM-backed
+Decision & Root-Cause Analysis Agent) makes a genuine `complete_structured()` call on every
+trigger either way; if no real key is configured, or the call fails, `decide_safe()` degrades to
+`config.decision_agent.fallback.default_strategy` (logged, never silent — see CLAUDE.md §6).
+Either path produces a genuinely real NS-3 telemetry stream, a genuinely real drift event, a
+genuine decision-agent call/fallback, a genuinely real adaptation candidate, real Module 17
+verification, and a real lifecycle record. Module 11 (drift) itself is out of scope per
+prompt.md §0.19 rule 7 — only a mock/interface exists, by design, regardless of this script.
 
 Usage:
     python scripts/run_e2e_demo.py 2>&1 | tee logs/e2e_demo_output.log
@@ -108,7 +110,7 @@ def main() -> int:
     orchestrator = ContinuousOrchestrator(live_settings, secrets, drift_severity_range_override=(0.05, 0.2))
     orchestrator.initialize()
     print(
-        f"[e2e] llm_available={orchestrator.llm_client is not None} ppo_available={orchestrator.ppo_model is not None} "
+        f"[e2e] llm_available={orchestrator.llm_client is not None} "
         f"rag_available={orchestrator.rag_kb.is_available}"
     )
 
@@ -164,12 +166,13 @@ def main() -> int:
         sampler.start()
 
         # Process drift events one at a time until one produces a completed lifecycle record
-        # (Module 19). A "skip" (PPO selected regenerate/expand_scope but no real
-        # GOOGLE_API_KEY is configured — logged, never faked, telemetry unaffected) is a
-        # legitimate outcome of a real event, not a failure — the orchestrator's own documented
-        # behavior is to move on to the next drift event, exactly what this loop does. Real
-        # Module 11 drift severities are genuinely random even within the narrowed low range, so
-        # which strategy PPO picks per event is not fully predictable in advance.
+        # (Module 19). A "skip" (Module 13 selected regenerate/expand_scope but no real
+        # GOOGLE_API_KEY is configured to execute that strategy's own agent call — logged, never
+        # faked, telemetry unaffected) is a legitimate outcome of a real event, not a failure —
+        # the orchestrator's own documented behavior is to move on to the next drift event,
+        # exactly what this loop does. Real Module 11 drift severities are genuinely random even
+        # within the narrowed low range, so which strategy the decision agent picks per event is
+        # not fully predictable in advance.
         max_attempts = 8
         record = None
         for attempt in range(1, max_attempts + 1):
@@ -180,9 +183,10 @@ def main() -> int:
                 record = records[-1]
                 break
             print(
-                f"[e2e] attempt {attempt} did not complete a full cycle (PPO likely selected an "
-                "LLM-needing strategy and no real GOOGLE_API_KEY is configured in this "
-                "environment) — moving on to the next real drift event..."
+                f"[e2e] attempt {attempt} did not complete a full cycle (the decision agent likely "
+                "selected an LLM-executed strategy [regenerate/expand_scope] and no real "
+                "GOOGLE_API_KEY is configured in this environment) — moving on to the next real "
+                "drift event..."
             )
 
         stop_sampling.set()
@@ -221,8 +225,11 @@ def main() -> int:
         print("\n[e2e] === lifecycle record (Module 19) ===")
         print(f"  event_id                  = {record.event_id}")
         print(f"  affected_component        = {record.affected_component}")
-        print(f"  drift_severity            = {record.drift_severity:.4f}")
-        print(f"  rl_action (PPO)           = {record.rl_action}")
+        print(f"  trigger_type              = {record.trigger_type}")
+        print(f"  trigger_severity          = {record.trigger_severity:.4f}")
+        print(f"  decision_strategy         = {record.decision_strategy}")
+        print(f"  decision_confidence       = {record.decision_confidence:.4f}")
+        print(f"  root_cause_analysis       = {record.root_cause_analysis}")
         print(f"  production_version_before = {record.production_version_before}")
         print(f"  candidate_version         = {record.candidate_version}")
         print(f"  fidelity_before           = {record.fidelity_before}")

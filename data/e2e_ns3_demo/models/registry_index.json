@@ -19,7 +19,7 @@
       "output_field": "throughput_mbps_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-09-07T17:53:58.260868Z",
+      "created_at": "2026-09-28T12:14:12.874489Z",
       "training_window": {
         "n_rows": 1200,
         "provenance": "bootstrap"
@@ -56,7 +56,7 @@
       "output_field": "packet_loss_pct_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-09-07T17:53:58.757988Z",
+      "created_at": "2026-09-28T12:14:17.835045Z",
       "training_window": {
         "n_rows": 1200,
         "provenance": "bootstrap"
@@ -94,7 +94,7 @@
       "output_field": "latency_ms_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-09-07T17:53:59.216074Z",
+      "created_at": "2026-09-28T12:14:23.921688Z",
       "training_window": {
         "n_rows": 1200,
         "provenance": "bootstrap"
@@ -131,7 +131,7 @@
       "output_field": "prb_utilization_pct_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-09-07T17:54:00.212324Z",
+      "created_at": "2026-09-28T12:14:24.720433Z",
       "training_window": {
         "n_rows": 1200,
         "provenance": "bootstrap"
@@ -168,7 +168,7 @@
       "output_field": "jitter_ms_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-09-07T17:54:00.303890Z",
+      "created_at": "2026-09-28T12:14:26.474577Z",
       "training_window": {
         "n_rows": 1200,
         "provenance": "bootstrap"
@@ -182,7 +182,7 @@
       },
       "fidelity_before": null,
       "fidelity_after": null,
-      "status": "superseded",
+      "status": "production",
       "llm_metadata": null
     },
     {
@@ -203,72 +203,29 @@
       "output_field": "jitter_ms_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "jitter-v1",
-      "created_at": "2026-09-07T17:55:33.063808Z",
+      "created_at": "2026-09-28T12:15:03.358676Z",
       "training_window": {
-        "start": "2026-09-07T17:53:54.339775+00:00",
-        "end": "2026-09-07T17:54:00.139775+00:00",
-        "n_rows": 352,
+        "start": "2026-09-28T12:14:09.760309+00:00",
+        "end": "2026-09-28T12:14:19.260309+00:00",
+        "n_rows": 576,
         "window_hours": 24.0,
         "provenance": "d1_history",
         "ue_id": null,
         "cell_id": null
       },
       "evaluation_window": {
-        "start": "2026-09-07T17:54:00.139775+00:00",
-        "end": "2026-09-07T17:55:25.718910+00:00",
-        "n_rows": 88,
+        "start": "2026-09-28T12:14:19.360309+00:00",
+        "end": "2026-09-28T12:14:21.660309+00:00",
+        "n_rows": 144,
         "provenance": "d1_history"
       },
       "evaluation_metrics": {
-        "rmse": 0.10982091564871024,
-        "mae": 0.05507800674624741
+        "rmse": 0.14443775097539102,
+        "mae": 0.07534145088294625
       },
       "fidelity_before": null,
       "fidelity_after": null,
       "status": "rejected",
-      "llm_metadata": null
-    },
-    {
-      "component": "jitter",
-      "version_id": "jitter-v3",
-      "model_class": "JitterModel",
-      "artifact_path": "jitter/jitter-v3.joblib",
-      "source_path": null,
-      "dependencies": [
-        "throughput",
-        "latency",
-        "packet_loss"
-      ],
-      "feature_schema": [
-        "offered_load_mbps",
-        "ue_count"
-      ],
-      "output_field": "jitter_ms_pred",
-      "adaptation_type": "recalibrate",
-      "parent_version_id": "jitter-v1",
-      "created_at": "2026-09-09T09:27:55.703090Z",
-      "training_window": {
-        "start": "2026-09-08T18:15:52.011595+00:00",
-        "end": "2026-09-09T09:27:47.900182+00:00",
-        "n_rows": 224,
-        "window_hours": 24.0,
-        "provenance": "d1_history",
-        "ue_id": null,
-        "cell_id": null
-      },
-      "evaluation_window": {
-        "start": "2026-09-09T09:27:47.900182+00:00",
-        "end": "2026-09-09T09:27:48.800182+00:00",
-        "n_rows": 56,
-        "provenance": "d1_history"
-      },
-      "evaluation_metrics": {
-        "rmse": 0.06384443237395022,
-        "mae": 0.027569798217421133
-      },
-      "fidelity_before": null,
-      "fidelity_after": null,
-      "status": "production",
       "llm_metadata": null
     }
   ]
