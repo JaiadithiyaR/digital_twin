@@ -1,14 +1,25 @@
-<!-- source: internal:CLAUDE.md (this repository's own Module 14/15/16 validation write-ups) -->
-# Development Validation Records — NOT Production Adaptation History
+<!-- source: ns3_legacy -->
+# Development Validation Records — NS-3-ERA, RETIRED (NOT comparable to current OAI history)
 
-**Read this note before treating anything below as operational history.** This corpus category
-is intended (prompt.md §35) for historical *adaptation* records — the accumulated output of
-Module 19 (Lifecycle Management Agent), which is not built yet, produced by a system that has run
-continuously in production and genuinely experienced drift-triggered adaptations. Neither exists
-yet: this system has not been run continuously against live/production traffic, and Module 19
-does not exist to produce structured lifecycle records even if it had. **This category is
-therefore placeholder-thin** — what follows are real (not fabricated) events that genuinely
-occurred during THIS project's own development/testing of Modules 14-16, kept here as the closest
+**OAI migration notice (read this before treating anything below as relevant):** every record in
+this file was produced against the NOW-RETIRED NS-3/5G-LENA simulated telemetry source and the 5
+NS-3-era components (`throughput`/`latency`/`packet_loss`/`prb_utilization`/`jitter`), which this
+project has fully replaced with real OAI RAN KPI replay and 7 new components (`dl_bler`/`ul_bler`/
+`dl_prb`/`ul_prb`/`dl_throughput`/`ul_throughput`/`dl_rlc_delay` — see `docs/oai_twin.md`). This
+document's own `source` metadata is deliberately set to `ns3_legacy` (not a real URL/path) so
+retrieval can label it as historical/not-comparable rather than silently surfacing it as current
+guidance. **Kept here for historical reference, never deleted, and never cited as current system
+behavior or as a comparison baseline for post-migration fidelity/adaptation outcomes.**
+
+**Read this note before treating anything below as operational history (original note, still
+true independent of the migration).** This corpus category is intended (prompt.md §35) for
+historical *adaptation* records — the accumulated output of Module 19 (Lifecycle Management
+Agent), which is not built yet, produced by a system that has run continuously in production and
+genuinely experienced drift-triggered adaptations. Neither exists yet: this system has not been
+run continuously against live/production traffic, and Module 19 does not exist to produce
+structured lifecycle records even if it had. **This category is therefore placeholder-thin** —
+what follows are real (not fabricated) events that genuinely occurred during THIS project's own
+development/testing of Modules 14-16 (in the NS-3 era), kept here as the closest
 currently-available real substitute, clearly distinguished from what a real operational history
 would look like once Module 19 exists and the system has run for real.
 

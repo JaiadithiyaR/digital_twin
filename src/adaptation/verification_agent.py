@@ -151,17 +151,36 @@ class VerificationAgent:
         model_registry: ModelRegistry,
         fidelity_evaluator: FidelityEvaluator | None = None,
         llm_client: "GoogleClient | None" = None,
+        static_prefix: str | None = None,
     ) -> None:
         self._settings = settings
         self._model_registry = model_registry
         self._fidelity_evaluator = fidelity_evaluator or FidelityEvaluator(settings.fidelity)
         self._llm_client = llm_client
+        # Phase 13 §3.4: "explanation" role — this call runs strictly AFTER the deterministic
+        # decision is already final/acted-on (see this module's own docstring), so it needs no
+        # deep reasoning, only clear prose.
+        self._effort = settings.llm.effort_by_role.explanation
+        # Phase 13 §3.3 — see RegenerationAgent's own entry for the full rationale: `None` for
+        # every non-baseline caller, which keeps this agent's prompt content byte-for-byte
+        # unchanged from before this feature existed.
+        self._static_prefix = static_prefix
 
     @classmethod
     def from_settings(
-        cls, settings: "Settings", model_registry: ModelRegistry, llm_client: "GoogleClient | None" = None
+        cls,
+        settings: "Settings",
+        model_registry: ModelRegistry,
+        llm_client: "GoogleClient | None" = None,
+        static_prefix: str | None = None,
     ) -> "VerificationAgent":
-        return cls(settings, model_registry, fidelity_evaluator=FidelityEvaluator(settings.fidelity), llm_client=llm_client)
+        return cls(
+            settings,
+            model_registry,
+            fidelity_evaluator=FidelityEvaluator(settings.fidelity),
+            llm_client=llm_client,
+            static_prefix=static_prefix,
+        )
 
     # --- main entrypoint ---------------------------------------------------------------------
 
@@ -175,6 +194,7 @@ class VerificationAgent:
         production_component_factory: "Callable[[], DTComponent] | None" = None,
         drift_context: str | None = None,
         rag_knowledge_base: "RagKnowledgeBase | None" = None,
+        cache_key: str | None = None,
     ) -> VerificationResult:
         """Verify `candidate_version` (must currently have `status == "candidate"`) and act on
         the result: promotes it to production on ACCEPT, marks it rejected on REJECT. Always
@@ -353,7 +373,7 @@ class VerificationAgent:
         # --- Agentic reasoning layer — informational only, runs strictly AFTER `decision` is
         # final and already acted on. See module docstring / rule 9.
         explanation, llm_used = self._explain(
-            candidate_version, decision, checks, fidelity_before, fidelity_after, drift_context, rag_knowledge_base
+            candidate_version, decision, checks, fidelity_before, fidelity_after, drift_context, rag_knowledge_base, cache_key=cache_key
         )
 
         logger.info(
@@ -394,6 +414,8 @@ class VerificationAgent:
         fidelity_after: float | None,
         drift_context: str | None,
         rag_knowledge_base: "RagKnowledgeBase | None",
+        *,
+        cache_key: str | None = None,
     ) -> tuple[str, bool]:
         deterministic_summary = "; ".join(f"{c.name}={'PASS' if c.passed else 'FAIL'} ({c.detail})" for c in checks)
         fallback_explanation = (
@@ -421,8 +443,9 @@ class VerificationAgent:
             "or failed, error distributions, drift context, model behaviour, the retrieved "
             "knowledge, or any additional contextual concerns."
         )
+        sent_prompt = prompt if cache_key is not None else (f"{self._static_prefix}\n\n{prompt}" if self._static_prefix else prompt)
         try:
-            result = self._llm_client.complete_structured(prompt, _LLMVerificationReasoning)
+            result = self._llm_client.complete_structured(sent_prompt, _LLMVerificationReasoning, effort=self._effort, cache_key=cache_key)
         except LLMClientError as exc:
             logger.warning(
                 "verification LLM reasoning failed — falling back to the deterministic explanation",

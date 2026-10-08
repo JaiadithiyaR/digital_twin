@@ -24,9 +24,10 @@ from src.adaptation.expand_scope_agent import (
     _ProposedComponentDesign,
 )
 from src.common.config import load_settings
+from src.data.oai_dataset import ALL_FEATURES
 from src.dt_models.d1_model_store import D1Store
+from src.dt_models.dl_bler import DlBlerModel
 from src.dt_models.model_registry import DTModelRegistry
-from src.dt_models.throughput import ThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RetrievedChunk
@@ -35,27 +36,32 @@ from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
 
 SETTINGS = load_settings()
+# A new, genuinely-novel target: an existing raw feature column, never one of the 7 existing
+# component targets — mirrors prompt.md's own worked example (SINR: a raw INPUT no existing
+# component predicts) using this OAI schema's real columns instead.
+_NEW_TARGET_COLUMN = "wb_cqi_avg_lag1"
+_NEW_REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1")
 
 VALID_DESIGN = _ProposedComponentDesign(
-    component_name="sinr_quality",
-    target_column="sinr_db",
+    component_name="cqi_quality",
+    target_column=_NEW_TARGET_COLUMN,
     dependencies=(),
-    required_features=("offered_load_mbps", "prb_utilization_pct", "ue_speed_mps"),
-    purpose="Predict SINR from load and mobility for proactive handover decisions.",
+    required_features=_NEW_REQUIRED_FEATURES,
+    purpose="Predict channel quality indicator from load and mobility for proactive scheduling.",
     feature_extraction_notes="none needed",
 )
 
-VALID_SOURCE = """
+VALID_SOURCE = f"""
 import pandas as pd
 import joblib
 from sklearn.linear_model import LinearRegression
 from src.dt_models.base import DTComponent
 
-class SinrQualityModel(DTComponent):
-    COMPONENT_NAME = "sinr_quality"
+class CqiQualityModel(DTComponent):
+    COMPONENT_NAME = "cqi_quality"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "ue_speed_mps")
-    OUTPUT_FIELD = "sinr_db_pred"
+    REQUIRED_FEATURES = {_NEW_REQUIRED_FEATURES!r}
+    OUTPUT_FIELD = "{_NEW_TARGET_COLUMN}_pred"
 
     def __init__(self):
         self._model = LinearRegression()
@@ -76,7 +82,7 @@ class SinrQualityModel(DTComponent):
     def evaluate(self, features, targets):
         preds = self.predict(features)
         rmse = float(((preds - targets) ** 2).mean() ** 0.5)
-        return {"rmse": rmse}
+        return {{"rmse": rmse}}
 
     def save(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,11 +93,11 @@ class SinrQualityModel(DTComponent):
         self._trained = True
 """
 
-BROKEN_SOURCE = """
+BROKEN_SOURCE = f"""
 from src.dt_models.base import DTComponent
-class SinrQualityModel(DTComponent):
-    COMPONENT_NAME = "sinr_quality"
-    OUTPUT_FIELD = "sinr_db_pred"
+class CqiQualityModel(DTComponent):
+    COMPONENT_NAME = "cqi_quality"
+    OUTPUT_FIELD = "{_NEW_TARGET_COLUMN}_pred"
     def __init__(self):
         raise RuntimeError("intentionally broken")
     @property
@@ -99,7 +105,7 @@ class SinrQualityModel(DTComponent):
         return False
     def train(self, f, t): pass
     def predict(self, f): pass
-    def evaluate(self, f, t): return {}
+    def evaluate(self, f, t): return {{}}
     def save(self, p): pass
     def load(self, p): pass
 """
@@ -122,7 +128,7 @@ class _FakeLLMClient:
         self.implementation_calls.append(prompt)
         if self._implementations is not None:
             return self._implementations[len(self.implementation_calls) - 1]
-        return schema(class_name="SinrQualityModel", source_code=VALID_SOURCE, reasoning="linear model")
+        return schema(class_name="CqiQualityModel", source_code=VALID_SOURCE, reasoning="linear model")
 
 
 class _FakeRagKb:
@@ -136,15 +142,17 @@ class _FakeRagKb:
         return self._chunks
 
 
-def _clean_record(ue_id: str, cell_id: str, timestamp: datetime, **overrides) -> CleanTelemetryRecord:
+def _clean_record(session_id: int, cell_id: int, ts_1s: datetime, **overrides) -> CleanTelemetryRecord:
+    features = {col: float(np.random.uniform(0, 1)) for col in ALL_FEATURES}
+    targets = {
+        "dl_throughput": float(np.random.uniform(1, 50)), "ul_throughput": float(np.random.uniform(0, 10)),
+        "dl_rlc_delay": float(np.random.uniform(0.1, 20)), "dl_prb": float(np.random.uniform(1, 90)),
+        "ul_prb": float(np.random.uniform(1, 20)), "dl_bler": float(np.random.uniform(0, 0.3)),
+        "ul_bler": float(np.random.uniform(0, 0.2)),
+    }
     base = dict(
-        timestamp=timestamp, ue_id=ue_id, cell_id=cell_id,
-        throughput_mbps=float(np.random.uniform(5, 50)), offered_load_mbps=float(np.random.uniform(5, 60)),
-        latency_ms=float(np.random.uniform(1, 20)), jitter_ms=float(np.random.uniform(0, 2)),
-        packet_loss_pct=float(np.random.uniform(0, 5)), prb_utilization_pct=float(np.random.uniform(10, 90)),
-        sinr_db=float(np.random.uniform(0, 30)), rsrp_dbm=float(np.random.uniform(-120, -60)),
-        rsrq_db=float(np.random.uniform(-15, -5)), ue_count=int(np.random.randint(1, 10)),
-        ue_speed_mps=float(np.random.uniform(0, 15)), source="MOCK", quality=RecordQuality(),
+        run_id=1, cell_id=cell_id, session_id=session_id, ue_id=session_id, slice_id=1,
+        ts_1s=ts_1s, features=features, targets=targets, source="MOCK", quality=RecordQuality(),
     )
     base.update(overrides)
     return CleanTelemetryRecord(**base)
@@ -159,15 +167,15 @@ def _build_store(tmp_path: Path, n_rows: int = 300, hours_back_span: float = 2.0
     records = []
     for i in range(n_rows):
         ts = now - timedelta(hours=hours_back_span * (1 - i / max(n_rows - 1, 1)))
-        records.append(_clean_record(f"ue-{i % 10}", f"cell-{i % 2}", ts))
+        records.append(_clean_record(i % 10 + 1, i % 2 + 1, ts))
     store.append_history(records)
     return store
 
 
-def _registry_with_throughput(tmp_path: Path, store: D1Store) -> tuple[ModelRegistry, DTModelRegistry]:
+def _registry_with_dl_bler(tmp_path: Path, store: D1Store) -> tuple[ModelRegistry, DTModelRegistry]:
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     dt_model_registry = DTModelRegistry()
-    dt_model_registry.register(ThroughputModel.from_settings(SETTINGS))
+    dt_model_registry.register(DlBlerModel.from_settings(SETTINGS))
     return registry, dt_model_registry
 
 
@@ -183,12 +191,12 @@ def _agent(tmp_path, store, model_registry, dt_model_registry, llm_client, fidel
 
 
 def _example_factory():
-    return lambda: ThroughputModel.from_settings(SETTINGS)
+    return lambda: DlBlerModel.from_settings(SETTINGS)
 
 
 def test_raises_when_window_has_too_few_rows(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     agent = _agent(tmp_path, store, registry, dt_model_registry, _FakeLLMClient())
     with pytest.raises(ExpandScopeError, match="need >="):
         agent.expand_scope(_example_factory(), window_hours=1e-9)
@@ -196,8 +204,8 @@ def test_raises_when_window_has_too_few_rows(tmp_path):
 
 def test_design_rejected_when_name_collides_with_existing_component(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
-    colliding = VALID_DESIGN.model_copy(update={"component_name": "throughput"})
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    colliding = VALID_DESIGN.model_copy(update={"component_name": "dl_bler"})
     llm = _FakeLLMClient(designs=[colliding, colliding])
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
     with pytest.raises(ExpandScopeError, match="already exists"):
@@ -206,19 +214,19 @@ def test_design_rejected_when_name_collides_with_existing_component(tmp_path):
 
 def test_design_rejected_when_component_already_has_versions(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
-    # "packet_loss" is NOT in `dt_model_registry` (only "throughput" is, per
-    # `_registry_with_throughput`) but already has a registered version in `ModelRegistry` —
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    # "ul_bler" is NOT in `dt_model_registry` (only "dl_bler" is, per
+    # `_registry_with_dl_bler`) but already has a registered version in `ModelRegistry` —
     # this exercises the SECOND validation check specifically, distinct from the "already exists
     # in dt_model_registry" check exercised above.
-    from src.dt_models.packet_loss import PacketLossModel
+    from src.dt_models.ul_bler import UlBlerModel
 
     registry.register_version(
-        component_instance=PacketLossModel.from_settings(SETTINGS),
+        component_instance=UlBlerModel.from_settings(SETTINGS),
         adaptation_type="bootstrap", parent_version_id=None, training_window={}, evaluation_window={},
         evaluation_metrics={}, status="production",
     )
-    already_used = VALID_DESIGN.model_copy(update={"component_name": "packet_loss"})
+    already_used = VALID_DESIGN.model_copy(update={"component_name": "ul_bler"})
     llm = _FakeLLMClient(designs=[already_used, already_used])
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
     with pytest.raises(ExpandScopeError, match="already has registered versions"):
@@ -227,7 +235,7 @@ def test_design_rejected_when_component_already_has_versions(tmp_path):
 
 def test_design_rejected_when_target_column_not_real(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     bad = VALID_DESIGN.model_copy(update={"target_column": "not_a_real_column"})
     llm = _FakeLLMClient(designs=[bad, bad])
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
@@ -237,7 +245,7 @@ def test_design_rejected_when_target_column_not_real(tmp_path):
 
 def test_design_rejected_when_dependency_unknown(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     bad = VALID_DESIGN.model_copy(update={"dependencies": ("nonexistent_component",)})
     llm = _FakeLLMClient(designs=[bad, bad])
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
@@ -247,7 +255,7 @@ def test_design_rejected_when_dependency_unknown(tmp_path):
 
 def test_design_rejected_when_required_features_unavailable(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     bad = VALID_DESIGN.model_copy(update={"required_features": ("totally_made_up_column",)})
     llm = _FakeLLMClient(designs=[bad, bad])
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
@@ -257,7 +265,7 @@ def test_design_rejected_when_required_features_unavailable(tmp_path):
 
 def test_design_self_correction_succeeds_on_second_attempt(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     bad = VALID_DESIGN.model_copy(update={"target_column": "not_real"})
     llm = _FakeLLMClient(designs=[bad, VALID_DESIGN])
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
@@ -270,34 +278,34 @@ def test_design_self_correction_succeeds_on_second_attempt(tmp_path):
 
 def test_successful_expand_scope_registers_a_new_component(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     agent = _agent(tmp_path, store, registry, dt_model_registry, _FakeLLMClient())
 
-    result = agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="SINR anomaly")
+    result = agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="CQI anomaly")
 
-    assert result.version.component == "sinr_quality"
+    assert result.version.component == "cqi_quality"
     assert result.version.status == "candidate"
     assert result.version.adaptation_type == "expand_scope"
     assert result.version.parent_version_id is None  # genuinely new — no parent
     assert result.version.fidelity_before is None  # no prior version to compare against
-    assert result.version.output_field == "sinr_db_pred"
+    assert result.version.output_field == f"{_NEW_TARGET_COLUMN}_pred"
     assert result.version.source_path is not None
-    assert registry.list_versions("sinr_quality")[0].version_id == "sinr_quality-v1"
+    assert registry.list_versions("cqi_quality")[0].version_id == "cqi_quality-v1"
 
 
 def test_dt_model_registry_untouched_by_expand_scope(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     agent = _agent(tmp_path, store, registry, dt_model_registry, _FakeLLMClient())
 
     agent.expand_scope(_example_factory(), window_hours=48)
 
-    assert [c.COMPONENT_NAME for c in dt_model_registry.list_components()] == ["throughput"]
+    assert [c.COMPONENT_NAME for c in dt_model_registry.list_components()] == ["dl_bler"]
 
 
 def test_d1_never_written_to(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     agent = _agent(tmp_path, store, registry, dt_model_registry, _FakeLLMClient())
 
     before_rows = len(store.get_history())
@@ -309,11 +317,11 @@ def test_d1_never_written_to(tmp_path):
 
 def test_implementation_self_correction_retries_after_sandbox_rejection(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     llm = _FakeLLMClient(
         implementations=[
-            _GeneratedComponentCode(class_name="SinrQualityModel", source_code=BROKEN_SOURCE, reasoning="attempt 1"),
-            _GeneratedComponentCode(class_name="SinrQualityModel", source_code=VALID_SOURCE, reasoning="attempt 2"),
+            _GeneratedComponentCode(class_name="CqiQualityModel", source_code=BROKEN_SOURCE, reasoning="attempt 1"),
+            _GeneratedComponentCode(class_name="CqiQualityModel", source_code=VALID_SOURCE, reasoning="attempt 2"),
         ]
     )
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
@@ -327,11 +335,11 @@ def test_implementation_self_correction_retries_after_sandbox_rejection(tmp_path
 
 def test_exhausting_implementation_attempts_registers_nothing(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     llm = _FakeLLMClient(
         implementations=[
-            _GeneratedComponentCode(class_name="SinrQualityModel", source_code=BROKEN_SOURCE, reasoning="1"),
-            _GeneratedComponentCode(class_name="SinrQualityModel", source_code=BROKEN_SOURCE, reasoning="2"),
+            _GeneratedComponentCode(class_name="CqiQualityModel", source_code=BROKEN_SOURCE, reasoning="1"),
+            _GeneratedComponentCode(class_name="CqiQualityModel", source_code=BROKEN_SOURCE, reasoning="2"),
         ]
     )
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
@@ -339,12 +347,12 @@ def test_exhausting_implementation_attempts_registers_nothing(tmp_path):
     with pytest.raises(ExpandScopeError, match="no accepted candidate"):
         agent.expand_scope(_example_factory(), window_hours=48)
 
-    assert registry.list_versions("sinr_quality") == []
+    assert registry.list_versions("cqi_quality") == []
 
 
 def test_llm_failure_during_design_wrapped_as_expand_scope_error(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     llm = _FakeLLMClient(raise_on_call=LLMClientError("simulated failure"))
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
 
@@ -354,7 +362,7 @@ def test_llm_failure_during_design_wrapped_as_expand_scope_error(tmp_path):
 
 def test_fidelity_after_none_without_prior_history(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
     agent = _agent(tmp_path, store, registry, dt_model_registry, _FakeLLMClient(), fidelity_evaluator=evaluator)
 
@@ -366,13 +374,13 @@ def test_fidelity_after_none_without_prior_history(tmp_path):
 
 def test_fidelity_after_real_value_when_evaluator_prewarmed(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
     history = store.get_history()
-    y_true = history["sinr_db"]
+    y_true = history[_NEW_TARGET_COLUMN]
     y_pred = y_true + np.random.normal(0, 1, len(y_true))
     for _ in range(SETTINGS.fidelity.min_history_for_normalization + 1):
-        evaluator.evaluate("sinr_quality", y_true, y_pred, update_window=True)
+        evaluator.evaluate("cqi_quality", y_true, y_pred, update_window=True)
 
     agent = _agent(tmp_path, store, registry, dt_model_registry, _FakeLLMClient(), fidelity_evaluator=evaluator)
     result = agent.expand_scope(_example_factory(), window_hours=48)
@@ -382,41 +390,41 @@ def test_fidelity_after_real_value_when_evaluator_prewarmed(tmp_path):
 
 def test_design_prompt_includes_existing_components_and_rag_note(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     llm = _FakeLLMClient()
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
 
-    agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="SINR anomaly")
+    agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="CQI anomaly")
 
     prompt = llm.design_calls[0]
-    assert '"component_name": "throughput"' in prompt
-    assert "SINR anomaly" in prompt
+    assert '"component_name": "dl_bler"' in prompt
+    assert "CQI anomaly" in prompt
     assert "not available" in prompt  # no rag_knowledge_base supplied -> honestly reported, never faked
 
 
 def test_rag_context_is_retrieved_and_reaches_the_design_prompt(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     llm = _FakeLLMClient()
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
     chunk = RetrievedChunk(
-        text="SINR quality prediction supports proactive handover decisions in O-RAN.",
+        text="CQI quality prediction supports proactive scheduling decisions in O-RAN.",
         category="oran", source="https://docs.o-ran-sc.org/", document_id="oran", chunk_index=0,
         version="v1", distance=0.1,
     )
     rag_kb = _FakeRagKb([chunk])
 
-    agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="SINR anomaly", rag_knowledge_base=rag_kb)
+    agent.expand_scope(_example_factory(), window_hours=48, expand_scope_context="CQI anomaly", rag_knowledge_base=rag_kb)
 
     assert rag_kb.queries  # the agent genuinely called retrieve(), not a stub
     prompt = llm.design_calls[0]
-    assert "SINR quality prediction supports proactive handover" in prompt
+    assert "CQI quality prediction supports proactive scheduling" in prompt
     assert "[oran/https://docs.o-ran-sc.org/]" in prompt
 
 
 def test_unavailable_rag_knowledge_base_degrades_honestly(tmp_path):
     store = _build_store(tmp_path)
-    registry, dt_model_registry = _registry_with_throughput(tmp_path, store)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
     llm = _FakeLLMClient()
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
     rag_kb = _FakeRagKb([])

@@ -1,0 +1,17 @@
+# Baseline mode: rule_based — same triggers/adaptation agents/sandbox/verification gate as
+# full_system, but the STRATEGY decision itself is a fixed severity-threshold rule
+# (src/adaptation/baseline_policies.py:rule_based_strategy), never an LLM call. Regenerate/
+# expand_scope codegen and verification's optional LLM explanation DO still use the same
+# gemini-3.6-flash model full_system uses (phase13 §3.1: "rule_based ... shares LLM-requiring
+# roles like codegen with full_system").
+mode: rule_based
+description: >
+  Trigger -> deterministic severity-threshold strategy (recalibrate/regenerate/expand_scope) ->
+  the real Modules 14/15/16 agents -> the real Module 17 verification gate -> hot swap on ACCEPT.
+seeds: [1]  # one run — the strategy decision itself has no randomness; only genuinely
+            # LLM-authored code (regenerate/expand_scope) has any run-to-run variation, and that
+            # is reported honestly rather than smoothed over multiple paid LLM runs.
+uses_llm: true  # codegen + verification-explanation roles only, never for the decision itself
+recalibrate_max_severity: 0.3
+regenerate_max_severity: 0.7
+# severity > regenerate_max_severity -> expand_scope

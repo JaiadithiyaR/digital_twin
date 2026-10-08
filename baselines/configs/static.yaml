@@ -1,0 +1,10 @@
+# Baseline mode: static — bootstrap v2 models, never adapted. Every trigger (external drift and
+# internal fidelity-based) is detected, validated, and logged into adaptation_events.jsonl with
+# gate_result=null and a skipped_reason — exactly as if adaptation didn't exist — but never acted
+# on. This is the "do nothing" floor every other mode is compared against.
+mode: static
+description: >
+  Bootstrap v2 (residual, CV-tuned) components only. Triggers are logged but never dispatched to
+  any adaptation agent. No LLM calls at all.
+seeds: [1]  # deterministic given fixed bootstrap + fixed replay — one run is sufficient
+uses_llm: false

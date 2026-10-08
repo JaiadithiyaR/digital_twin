@@ -7,9 +7,17 @@ recovery point if context is compacted or work spans multiple sessions.
 
 Status legend: `[ ]` not started · `[~]` in progress · `[x]` implemented & validated.
 
+> **OAI MIGRATION (prompt2.md) — COMPLETE, see the dedicated "Phase 12 — OAI Migration" section
+> below.** The "Module 1" and "Module 6"-"Module 10" entries immediately below this notice
+> describe the NS-3/5G-LENA era and the 5 retired DT components (throughput/latency/packet_loss/
+> prb_utilization/jitter) — kept verbatim for historical reference (per this project's own
+> "archive, never delete" convention) but **superseded**: Module 1 is now a real OAI RAN KPI
+> replay source, and the 5 retired components are replaced by 7 real OAI KPI components. Jump to
+> "Phase 12 — OAI Migration" for current, accurate status.
+
 ---
 
-## Module 1 — NS-3 / OAI Network
+## Module 1 — NS-3 / OAI Network (RETIRED — see Phase 12 below for the current replacement)
 - [x] Implementation status: Environment inspected (prompt.md §0.2 steps 1-3). Toolchain (g++
   15.2.0, cmake 4.2.3, ninja 1.13.2, python 3.14.4) exceeds ns-3.48 minimums with no root needed.
   Compatible pair identified: ns-3.48 + 5G-LENA `nr` v5.1 (newest matched row in the official
@@ -255,7 +263,7 @@ all clean after the fix.
   (latency, packet loss, PRB utilization, jitter) follow one at a time after that, per the user's
   explicit "next five prompts" sequencing.
 
-## Module 6 — Throughput Model
+## Module 6 — Throughput Model (RETIRED — see Phase 12 below)
 - [x] Implementation status: `src/dt_models/regressors.py` (`build_regressor(model_type, params)`
   — shared XGBoost/RandomForest factory reused by Modules 7-10) and
   `src/dt_models/throughput.py` (`ThroughputModel(DTComponent)` — the first real DT prediction
@@ -321,7 +329,7 @@ full-suite runs (132/132 passing each time). Four regression tests added directl
 `tests/unit/test_d1_model_store.py` (dtype checked after first write for both current-state and
 history, after multiple batches, and after a disk reload) so this cannot silently regress again.
 
-## Module 7 — Latency Model
+## Module 7 — Latency Model (RETIRED — see Phase 12 below)
 - [x] Implementation status: `src/dt_models/latency.py` (`LatencyModel(DTComponent)` — the
   second real DT prediction component, and the first with a genuine upstream dependency).
   `COMPONENT_NAME="latency"`, `DEPENDENCIES=("throughput",)`, `REQUIRED_FEATURES=
@@ -364,7 +372,7 @@ history, after multiple batches, and after a disk reload) so this cannot silentl
   follow-up above. Then Module 9 (PRB Utilization, independent/optional) and Module 10 (Jitter,
   depends on latency+throughput+packet_loss).
 
-## Module 8 — Packet-Loss Model
+## Module 8 — Packet-Loss Model (RETIRED — see Phase 12 below)
 - [x] Implementation status: `src/dt_models/packet_loss.py` (`PacketLossModel(DTComponent)` —
   the third real DT prediction component, second root node alongside Module 6's
   `ThroughputModel`). `COMPONENT_NAME="packet_loss"`, `DEPENDENCIES=()`, `REQUIRED_FEATURES=
@@ -403,7 +411,7 @@ history, after multiple batches, and after a disk reload) so this cannot silentl
   revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
   Module 7, not yet done — see above).
 
-## Module 9 — PRB-Utilization Model
+## Module 9 — PRB-Utilization Model (RETIRED — see Phase 12 below)
 - [x] Implementation status: `src/dt_models/prb_utilization.py` (`PrbUtilizationModel
   (DTComponent)` — the fourth real DT prediction component, first with a REAL cross-module
   dependency wired without a fallback judgment call: `DEPENDENCIES=("throughput",)`, explicitly
@@ -473,7 +481,7 @@ third real bug this project has found purely by insisting on actually running th
 with real reported metrics rather than accepting a plausible-looking pass (see Module 6's D1
 dtype bug and Module 3's zmq threading bug for the other two).
 
-## Module 10 — Jitter Model
+## Module 10 — Jitter Model (RETIRED — see Phase 12 below)
 - [x] Implementation status: `src/dt_models/jitter.py` (`JitterModel(DTComponent)` — the fifth
   and final real DT prediction component, the last node in the dependency graph).
   `COMPONENT_NAME="jitter"`, `DEPENDENCIES=("throughput","latency","packet_loss")` — all three
@@ -1429,7 +1437,54 @@ longer exist in this repo — do not cite these numbers as current behavior)</su
   Module 8 exists (flagged by Module 7, still not done); (2) a real component-scoped adaptation
   lock (prompt.md §30) for genuine concurrent-trigger handling — this orchestrator processes one
   trigger fully before the next, which is safe but not yet the "queue/coalesce/defer" policy
-  `config.adaptation.lock_policy` already anticipates; (3) `tests/e2e/` is still empty.
+  `config.adaptation.lock_policy` already anticipates; (3) `tests/e2e/` is still empty. **Item (1)
+  is now moot — see Phase 12 below: `LatencyModel`/`latency.py` no longer exist, retired along
+  with the rest of the 5-component NS-3-era set.**
+
+---
+
+## Phase 12 — OAI Migration (prompt2.md) — COMPLETE
+- [x] Implementation status: NS-3/5G-LENA removed from the runtime entirely; replaced by a
+  config-driven, read-only replay of real exported OAI RAN KPI data (`SOURCE=OAI_RAN_REPLAY`).
+  The 5 NS-3-era DT prediction components (throughput/latency/packet_loss/prb_utilization/jitter)
+  retired and structurally forbidden from reappearing (`_RETIRED_COMPONENT_IDS`, checked at
+  `Settings` construction); replaced by 7 real OAI KPI components (`dl_bler`, `ul_bler`,
+  `dl_prb`, `ul_prb`, `dl_throughput`, `ul_throughput`, `dl_rlc_delay`). The fidelity formula
+  itself (Module 12) is completely unchanged. Full writeup — data pipeline, replay source, the 7
+  components' honest bootstrap-vs-persistence metrics, baseline experiment modes, lifecycle
+  wiring, RAG migration, dashboard rewrite, the required end-to-end smoke test, two non-obvious
+  bugs found and fixed, and the final consistency sweep — lives in CLAUDE.md's "Phase 12 — OAI
+  Migration" entry (read that one for detail; not duplicated here). Real KPI catalog, the
+  data-splits/run-10-exclusion rationale, and the dependency graph live in `docs/oai_twin.md`.
+- [x] Tests: `tests/unit` 473 passed (0 failures), `tests/integration` 33 passed (0 failures) —
+  506 total, confirmed this revision across two separate clean invocations. New files:
+  `test_oai_dataset.py` (9), `test_oai_replay_source.py` (7), `test_baseline_policies.py` (5),
+  `test_no_archive_imports.py` (parametrized AST import guard), `test_oai_components_training.py`
+  (2, integration — all 7 components + full dependency chain through a real orchestrator). ~15
+  pre-existing test files rewritten via a consistent fixture-substitution pass (old component
+  names/columns → new OAI ids/`ts_1s`/`ALL_FEATURES`-shaped fixtures).
+- [x] Real end-to-end smoke run: `scripts/run_oai_e2e_smoke.py` — real OAI run 8 (TEST split)
+  replay at speed=0 → real predictions/fidelity on all 7 components → one deterministically
+  forced `AdaptationTrigger` (pre-existing naturally-fired triggers drained first) → decision
+  (fallback `recalibrate`, confidence=0.0 — the free-tier daily LLM quota was genuinely exhausted
+  by this same session's earlier calls, correctly classified/logged/degraded, not a bug) → a real
+  sandboxed `dl_bler-v2` candidate independently re-verified (fidelity 0.8233→0.8199, REJECT,
+  production preserved) → a complete lifecycle record confirmed with
+  `telemetry_source=OAI_RAN_REPLAY`, `replayed_run_ids=[8]`, `replay_speed=0.0`. Exit code 0.
+- Known blockers: none for the migration itself.
+- Open items, honestly carried forward (not silently left stale):
+  1. **`docs/architecture_diagram.drawio` still depicts the retired NS-3-era architecture**
+     (Module 1 as NS-3/5G-LENA, the 5 retired DT components) — not rebuilt for the OAI
+     replay/7-component graph in this phase. Flagged in `docs/MANUAL.md`'s own file table.
+  2. **`docs/FORMULAS.pdf` and `docs/IEEE_Digital_Twin_Paper.docx` likewise predate this
+     migration** — the fidelity formula they document is still accurate (it did not change), but
+     any component-set-specific text/figures in them are stale. Not regenerated in this phase.
+  3. The two pre-existing open items directly above (component-scoped adaptation lock,
+     `tests/e2e/`) remain open — unrelated to the OAI migration, carried forward unchanged.
+- Next task: rebuild `docs/architecture_diagram.drawio` for the OAI architecture (new Module 1
+  box, new 7-component dependency graph) is the highest-value remaining open item, since it is
+  the project's own presentation-ready deliverable and is now the most visibly stale artifact in
+  the repo relative to the real, current, fully-migrated and re-validated system.
 
 ---
 
@@ -1557,17 +1612,29 @@ longer exist in this repo — do not cite these numbers as current behavior)</su
 
 ## Verified commands (re-run these to confirm the environment still works)
 ```
-.venv/bin/python scripts/setup.py                 # directories, .env scaffold, dep + config check
-.venv/bin/python -m pytest tests/unit -q           # 466 collected; 465 passing/1 skipped, confirmed this revision (LLM/RL design pivot)
-.venv/bin/python -m pytest tests/integration -q    # 42 passed, confirmed this revision
-./scripts/setup_ns3.sh                             # idempotent ns-3+nr clone/configure/build
-python ns3_sim/validate_e2e.py                     # real NS-3 binary -> real zmq -> real preprocessing; OK, 162/162 clean (2026-09-07)
-python scripts/ingest_rag.py                       # real ChromaDB ingestion of rag_data/; OK, 6 documents / 31 chunks across all 4 categories, re-run confirmed idempotent (2026-09-07)
-python scripts/run_orchestrator_demo.py            # real, unattended, one-full-cycle orchestrator run against REAL storage paths; OK this revision, records_synced 340->420 during a 2.194s adaptation cycle, real Google AI 400/API_KEY_INVALID -> fallback recalibrate -> REJECT decision (jitter, real fidelity 0.9902->0.6185): see Phase 11 entry
-python -m src.main --mode demo --max-drift-events 1   # the same orchestrator via its real CLI entrypoint, bounded to one cycle
+.venv/bin/python scripts/setup.py                 # directories, .env scaffold, dep + config check (zmq no longer required — see Phase 12)
+python scripts/build_oai_dataset.py               # real OAI dataset build; OK, train=21511/val=39347/test=25865 rows, 0% NaN on all 7 targets (Phase 12)
+.venv/bin/python -m pytest tests/unit -q           # 473 passed, 0 failures, confirmed this revision (Phase 12 — OAI migration)
+.venv/bin/python -m pytest tests/integration -q    # 33 passed, 0 failures, confirmed this revision (Phase 12 — OAI migration)
+python scripts/ingest_rag.py                       # real ChromaDB ingestion of rag_data/; OK, 7 documents / 47 chunks across all 4 categories, re-run confirmed idempotent (Phase 12)
+python scripts/run_orchestrator_demo.py            # real, unattended, one-full-cycle orchestrator run against REAL storage paths (mock telemetry)
+python scripts/run_oai_e2e_smoke.py                # real, unattended, real OAI run-8 replay + forced-trigger one-full-cycle run; OK this revision — see Phase 12 entry for the full real result
+python scripts/run_baselines.py --mode full        # all 4 baseline experiment modes over real OAI TEST-split replay; OK, each mode completes in ~10-15s
+python -m src.main --mode demo --max-drift-events 1   # the same orchestrator via its real CLI entrypoint, bounded to one cycle (mock telemetry)
+python -m src.main --mode live --max-drift-events 1   # the same, against real OAI RAN KPI replay
 ```
 
 ## Overall Next Task
+**The OAI migration (prompt2.md, CLAUDE.md's "Phase 12" entry) is COMPLETE**: NS-3/5G-LENA
+removed from the runtime, replaced by a real OAI RAN KPI replay source; the 5 retired DT
+components replaced by 7 real OAI KPI components; the data pipeline, replay source, lifecycle
+wiring, baseline experiment modes, RAG corpus, dashboard script, and the required end-to-end
+smoke test all implemented and re-validated with real, observed numbers (506/506 tests passing,
+a real forced-trigger smoke run, a real dashboard run against 12000 real replayed rows). The
+highest-value remaining open item is rebuilding `docs/architecture_diagram.drawio` (and,
+lower-priority, `docs/FORMULAS.pdf`/`docs/IEEE_Digital_Twin_Paper.docx`) for the OAI architecture
+— all three still depict the retired NS-3-era system (see Phase 12's own entry for detail).
+
 **The LLM/RL design pivot (CLAUDE.md §12) is COMPLETE**: Module 13 rebuilt as the knowledge-based
 Decision & Root-Cause Analysis Agent, the LLM provider moved from Anthropic to Google AI (Gemini)
 across every consumer, Module 12 gained the Unified Fidelity Score + debounced fidelity-based
@@ -1657,12 +1724,18 @@ remains:
    caught a real bug in `_component_class_for`'s own priority order before this ever reached the
    integration test (`_DT_COMPONENT_CLASSES.get(name) or self._dynamic_component_classes.get(name)`
    always short-circuited to the original static class, since a class object is always truthy).
-5. Revisit `LatencyModel.DEPENDENCIES` to add `"packet_loss"` now that Module 8 exists (flagged by
-   Module 7, still not done — the longest-standing open item in this project).
+5. ~~Revisit `LatencyModel.DEPENDENCIES`...~~ **MOOT — see Phase 12**: `LatencyModel`/
+   `latency.py` and the rest of the 5-component NS-3-era set no longer exist, retired and
+   replaced by the 7 real OAI KPI components (whose real dependency graph is already exactly
+   what it should be — see CLAUDE.md §2).
 6. A real component-scoped adaptation lock implementing `config.adaptation.lock_policy`'s
    queue/coalesce/defer semantics for genuinely concurrent triggers (this orchestrator is safe
    today because it never overlaps adaptations, which is stronger-than-required but not yet the
-   DESIGNED policy).
-7. A populated `tests/e2e/` suite, and/or a `--mode live` run against the real NS-3 exporter
-   (Module 1) once both happen to be exercised in the same session — nothing in `src/main.py` is
-   NS-3-specific, this is purely an untried combination, not a known gap.
+   DESIGNED policy). Still open — unaffected by the OAI migration.
+7. A populated `tests/e2e/` suite — still open. (The old item 7 wording, "a `--mode live` run
+   against the real NS-3 exporter," is now moot — see Phase 12: `--mode live` now means the real
+   OAI RAN KPI replay source, and that combination HAS been exercised, both via
+   `src/main.py --mode live` directly and via `scripts/run_oai_e2e_smoke.py`'s own real run.)
+8. **New, from Phase 12**: rebuild `docs/architecture_diagram.drawio` (highest priority — see
+   Phase 12's own entry) and, lower priority, `docs/FORMULAS.pdf`/`docs/IEEE_Digital_Twin_Paper.docx`
+   for the OAI architecture — all three still depict the retired NS-3-era system.

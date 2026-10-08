@@ -1,60 +1,33 @@
-"""Telemetry schema (Module 2, prompt.md §7-§8).
+"""Telemetry schema (Module 2) — OAI migration (prompt2.md).
 
-Defines the contract between telemetry sources (Module 1's real NS-3/5G-LENA path and the mock
-development source) and the preprocessing pipeline, plus the canonical DT-ready output types.
+Replaces the NS-3-era fixed 14-field schema entirely. An OAI telemetry record is one row of
+`src/data/oai_dataset.py`'s already-unit-converted, already-lagged processed table (one
+`(run_id, session_id, ts_1s)` UE-level row): fixed identity fields, a dynamic dict of lagged
+INPUT features (keys come from `feature_schema.json`, not hardcoded here — the feature set is a
+data-pipeline concern, not a schema concern), and the 7 raw TARGET ground-truth values for this
+exact second. Two record shapes exist on purpose, mirroring the original design's "raw vs
+canonical" split:
 
-Two representations exist on purpose:
-
-- **Raw wire fields** — what a source emits. Several are deliberately in "natural exporter"
-  units (bits/second, seconds, 0-1 ratios), matching what an ns-3 FlowMonitor-style exporter
-  produces, so unit normalization (prompt.md §8) is a real, testable transformation rather than
-  a no-op passthrough.
-- **Canonical fields** — SI/percentage units used everywhere downstream (DT models, fidelity,
-  config `valid_ranges`), e.g. Mbps/ms/percent.
-
-`RAW_TO_CANONICAL` and `PASSTHROUGH_FIELDS` together define every numeric field this pipeline
-understands; `IDENTITY_FIELDS` are carried through untouched (never normalized, never dropped
-for being "out of range").
+- The replay source's wire-format dict IS already canonical (Step 3 did all unit conversion) —
+  there is no separate raw-units transformation step anymore.
+- `CleanOaiRecord` is the validated, DT-ready output every downstream module (D1, the orchestrator,
+  fidelity) consumes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
-# Sources this pipeline will accept. Anything else is quarantined (prompt.md §0.3 — a record
-# must never be allowed to claim a source it didn't actually come through).
-ALLOWED_SOURCES = ("NS3_5G_LENA", "MOCK")
+from src.data.oai_dataset import TARGET_COLUMNS
 
-IDENTITY_FIELDS = ("timestamp", "ue_id", "cell_id")
+# Sources this pipeline will accept. Anything else is quarantined (prompt.md §0.3 — a record must
+# never be allowed to claim a source it didn't actually come through).
+ALLOWED_SOURCES = ("OAI_RAN_REPLAY", "MOCK")
 
-# raw_field_name -> (canonical_field_name, conversion_fn)
-RAW_TO_CANONICAL: dict[str, tuple[str, Callable[[float], float]]] = {
-    "throughput_bps": ("throughput_mbps", lambda v: v / 1.0e6),
-    "offered_load_bps": ("offered_load_mbps", lambda v: v / 1.0e6),
-    "latency_s": ("latency_ms", lambda v: v * 1000.0),
-    "jitter_s": ("jitter_ms", lambda v: v * 1000.0),
-    "packet_loss_ratio": ("packet_loss_pct", lambda v: v * 100.0),
-    "prb_utilization_ratio": ("prb_utilization_pct", lambda v: v * 100.0),
-}
-
-# Fields already in canonical units at the source — copied through unchanged.
-PASSTHROUGH_FIELDS = (
-    "sinr_db",
-    "rsrp_dbm",
-    "rsrq_db",
-    "ue_count",
-    "ue_speed_mps",
-)
-
-# Present "where available" (prompt.md §7) — never required, but preserved and quality-tracked
-# when present.
-OPTIONAL_PASSTHROUGH_FIELDS = ("ue_position_x", "ue_position_y")
+IDENTITY_FIELDS = ("run_id", "cell_id", "session_id", "ue_id", "slice_id", "ts_1s")
 
 
 class RecordQuality(BaseModel):
@@ -70,32 +43,32 @@ class RecordQuality(BaseModel):
 
 
 class CleanTelemetryRecord(BaseModel):
-    """A single validated, unit-normalized, DT-ready telemetry record."""
+    """A single validated OAI telemetry record — identity + lagged input features (model INPUT,
+    all `_lag1`/static, per the leakage rule) + the 7 raw targets (ground truth FOR this second,
+    what the fidelity engine compares predictions against)."""
 
     model_config = ConfigDict(frozen=True)
 
-    timestamp: datetime
-    ue_id: str
-    cell_id: str
-    throughput_mbps: float
-    offered_load_mbps: float
-    latency_ms: float
-    jitter_ms: float
-    packet_loss_pct: float
-    prb_utilization_pct: float
-    sinr_db: float
-    rsrp_dbm: float
-    rsrq_db: float
-    ue_count: int
-    ue_speed_mps: float
-    ue_position_x: float | None = None
-    ue_position_y: float | None = None
-    source: Literal["NS3_5G_LENA", "MOCK"]
+    run_id: int
+    cell_id: int
+    session_id: int
+    ue_id: int
+    slice_id: int
+    ts_1s: datetime
+    features: dict[str, float | None]
+    targets: dict[str, float | None]
+    source: Literal["OAI_RAN_REPLAY", "MOCK"]
     quality: RecordQuality
+
+    def target(self, name: str) -> float | None:
+        return self.targets.get(name)
+
+    def feature(self, name: str) -> float | None:
+        return self.features.get(name)
 
 
 class QuarantinedRecord(BaseModel):
-    """A raw record that failed validation and was excluded from the clean/windowed output.
+    """A raw record that failed validation and was excluded from the clean output.
 
     Quarantining (not deletion) is the "do not silently discard important data" mechanism
     required by prompt.md §8 — the record and the reason it failed are retained for audit.
@@ -107,33 +80,25 @@ class QuarantinedRecord(BaseModel):
     received_at: datetime
 
 
-@dataclass
-class FeatureWindow:
-    """A fixed-size, time-ordered slice of clean records for one (ue_id, cell_id) key.
+class PreprocessingResult(BaseModel):
+    """Output of processing one batch of raw replay/mock records."""
 
-    This is the "time-series windows (timestamp, UE ID, cell ID)" artifact named on the
-    Module 2 -> Module 3 edge of the data-flow diagram.
-    """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    ue_id: str
-    cell_id: str
-    start_timestamp: datetime
-    end_timestamp: datetime
-    size: int
-    frame: pd.DataFrame
-    missing_ratio: float
-    quality_flag: Literal["ok", "low_quality"]
-
-
-@dataclass
-class PreprocessingResult:
-    """Output of processing one batch of raw records — both required output shapes at once:
-    flat validated feature records, and (via `windows`, built separately) time-series windows.
-    """
-
-    clean_records: list[CleanTelemetryRecord] = field(default_factory=list)
-    quarantined: list[QuarantinedRecord] = field(default_factory=list)
+    clean_records: list[CleanTelemetryRecord] = []
+    quarantined: list[QuarantinedRecord] = []
 
     @property
     def total_received(self) -> int:
         return len(self.clean_records) + len(self.quarantined)
+
+
+__all__ = [
+    "ALLOWED_SOURCES",
+    "IDENTITY_FIELDS",
+    "TARGET_COLUMNS",
+    "RecordQuality",
+    "CleanTelemetryRecord",
+    "QuarantinedRecord",
+    "PreprocessingResult",
+]

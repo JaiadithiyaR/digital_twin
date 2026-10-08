@@ -1,0 +1,387 @@
+{
+  "training": {
+    "total_timesteps": 20000,
+    "config_default_total_timesteps": 200000,
+    "n_envs": 4,
+    "seed": 42,
+    "wall_clock_seconds": 381.6967554092407,
+    "episodes_completed": 15942,
+    "mean_reward_first_chunk": 0.2536454096612296,
+    "mean_reward_last_chunk": 0.309142378293601,
+    "hyperparameters": {
+      "total_timesteps": 200000,
+      "n_envs": 4,
+      "learning_rate": 0.0003,
+      "n_steps": 256,
+      "batch_size": 64,
+      "gamma": 0.99,
+      "gae_lambda": 0.95,
+      "clip_range": 0.2,
+      "seed": 42
+    }
+  },
+  "held_out_inference": {
+    "held_out_drift_pool": {
+      "label": "held_out_drift_pool (mixed components/severities)",
+      "n_episodes": 60,
+      "mean_reward": 0.2922929195909592,
+      "mean_episode_length": 1.05,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "packet_loss",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0051,
+              "new_fidelity": 1.0
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "prb_utilization",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 1.0274,
+              "new_fidelity": 0.9486
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "jitter",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.3727,
+              "new_fidelity": 0.9262
+            }
+          ]
+        }
+      ]
+    },
+    "low_severity_fresh_incident": {
+      "label": "low_severity_fresh_incident",
+      "n_episodes": 60,
+      "mean_reward": -0.0150782310588606,
+      "mean_episode_length": 1.0,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0069,
+              "new_fidelity": 1.0
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0127,
+              "new_fidelity": 0.9989
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0174,
+              "new_fidelity": 0.9981
+            }
+          ]
+        }
+      ]
+    },
+    "low_severity_fresh_incident_always_recalibrate_baseline": {
+      "label": "low_severity_fresh_incident_always_recalibrate_baseline",
+      "n_episodes": 60,
+      "mean_reward": -0.0150782310588606,
+      "mean_episode_length": 1.0,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0069,
+              "new_fidelity": 1.0
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0127,
+              "new_fidelity": 0.9989
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.0174,
+              "new_fidelity": 0.9981
+            }
+          ]
+        }
+      ]
+    },
+    "low_severity_fresh_incident_always_regenerate_baseline": {
+      "label": "low_severity_fresh_incident_always_regenerate_baseline",
+      "n_episodes": 60,
+      "mean_reward": -0.07457987969937778,
+      "mean_episode_length": 1.0,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": -0.0669,
+              "new_fidelity": 1.0
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": -0.0718,
+              "new_fidelity": 0.9998
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "throughput",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": -0.0756,
+              "new_fidelity": 1.0
+            }
+          ]
+        }
+      ]
+    },
+    "high_severity_fresh_incident": {
+      "label": "high_severity_fresh_incident",
+      "n_episodes": 60,
+      "mean_reward": 0.7010495715285866,
+      "mean_episode_length": 1.2166666666666666,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.3431,
+              "new_fidelity": 0.9781
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.8359,
+              "new_fidelity": 0.9531
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.392,
+              "new_fidelity": 0.8671
+            }
+          ]
+        }
+      ]
+    },
+    "high_severity_fresh_incident_always_recalibrate_baseline": {
+      "label": "high_severity_fresh_incident_always_recalibrate_baseline",
+      "n_episodes": 60,
+      "mean_reward": 0.18115486705296624,
+      "mean_episode_length": 4.0,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.1156,
+              "new_fidelity": 0.4594
+            },
+            {
+              "step": 1,
+              "action": "recalibrate",
+              "reward": 0.1373,
+              "new_fidelity": 0.6167
+            },
+            {
+              "step": 2,
+              "action": "recalibrate",
+              "reward": -0.2015,
+              "new_fidelity": 0.4352
+            },
+            {
+              "step": 3,
+              "action": "recalibrate",
+              "reward": -0.0412,
+              "new_fidelity": 0.4139
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": 0.4961,
+              "new_fidelity": 0.5534
+            },
+            {
+              "step": 1,
+              "action": "recalibrate",
+              "reward": 0.0515,
+              "new_fidelity": 0.6249
+            },
+            {
+              "step": 2,
+              "action": "recalibrate",
+              "reward": -0.6532,
+              "new_fidelity": -0.0083
+            },
+            {
+              "step": 3,
+              "action": "recalibrate",
+              "reward": 0.3578,
+              "new_fidelity": 0.3696
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "recalibrate",
+              "reward": -0.2124,
+              "new_fidelity": 0.2027
+            },
+            {
+              "step": 1,
+              "action": "recalibrate",
+              "reward": 0.2901,
+              "new_fidelity": 0.5128
+            },
+            {
+              "step": 2,
+              "action": "recalibrate",
+              "reward": 0.181,
+              "new_fidelity": 0.7138
+            },
+            {
+              "step": 3,
+              "action": "recalibrate",
+              "reward": -0.0055,
+              "new_fidelity": 0.7283
+            }
+          ]
+        }
+      ]
+    },
+    "high_severity_fresh_incident_always_regenerate_baseline": {
+      "label": "high_severity_fresh_incident_always_regenerate_baseline",
+      "n_episodes": 60,
+      "mean_reward": 0.7010495715285866,
+      "mean_episode_length": 1.2166666666666666,
+      "sample_trajectories": [
+        {
+          "episode": 0,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.3431,
+              "new_fidelity": 0.9781
+            }
+          ]
+        },
+        {
+          "episode": 1,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.8359,
+              "new_fidelity": 0.9531
+            }
+          ]
+        },
+        {
+          "episode": 2,
+          "affected_component": "latency",
+          "steps": [
+            {
+              "step": 0,
+              "action": "regenerate",
+              "reward": 0.392,
+              "new_fidelity": 0.8671
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

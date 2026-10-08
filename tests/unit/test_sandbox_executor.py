@@ -235,7 +235,7 @@ def test_stdout_is_truncated_to_max_output_bytes(tmp_path):
 
 
 def test_production_source_file_is_never_modified_by_a_candidate_run(tmp_path):
-    production_file = SETTINGS.resolve_path("src/dt_models/throughput.py")
+    production_file = SETTINGS.resolve_path("src/dt_models/dl_bler.py")
     before = production_file.read_bytes()
 
     _run(_executor(tmp_path), VALID_SOURCE)

@@ -1,0 +1,5 @@
+mode,n_accepted,n_rejected
+static,0,0
+periodic_retrain,3,18
+rule_based,1,8
+full_system,4,34

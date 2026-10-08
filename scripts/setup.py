@@ -37,7 +37,6 @@ REQUIRED_IMPORTS = [
     "xgboost",
     "google.genai",
     "chromadb",
-    "zmq",
     "yaml",
     "pydantic",
     "pytest",

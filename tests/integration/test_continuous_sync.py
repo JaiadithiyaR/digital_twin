@@ -1,4 +1,4 @@
-"""Integration test: Module 3 running continuously against Module 2's mock (and real-ZeroMQ)
+"""Integration test: Module 3 running continuously against Module 2's mock (and real OAI replay)
 telemetry sources, with NO manual synchronization trigger (prompt.md §9, §0.6).
 
 The test never calls any "process a batch now" method itself — it starts the synchronizer once,
@@ -9,18 +9,16 @@ D1's current + historical state updating, continuously, without an external driv
 
 from __future__ import annotations
 
-import json
-import threading
 import time
 
-import zmq
+import pytest
 
 from src.common.config import load_settings
 from src.synchronization.d1_interface import InMemoryD1Stub
 from src.synchronization.sync import ContinuousSynchronizer
 from src.telemetry.mock_source import MockTelemetrySource
+from src.telemetry.oai_replay_source import OaiReplaySource
 from src.telemetry.preprocessing import TelemetryPreprocessor
-from src.telemetry.zmq_source import ZmqTelemetrySource
 
 
 def test_synchronizer_runs_continuously_against_mock_source_with_no_manual_trigger():
@@ -30,7 +28,7 @@ def test_synchronizer_runs_continuously_against_mock_source_with_no_manual_trigg
     # preprocessing/synchronization *config shapes* are still the real pydantic models, only the
     # timing knobs are tuned for test speed.
     mock_config = settings.telemetry.mock.model_copy(
-        update={"emit_interval_seconds": 0.02, "num_ues": 4, "num_cells": 1}
+        update={"emit_interval_seconds": 0.02, "num_sessions": 4, }
     )
     sync_config = settings.synchronization.model_copy(
         update={"batch_size": 1000, "batch_timeout_seconds": 0.15}  # force timeout-driven flushing
@@ -70,60 +68,34 @@ def test_synchronizer_runs_continuously_against_mock_source_with_no_manual_trigg
     assert synchronizer.batches_synced == batches_after_stop
 
 
-def test_synchronizer_runs_continuously_over_real_zmq_transport_with_no_manual_trigger():
-    """Same proof, but with the real-source path: an actual ZeroMQ PUB socket (standing in for
-    the eventual NS-3 exporter) publishing on its own schedule in a background thread, consumed
-    by ZmqTelemetrySource, synchronized by the same ContinuousSynchronizer with no manual
-    trigger from the test."""
+def test_synchronizer_runs_continuously_over_real_oai_replay_with_no_manual_trigger():
+    """Same proof, but with the real-source path: `OaiReplaySource` replaying the REAL processed
+    OAI export (never mock), synchronized by the same `ContinuousSynchronizer` with no manual
+    trigger from the test. Skips cleanly (not a failure) if the dataset hasn't been built yet."""
     settings = load_settings()
+    processed_dir = settings.resolve_path("data/processed/oai")
+    if not (processed_dir / "test.parquet").exists():
+        pytest.skip("data/processed/oai/test.parquet not built — run scripts/build_oai_dataset.py")
 
-    ctx = zmq.Context()
-    pub = ctx.socket(zmq.PUB)
-    port = pub.bind_to_random_port("tcp://127.0.0.1")
-    zmq_config = settings.telemetry.zmq.model_copy(
-        update={"endpoint": f"tcp://127.0.0.1:{port}", "recv_timeout_ms": 100}
-    )
-    sync_config = settings.synchronization.model_copy(
-        update={"batch_size": 1000, "batch_timeout_seconds": 0.15}
-    )
+    sync_config = settings.synchronization.model_copy(update={"batch_size": 50, "batch_timeout_seconds": 0.15})
 
-    generator = MockTelemetrySource(
-        settings.telemetry.mock.model_copy(update={"num_ues": 3, "num_cells": 1}),
-        max_records=None,
-        realtime=False,
-    )
-    stop_publishing = threading.Event()
-
-    def publish_forever():
-        for raw in generator.records():
-            if stop_publishing.is_set():
-                return
-            raw["source"] = "NS3_5G_LENA"
-            pub.send_multipart([zmq_config.topic.encode(), json.dumps(raw).encode("utf-8")])
-            time.sleep(0.01)
-
-    publisher_thread = threading.Thread(target=publish_forever, daemon=True)
-
-    source = ZmqTelemetrySource(zmq_config)
+    source = OaiReplaySource(processed_dir, speed=0.0)
+    source.start(run_ids=settings.data.splits.test)
     preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
     d1 = InMemoryD1Stub()
     synchronizer = ContinuousSynchronizer(source, preprocessor, d1, sync_config)
 
-    publisher_thread.start()
-    time.sleep(0.2)  # slow-joiner
     sync_thread = synchronizer.start()
     try:
-        time.sleep(0.6)
-        assert synchronizer.batches_synced >= 2
+        time.sleep(1.0)
+        batches_after_first_wait = synchronizer.batches_synced
+        assert batches_after_first_wait >= 2
         assert len(d1.get_history()) > 0
-        assert all(r.source == "NS3_5G_LENA" for r in d1.get_history())
+        assert all(r.source == "OAI_RAN_REPLAY" for r in d1.get_history())
         assert all(r.source != "MOCK" for r in d1.get_history())
+        assert {r.run_id for r in d1.get_history()} <= set(settings.data.splits.test)
     finally:
-        stop_publishing.set()
         synchronizer.stop()
         sync_thread.join(timeout=2.0)
-        publisher_thread.join(timeout=2.0)
-        pub.close()
-        ctx.term()
 
     assert not sync_thread.is_alive()

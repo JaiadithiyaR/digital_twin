@@ -31,7 +31,8 @@ from src.adaptation.regeneration_agent import RegenerationAgent
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import load_settings
 from src.dt_models.model_registry import DTModelRegistry
-from src.dt_models.throughput import ThroughputModel
+from src.data.oai_dataset import ALL_FEATURES
+from src.dt_models.dl_bler import DlBlerModel
 from src.drift.drift_detector import DriftDetectorInterface
 from src.fidelity.evaluator import FidelityEvaluator
 from src.fidelity.trigger import trigger_from_drift_event
@@ -46,11 +47,11 @@ import joblib
 from sklearn.linear_model import LinearRegression
 from src.dt_models.base import DTComponent
 
-class RebuiltThroughput(DTComponent):
-    COMPONENT_NAME = "throughput"
+class RebuiltDlBler(DTComponent):
+    COMPONENT_NAME = "dl_bler"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "sinr_db")
-    OUTPUT_FIELD = "throughput_mbps_pred"
+    REQUIRED_FEATURES = ("pusch_snr_avg_lag1", "wb_cqi_avg_lag1", "dl_curr_tbs_avg_lag1")
+    OUTPUT_FIELD = "dl_bler_pred"
 
     def __init__(self):
         self._model = LinearRegression()
@@ -61,7 +62,9 @@ class RebuiltThroughput(DTComponent):
         return self._trained
 
     def train(self, features, targets):
-        self._model.fit(features[list(self.REQUIRED_FEATURES)], targets)
+        cols = features[list(self.REQUIRED_FEATURES)]
+        valid = cols.notna().all(axis=1) & targets.notna()
+        self._model.fit(cols[valid], targets[valid])
         self._trained = True
 
     def predict(self, features):
@@ -83,11 +86,11 @@ class RebuiltThroughput(DTComponent):
 """
 
 _EXPAND_DESIGN = _ProposedComponentDesign(
-    component_name="sinr_quality",
-    target_column="sinr_db",
+    component_name="cqi_quality",
+    target_column="wb_cqi_avg_lag1",
     dependencies=(),
-    required_features=("offered_load_mbps", "prb_utilization_pct", "ue_speed_mps"),
-    purpose="Predict SINR from load and mobility for proactive handover decisions.",
+    required_features=("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1"),
+    purpose="Predict channel quality indicator from load and mobility for proactive scheduling.",
     feature_extraction_notes="none needed",
 )
 
@@ -97,11 +100,11 @@ import joblib
 from sklearn.linear_model import LinearRegression
 from src.dt_models.base import DTComponent
 
-class SinrQualityModel(DTComponent):
-    COMPONENT_NAME = "sinr_quality"
+class CqiQualityModel(DTComponent):
+    COMPONENT_NAME = "cqi_quality"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "ue_speed_mps")
-    OUTPUT_FIELD = "sinr_db_pred"
+    REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1")
+    OUTPUT_FIELD = "wb_cqi_avg_lag1_pred"
 
     def __init__(self):
         self._model = LinearRegression()
@@ -112,7 +115,9 @@ class SinrQualityModel(DTComponent):
         return self._trained
 
     def train(self, features, targets):
-        self._model.fit(features[list(self.REQUIRED_FEATURES)], targets)
+        cols = features[list(self.REQUIRED_FEATURES)]
+        valid = cols.notna().all(axis=1) & targets.notna()
+        self._model.fit(cols[valid], targets[valid])
         self._trained = True
 
     def predict(self, features):
@@ -159,8 +164,8 @@ class _FakeLLM:
         if schema is _ProposedComponentDesign:
             return _EXPAND_DESIGN
         if self._strategy == "expand_scope":
-            return schema(class_name="SinrQualityModel", source_code=_EXPAND_SOURCE, reasoning="linear model")
-        return schema(class_name="RebuiltThroughput", source_code=_REGEN_SOURCE, reasoning="rebuilt via a linear model")
+            return schema(class_name="CqiQualityModel", source_code=_EXPAND_SOURCE, reasoning="linear model")
+        return schema(class_name="RebuiltDlBler", source_code=_REGEN_SOURCE, reasoning="rebuilt via a linear model")
 
 
 class _FakeD1Store:
@@ -178,18 +183,23 @@ def _bootstrap_weak_production(bootstrap_history, registry: ModelRegistry):
     """A deliberately weak, early-slice bootstrap production model — real headroom for whichever
     adaptation strategy is selected to genuinely improve on, mirroring the same setup already used
     by `tests/integration/test_verification_agent.py`."""
-    features = list(ThroughputModel.REQUIRED_FEATURES)
-    ordered = bootstrap_history.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    features = list(DlBlerModel.REQUIRED_FEATURES)
+    # A single session's own early rows (not a global head-cut across all 25 sessions) — the
+    # richer lag(1..5)/rolling(5s,10s) feature set needs several CONSECUTIVE same-session rows
+    # before any lag/rolling column is non-NaN; a cross-session slice can leave zero valid rows.
+    first_session = bootstrap_history["session_id"].iloc[0]
+    one_session = bootstrap_history[bootstrap_history["session_id"] == first_session]
+    ordered = one_session.sort_values("ts_1s", kind="stable").reset_index(drop=True)
     thin_slice = ordered.iloc[:40]
-    model = ThroughputModel.from_settings(SETTINGS)
-    model.train(thin_slice[features], thin_slice["throughput_mbps"])
+    model = DlBlerModel.from_settings(SETTINGS)
+    model.train(thin_slice[features], thin_slice["dl_bler"])
     registry.register_version(
         component_instance=model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(thin_slice)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=model.evaluate(thin_slice[features], thin_slice["throughput_mbps"]),
+        evaluation_metrics=model.evaluate(thin_slice[features], thin_slice["dl_bler"]),
         status="production",
     )
 
@@ -202,7 +212,7 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     # normalized into the canonical AdaptationTrigger (Module 12, prompt.md §16a).
     detector = DriftDetectorInterface.from_settings(SETTINGS)
     raw_event = {
-        "component": "throughput",
+        "component": "dl_bler",
         "severity": 0.65,
         "timestamp": datetime.now(UTC).isoformat(),
         "metadata": {"reason": "integration-test synthetic drift"},
@@ -233,22 +243,22 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     if action_name == "recalibrate":
         agent = RecalibrationAgent(SETTINGS, _FakeD1Store(bootstrap_history), registry)
         agent_result = agent.recalibrate(
-            lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48, held_out_fraction=0.2
+            lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48, held_out_fraction=0.2
         )
     elif action_name == "regenerate":
         agent = RegenerationAgent(SETTINGS, _FakeD1Store(bootstrap_history), registry, fake_llm, SandboxExecutor.from_settings(SETTINGS))
         agent_result = agent.regenerate(
-            lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps",
+            lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler",
             window_hours=48, held_out_fraction=0.2, drift_context=drift_context,
         )
     else:
         dt_model_registry = DTModelRegistry()
-        dt_model_registry.register(ThroughputModel.from_settings(SETTINGS))
+        dt_model_registry.register(DlBlerModel.from_settings(SETTINGS))
         agent = ExpandScopeAgent(
             SETTINGS, _FakeD1Store(bootstrap_history), registry, dt_model_registry, fake_llm, SandboxExecutor.from_settings(SETTINGS)
         )
         agent_result = agent.expand_scope(
-            lambda: ThroughputModel.from_settings(SETTINGS),
+            lambda: DlBlerModel.from_settings(SETTINGS),
             window_hours=48, held_out_fraction=0.2, expand_scope_context=drift_context,
         )
 
@@ -256,17 +266,17 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     assert candidate_version.status == "candidate"
 
     # 4. verification (Module 17) — the SAME held-out protocol every branch is evaluated on.
-    target_column = "throughput_mbps" if action_name != "expand_scope" else _EXPAND_DESIGN.target_column
+    target_column = "dl_bler" if action_name != "expand_scope" else _EXPAND_DESIGN.target_column
     window_df = select_recent_window(bootstrap_history, 48)
     _, held_out_df = time_split(window_df, 0.2)
     eval_target = held_out_df[target_column]
 
     if action_name == "recalibrate":
         candidate_preds = agent_result.candidate_component.predict(held_out_df)
-        production_factory = lambda: ThroughputModel.from_settings(SETTINGS)  # noqa: E731
+        production_factory = lambda: DlBlerModel.from_settings(SETTINGS)  # noqa: E731
     elif action_name == "regenerate":
         candidate_preds = agent_result.sandbox_result.eval_predictions
-        production_factory = lambda: ThroughputModel.from_settings(SETTINGS)  # noqa: E731
+        production_factory = lambda: DlBlerModel.from_settings(SETTINGS)  # noqa: E731
     else:
         candidate_preds = agent_result.sandbox_result.eval_predictions
         production_factory = None
@@ -298,8 +308,8 @@ def test_full_adaptation_lifecycle_cycle_produces_a_complete_record(bootstrap_hi
     # --- inspect the resulting record for completeness against prompt.md §37's exact field list ---
     assert record.event_id
     assert record.timestamp is not None
-    assert record.trigger["component"] == "throughput"
-    assert record.affected_component == "throughput"
+    assert record.trigger["component"] == "dl_bler"
+    assert record.affected_component == "dl_bler"
     assert record.trigger_severity == pytest.approx(drift_event.severity)
     assert record.trigger_type == "external_drift"
     assert record.decision_strategy == action_name

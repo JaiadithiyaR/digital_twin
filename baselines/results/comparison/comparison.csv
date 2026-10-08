@@ -1,0 +1,5 @@
+mode,n_runs,mean_unified_fidelity,mean_unified_fidelity_std,pct_time_above_threshold,mean_recovery_time_cycles,n_triggers,n_adaptations,n_accepted,n_rejected,total_adaptation_duration_seconds,n_llm_decisions,n_llm_fallbacks,fallback_rate,run_invalid_fallback_rate_too_high,llm_input_tokens,llm_output_tokens,llm_cached_tokens,llm_cache_hit_share,llm_cost_usd,llm_time_seconds,budget_spent_usd
+static,1,0.7942414105,0.0,100.0,,14,0,0,0,0.0,0,0,0.0,False,0,0,0,0.0,0.0,0.0,0.0
+periodic_retrain,1,0.8328140018,0.0,100.0,,21,21,3,18,241.235371576,0,0,0.0,False,0,0,0,0.0,0.0,0.0,0.0
+rule_based,1,0.7979686628,0.0,100.0,,14,9,1,8,227.937449787,0,0,0.0,False,118219,6986,70200,0.5938131772388533,0.009351300000000002,114.68916585099987,0.0093513
+full_system,3,0.7428003535666666,0.09038727250180362,100.0,1.0,44,38,4,34,1159.376873452,44,0,0.0,False,790792,41686,529200,0.6692025210169046,0.056063600000000005,709.995432032003,0.056063600000000005

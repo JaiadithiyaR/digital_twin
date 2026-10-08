@@ -1,0 +1,91 @@
+{
+  "throughput": [
+    {
+      "component": "throughput",
+      "version_id": "throughput-v1",
+      "model_class": "ThroughputModel",
+      "artifact_path": "throughput/throughput-v1.joblib",
+      "source_path": null,
+      "dependencies": [],
+      "feature_schema": [
+        "offered_load_mbps",
+        "prb_utilization_pct",
+        "sinr_db",
+        "rsrp_dbm",
+        "rsrq_db",
+        "ue_count",
+        "ue_speed_mps"
+      ],
+      "output_field": "throughput_mbps_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-10-01T10:49:38.594413Z",
+      "training_window": {
+        "n_rows": 1200
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 0.3278499050981266,
+        "mae": 0.23968619584046286
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    }
+  ],
+  "sinr_quality": [
+    {
+      "component": "sinr_quality",
+      "version_id": "sinr_quality-v1",
+      "model_class": "SinrQualityModel",
+      "artifact_path": "sinr_quality/sinr_quality-v1.joblib",
+      "source_path": "sinr_quality/sinr_quality-v1.py",
+      "dependencies": [],
+      "feature_schema": [
+        "offered_load_mbps",
+        "prb_utilization_pct",
+        "ue_speed_mps",
+        "ue_position_x",
+        "ue_position_y"
+      ],
+      "output_field": "sinr_db_pred",
+      "adaptation_type": "expand_scope",
+      "parent_version_id": null,
+      "created_at": "2026-10-01T10:50:09.944296Z",
+      "training_window": {
+        "start": "2026-10-01T10:49:29.267844+00:00",
+        "end": "2026-10-01T10:49:29.643001+00:00",
+        "n_rows": 960,
+        "window_hours": 96,
+        "provenance": "d1_history",
+        "ue_id": null,
+        "cell_id": null
+      },
+      "evaluation_window": {
+        "start": "2026-10-01T10:49:29.643001+00:00",
+        "end": "2026-10-01T10:49:29.712646+00:00",
+        "n_rows": 240,
+        "provenance": "d1_history"
+      },
+      "evaluation_metrics": {
+        "rmse": 9.28126419585139,
+        "mae": 7.444125362924893
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "rejected",
+      "llm_metadata": {
+        "model": "gemini-3.5-flash-lite",
+        "target_column": "sinr_db",
+        "design_purpose": "Predicts SINR degradation patterns based on UE mobility, spatial distribution, and load characteristics.",
+        "design_feature_extraction_notes": "Computes spatial distance from cell center and speed rolling averages to capture fading and mobility-induced SINR drops.",
+        "implementation_reasoning": "Implemented the SinrQualityModel component sub-classing DTComponent while avoiding external registry dependencies by locally handling model instantiation. Incorporated spatial distance feature engineering and met all required interface specifications.",
+        "design_attempts": 1,
+        "implementation_attempts": 2
+      }
+    }
+  ]
+}

@@ -18,24 +18,10 @@ from src.telemetry.schema import CleanTelemetryRecord, QuarantinedRecord, Record
 
 def _clean_record(**overrides) -> CleanTelemetryRecord:
     base = dict(
-        timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
-        ue_id="ue-0",
-        cell_id="cell-0",
-        throughput_mbps=50.0,
-        offered_load_mbps=60.0,
-        latency_ms=20.0,
-        jitter_ms=3.0,
-        packet_loss_pct=1.0,
-        prb_utilization_pct=40.0,
-        sinr_db=18.0,
-        rsrp_dbm=-90.0,
-        rsrq_db=-9.0,
-        ue_count=12,
-        ue_speed_mps=3.5,
-        ue_position_x=100.0,
-        ue_position_y=-50.0,
-        source="MOCK",
-        quality=RecordQuality(),
+        run_id=1, cell_id=1, session_id=1, ue_id=1, slice_id=1,
+        ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+        features={"pusch_snr_avg_lag1": 15.0}, targets={"dl_throughput": 50.0, "dl_bler": 0.05},
+        source="MOCK", quality=RecordQuality(),
     )
     base.update(overrides)
     return CleanTelemetryRecord(**base)
@@ -43,7 +29,7 @@ def _clean_record(**overrides) -> CleanTelemetryRecord:
 
 def _quarantined(**overrides) -> QuarantinedRecord:
     base = dict(
-        raw={"source": "MOCK", "ue_id": "ue-0", "note": "bad"},
+        raw={"source": "MOCK", "session_id": 1, "note": "bad"},
         reason="test_reason",
         source="MOCK",
         received_at=datetime.now(UTC),
@@ -90,41 +76,52 @@ def test_update_current_state_writes_and_persists_to_disk(tmp_path):
     assert (tmp_path / "current.parquet").exists()
     current = store.get_current_state()
     assert len(current) == 1
-    assert current.iloc[0]["ue_id"] == "ue-0"
-    assert current.iloc[0]["throughput_mbps"] == 50.0
+    assert current.iloc[0]["session_id"] == 1
+    assert current.iloc[0]["dl_throughput"] == 50.0
 
 
 def test_current_state_reloads_from_disk_in_a_fresh_instance(tmp_path):
     store = _store(tmp_path)
-    store.update_current_state([_clean_record(ue_id="ue-0"), _clean_record(ue_id="ue-1")])
+    store.update_current_state([_clean_record(session_id=1), _clean_record(session_id=2)])
 
     reloaded = _store(tmp_path)  # brand new instance, same paths — simulates a process restart
     current = reloaded.get_current_state()
     assert len(current) == 2
-    assert set(current["ue_id"]) == {"ue-0", "ue-1"}
+    assert set(current["session_id"]) == {1, 2}
 
 
 def test_current_state_keeps_latest_by_timestamp_not_arrival_order(tmp_path):
     store = _store(tmp_path)
-    newer = _clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC), throughput_mbps=20.0)
-    older_arriving_late = _clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC), throughput_mbps=10.0)
+    newer = _clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC), targets={"dl_throughput": 20.0})
+    older_arriving_late = _clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC), targets={"dl_throughput": 10.0})
 
     store.update_current_state([newer])
     store.update_current_state([older_arriving_late])
 
     current = store.get_current_state()
     assert len(current) == 1
-    assert current.iloc[0]["throughput_mbps"] == 20.0
+    assert current.iloc[0]["dl_throughput"] == 20.0
 
 
 def test_current_state_dedups_within_a_single_batch_too(tmp_path):
     store = _store(tmp_path)
-    a = _clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC), throughput_mbps=1.0)
-    b = _clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC), throughput_mbps=2.0)
-    store.update_current_state([a, b])  # same (ue_id, cell_id), both in one call
+    a = _clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC), targets={"dl_throughput": 1.0})
+    b = _clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC), targets={"dl_throughput": 2.0})
+    store.update_current_state([a, b])  # same (run_id, session_id), both in one call
     current = store.get_current_state()
     assert len(current) == 1
-    assert current.iloc[0]["throughput_mbps"] == 2.0
+    assert current.iloc[0]["dl_throughput"] == 2.0
+
+
+def test_current_state_does_not_collide_across_different_runs(tmp_path):
+    """`(run_id, session_id)` — NOT `(ue_id, cell_id)` — is the real identity key: `ue_id` values
+    repeat across different OAI runs, so two different runs' session 1 must never be treated as
+    the same current-state row."""
+    store = _store(tmp_path)
+    store.update_current_state([_clean_record(run_id=1, session_id=1, ue_id=1)])
+    store.update_current_state([_clean_record(run_id=2, session_id=1, ue_id=1)])
+    current = store.get_current_state()
+    assert len(current) == 2
 
 
 def test_update_current_state_with_empty_list_is_a_noop(tmp_path):
@@ -139,8 +136,8 @@ def test_update_current_state_with_empty_list_is_a_noop(tmp_path):
 
 def test_append_history_accumulates_and_persists(tmp_path):
     store = _store(tmp_path)
-    store.append_history([_clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))])
-    store.append_history([_clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC))])
+    store.append_history([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))])
+    store.append_history([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC))])
 
     assert len(store.get_history()) == 2
     reloaded = _store(tmp_path)
@@ -149,8 +146,8 @@ def test_append_history_accumulates_and_persists(tmp_path):
 
 def test_history_keeps_every_record_even_when_current_state_dedups(tmp_path):
     store = _store(tmp_path)
-    older = _clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC), throughput_mbps=10.0)
-    newer = _clean_record(timestamp=datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC), throughput_mbps=20.0)
+    older = _clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC), targets={"dl_throughput": 10.0})
+    newer = _clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC), targets={"dl_throughput": 20.0})
     store.append_history([older])
     store.append_history([newer])
     store.update_current_state([older])
@@ -163,23 +160,23 @@ def test_history_keeps_every_record_even_when_current_state_dedups(tmp_path):
 def test_history_retention_prunes_oldest_rows(tmp_path):
     store = _store(tmp_path, retention=3)
     for i in range(5):
-        store.append_history([_clean_record(timestamp=datetime(2026, 1, 1, 12, 0, i, tzinfo=UTC), ue_id=f"ue-{i}")])
+        store.append_history([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, i, tzinfo=UTC), session_id=i)])
 
     history = store.get_history()
     assert len(history) == 3
-    # oldest two (ue-0, ue-1) pruned; most recent three retained
-    assert set(history["ue_id"]) == {"ue-2", "ue-3", "ue-4"}
+    # oldest two (session 0, 1) pruned; most recent three retained
+    assert set(history["session_id"]) == {2, 3, 4}
 
 
 def test_get_history_filters_by_ue_and_cell(tmp_path):
     store = _store(tmp_path)
-    store.append_history([_clean_record(ue_id="ue-0", cell_id="cell-0")])
-    store.append_history([_clean_record(ue_id="ue-1", cell_id="cell-0")])
-    store.append_history([_clean_record(ue_id="ue-0", cell_id="cell-1")])
+    store.append_history([_clean_record(ue_id=1, cell_id=1, session_id=1)])
+    store.append_history([_clean_record(ue_id=2, cell_id=1, session_id=2)])
+    store.append_history([_clean_record(ue_id=1, cell_id=2, session_id=3)])
 
-    assert len(store.get_history(ue_id="ue-0")) == 2
-    assert len(store.get_history(cell_id="cell-0")) == 2
-    assert len(store.get_history(ue_id="ue-0", cell_id="cell-1")) == 1
+    assert len(store.get_history(ue_id=1)) == 2
+    assert len(store.get_history(cell_id=1)) == 2
+    assert len(store.get_history(ue_id=1, cell_id=2)) == 1
 
 
 def test_append_history_with_empty_list_is_a_noop(tmp_path):
@@ -210,21 +207,21 @@ def test_record_quarantine_persists_and_round_trips_raw_payload(tmp_path):
 
 def test_get_ue_state_filters_current_state_by_ue(tmp_path):
     store = _store(tmp_path)
-    store.update_current_state([_clean_record(ue_id="ue-0", cell_id="cell-0")])
-    store.update_current_state([_clean_record(ue_id="ue-1", cell_id="cell-0")])
-    ue_state = store.get_ue_state("ue-0")
+    store.update_current_state([_clean_record(ue_id=1, cell_id=1, session_id=1)])
+    store.update_current_state([_clean_record(ue_id=2, cell_id=1, session_id=2)])
+    ue_state = store.get_ue_state(1)
     assert len(ue_state) == 1
-    assert ue_state.iloc[0]["ue_id"] == "ue-0"
+    assert ue_state.iloc[0]["ue_id"] == 1
 
 
 def test_get_cell_state_filters_current_state_by_cell(tmp_path):
     store = _store(tmp_path)
-    store.update_current_state([_clean_record(ue_id="ue-0", cell_id="cell-0")])
-    store.update_current_state([_clean_record(ue_id="ue-1", cell_id="cell-0")])
-    store.update_current_state([_clean_record(ue_id="ue-2", cell_id="cell-1")])
-    cell_state = store.get_cell_state("cell-0")
+    store.update_current_state([_clean_record(ue_id=1, cell_id=1, session_id=1)])
+    store.update_current_state([_clean_record(ue_id=2, cell_id=1, session_id=2)])
+    store.update_current_state([_clean_record(ue_id=3, cell_id=2, session_id=3)])
+    cell_state = store.get_cell_state(1)
     assert len(cell_state) == 2
-    assert set(cell_state["ue_id"]) == {"ue-0", "ue-1"}
+    assert set(cell_state["ue_id"]) == {1, 2}
 
 
 # --- snapshot isolation ------------------------------------------------------------------------
@@ -234,8 +231,8 @@ def test_get_current_state_returns_a_copy_not_a_live_reference(tmp_path):
     store = _store(tmp_path)
     store.update_current_state([_clean_record()])
     snapshot = store.get_current_state()
-    snapshot.loc[0, "throughput_mbps"] = 999.0
-    assert store.get_current_state().iloc[0]["throughput_mbps"] == 50.0
+    snapshot.loc[0, "dl_throughput"] = 999.0
+    assert store.get_current_state().iloc[0]["dl_throughput"] == 50.0
 
 
 # --- dtype integrity (regression: see CLAUDE.md/IMPLEMENTATION_STATUS.md Module 6 for the bug) --
@@ -246,31 +243,45 @@ def test_current_state_numeric_columns_are_not_object_dtype_after_first_write(tm
     silently downcast every column to `object` dtype on a store's very first write — invisible
     to scalar-equality tests, but fatal to anything dtype-sensitive downstream (e.g. XGBoost
     refuses to fit on `object` columns). See Module 6's ThroughputModel integration test, which
-    is what actually surfaced this."""
+    is what actually surfaced this — and the OAI migration's own `None`-coercion regression
+    (`_record_to_row`), surfaced the exact same way against `requested_prb_ratio_lag1`."""
     store = _store(tmp_path)
     store.update_current_state([_clean_record()])
     current = store.get_current_state()
-    for column in ("throughput_mbps", "sinr_db", "rsrp_dbm", "ue_speed_mps"):
+    for column in ("dl_throughput", "dl_bler", "pusch_snr_avg_lag1"):
         assert current[column].dtype == "float64", f"{column} has dtype {current[column].dtype}"
-    assert current["ue_count"].dtype == "int64"
+    assert current["session_id"].dtype == "int64"
 
 
 def test_history_numeric_columns_are_not_object_dtype_after_first_write(tmp_path):
     store = _store(tmp_path)
     store.append_history([_clean_record()])
     history = store.get_history()
-    for column in ("throughput_mbps", "sinr_db", "rsrp_dbm", "ue_speed_mps"):
+    for column in ("dl_throughput", "dl_bler", "pusch_snr_avg_lag1"):
         assert history[column].dtype == "float64", f"{column} has dtype {history[column].dtype}"
-    assert history["ue_count"].dtype == "int64"
+    assert history["session_id"].dtype == "int64"
+
+
+def test_none_only_column_in_a_batch_still_infers_float64_not_object(tmp_path):
+    """OAI-specific regression: a feature that is `None` for EVERY row in a batch (e.g.
+    `requested_prb_ratio_lag1` before any controller deployment exists) must still infer
+    `float64`, never `object` — `_record_to_row` coerces `None` to `float("nan")` for exactly
+    this reason."""
+    store = _store(tmp_path)
+    records = [_clean_record(session_id=i, features={"requested_prb_ratio_lag1": None}) for i in range(3)]
+    store.update_current_state(records)
+    current = store.get_current_state()
+    assert current["requested_prb_ratio_lag1"].dtype == "float64"
+    assert current["requested_prb_ratio_lag1"].isna().all()
 
 
 def test_dtypes_remain_correct_across_multiple_batches(tmp_path):
     store = _store(tmp_path)
     for i in range(5):
-        store.append_history([_clean_record(timestamp=datetime(2026, 1, 1, 12, 0, i, tzinfo=UTC), ue_id=f"ue-{i}")])
-        store.update_current_state([_clean_record(timestamp=datetime(2026, 1, 1, 12, 0, i, tzinfo=UTC), ue_id=f"ue-{i}")])
-    assert store.get_history()["throughput_mbps"].dtype == "float64"
-    assert store.get_current_state()["throughput_mbps"].dtype == "float64"
+        store.append_history([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, i, tzinfo=UTC), session_id=i)])
+        store.update_current_state([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, i, tzinfo=UTC), session_id=i)])
+    assert store.get_history()["dl_throughput"].dtype == "float64"
+    assert store.get_current_state()["dl_throughput"].dtype == "float64"
 
 
 def test_dtypes_remain_correct_after_reload_from_disk(tmp_path):
@@ -278,5 +289,5 @@ def test_dtypes_remain_correct_after_reload_from_disk(tmp_path):
     store.update_current_state([_clean_record()])
     store.append_history([_clean_record()])
     reloaded = _store(tmp_path)
-    assert reloaded.get_current_state()["throughput_mbps"].dtype == "float64"
-    assert reloaded.get_history()["throughput_mbps"].dtype == "float64"
+    assert reloaded.get_current_state()["dl_throughput"].dtype == "float64"
+    assert reloaded.get_history()["dl_throughput"].dtype == "float64"

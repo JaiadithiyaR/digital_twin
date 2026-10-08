@@ -101,7 +101,7 @@ class ContinuousSynchronizer:
 
     def stop(self) -> None:
         """Signal the loop to exit and close the source so a generator blocked waiting for the
-        next record actually returns (both `MockTelemetrySource` and `ZmqTelemetrySource` check
+        next record actually returns (both `MockTelemetrySource` and `OaiReplaySource` check
         their closed state within one poll/timeout cycle)."""
         self._stop_event.set()
         self._source.close()

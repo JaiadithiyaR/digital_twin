@@ -2,6 +2,13 @@
 CLAUDE.md §2/§10). This is the final piece of the 19-module architecture: it wires every
 already-built module together into one real, continuously-running system.
 
+**OAI migration (prompt2.md)**: Module 1 is no longer NS-3/5G-LENA over ZeroMQ — it is a replay
+of real exported OAI RAN KPI CSVs (`src/telemetry/oai_replay_source.py`, `SOURCE=OAI_RAN_REPLAY`)
+or, for unit tests only, an OAI-schema-shaped mock (`SOURCE=MOCK`). The 5 NS-3-era DT prediction
+components (throughput/latency/packet_loss/prb_utilization/jitter) are replaced entirely by 7 OAI
+KPI components (dl_bler/ul_bler/dl_prb/ul_prb/dl_throughput/ul_throughput/dl_rlc_delay) — see
+`CLAUDE.md` and `docs/oai_twin.md`.
+
 **This file is integration only** — it constructs already-tested components (D1Store,
 DTModelRegistry/DTOrchestrator, FidelityEvaluator, ContinuousSynchronizer, DriftDetectorInterface,
 the Decision & Root-Cause Analysis Agent, Modules 14/15/16's agents, VerificationAgent,
@@ -10,7 +17,7 @@ exactly the order prompt.md §39 specifies. No new model, fidelity, verification
 written here.
 
 Canonical loop (CLAUDE.md §2):
-    NS-3/mock telemetry -> Module 2 (preprocess) -> Module 3 (continuous sync) -> D1 (Module 4)
+    OAI replay/mock telemetry -> Module 2 (preprocess) -> Module 3 (continuous sync) -> D1 (Module 4)
     -> Modules 5-10 (dependency-aware DT prediction) -> Module 12 (fidelity + unified score/trigger)
     -> Module 11 (drift) -> Module 13 (Decision & Root-Cause Analysis Agent) -> Module 14/15/16
     (execution) -> Module 17 (verification) -> Module 19 (lifecycle record) -> continue.
@@ -58,14 +65,13 @@ entirely unaffected either way. `recalibrate` never needs an LLM to execute.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import logging
-import queue
 import sys
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
+import numpy as np
 import pandas as pd
 
 from src.adaptation.data_selection import select_recent_window, time_split, with_dependency_ground_truth
@@ -78,15 +84,18 @@ from src.adaptation.regeneration_agent import RegenerationAgent, RegenerationErr
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import Settings, load_secrets, load_settings
 from src.common.logging import setup_logging
+from src.data.oai_dataset import TARGET_COLUMNS as _OAI_TARGETS
 from src.dt_models.base import DTComponent
 from src.dt_models.d1_model_store import D1Store
-from src.dt_models.jitter import JitterModel
-from src.dt_models.latency import LatencyModel
+from src.dt_models.dl_bler import DlBlerModel
+from src.dt_models.dl_prb import DlPrbModel
+from src.dt_models.dl_rlc_delay import DlRlcDelayModel
+from src.dt_models.dl_throughput import DlThroughputModel
 from src.dt_models.model_registry import DTModelRegistry
 from src.dt_models.orchestrator import DTOrchestrator, OrchestratorError
-from src.dt_models.packet_loss import PacketLossModel
-from src.dt_models.prb_utilization import PrbUtilizationModel
-from src.dt_models.throughput import ThroughputModel
+from src.dt_models.ul_bler import UlBlerModel
+from src.dt_models.ul_prb import UlPrbModel
+from src.dt_models.ul_throughput import UlThroughputModel
 from src.drift.drift_detector import DriftDetectorInterface
 from src.drift.mock_drift_source import MockDriftSource
 from src.fidelity.evaluator import FidelityEvaluator
@@ -97,35 +106,36 @@ from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 from src.sandbox.executor import SandboxExecutor
 from src.synchronization.sync import ContinuousSynchronizer
 from src.telemetry.mock_source import MockTelemetrySource
+from src.telemetry.oai_replay_source import OaiReplaySource
 from src.telemetry.preprocessing import TelemetryPreprocessor
-from src.telemetry.zmq_source import ZmqTelemetrySource
 
 if TYPE_CHECKING:
     from src.common.config import Secrets
 
 logger = logging.getLogger(__name__)
 
-# The five real DT prediction components (Modules 6-10) — the only ones a drift event can
-# legitimately name (config.drift.valid_components already enforces this at the Module 11 layer;
-# these two dicts are this file's own generic dispatch table, never hardcoded per-branch logic).
+# The 7 OAI KPI prediction components (Modules 6-10 replacement, prompt2.md Step 5) — the only
+# ones a drift event can legitimately name (config.drift.valid_components already enforces this
+# at the Module 11 layer; these two dicts are this file's own generic dispatch table, never
+# hardcoded per-branch logic).
 _DT_COMPONENT_CLASSES: dict[str, type[DTComponent]] = {
-    "throughput": ThroughputModel,
-    "packet_loss": PacketLossModel,
-    "latency": LatencyModel,
-    "prb_utilization": PrbUtilizationModel,
-    "jitter": JitterModel,
+    "dl_bler": DlBlerModel,
+    "ul_bler": UlBlerModel,
+    "dl_prb": DlPrbModel,
+    "ul_prb": UlPrbModel,
+    "dl_throughput": DlThroughputModel,
+    "ul_throughput": UlThroughputModel,
+    "dl_rlc_delay": DlRlcDelayModel,
 }
-_TARGET_COLUMNS: dict[str, str] = {
-    "throughput": "throughput_mbps",
-    "packet_loss": "packet_loss_pct",
-    "latency": "latency_ms",
-    "prb_utilization": "prb_utilization_pct",
-    "jitter": "jitter_ms",
-}
-# Fixed topological order (matches DTOrchestrator.build_execution_order()'s own result — proven
-# in tests/integration/test_full_dependency_chain.py) so dependency-having components can be
-# bootstrap-trained with their dependency's ground-truth column already available.
-_BOOTSTRAP_ORDER: tuple[str, ...] = ("throughput", "packet_loss", "latency", "prb_utilization", "jitter")
+# Each OAI component's own ground-truth column happens to share its exact name (unlike the
+# retired NS-3-era components, where e.g. "throughput" predicted "throughput_mbps") — still kept
+# as an explicit dict, never assumed equal in code, so a future component whose name and target
+# column genuinely differ needs no structural change here.
+_TARGET_COLUMNS: dict[str, str] = {name: name for name in _OAI_TARGETS}
+# Fixed topological order (matches DTOrchestrator.build_execution_order()'s own result) so
+# dependency-having components can be bootstrap-trained with their dependency's ground-truth
+# column already available.
+_BOOTSTRAP_ORDER: tuple[str, ...] = ("dl_bler", "ul_bler", "dl_prb", "ul_prb", "dl_throughput", "ul_throughput", "dl_rlc_delay")
 _OUTPUT_FIELDS: dict[str, str] = {name: cls.OUTPUT_FIELD for name, cls in _DT_COMPONENT_CLASSES.items()}
 
 
@@ -150,10 +160,24 @@ class ContinuousOrchestrator:
         self._drift_severity_range_override = drift_severity_range_override
 
         self._stop_event = threading.Event()
+        # Set by start(); stop() guards on these being non-None so calling stop() without a
+        # prior start() (or twice in a row) is a harmless no-op rather than an AttributeError.
+        self.sync_thread: threading.Thread | None = None
+        self.drift_thread: threading.Thread | None = None
         # Both canonical trigger sources (external DriftEvent, normalized; and the internal
-        # fidelity-based trigger) funnel into this ONE queue as AdaptationTrigger instances
-        # (prompt.md §16a) — the dispatch path in run() never needs to know which one fired.
-        self._trigger_queue: "queue.Queue[AdaptationTrigger]" = queue.Queue()
+        # fidelity-based trigger) funnel into this ONE pending-trigger structure as
+        # AdaptationTrigger instances (prompt.md §16a) — the dispatch path in run() never needs
+        # to know which one fired. Phase 13 §2 (adaptation lock, `config.adaptation.lock_policy
+        # == "coalesce"`): at most one PENDING trigger per component is ever held here — a
+        # second trigger for a component that already has one pending (whether still queued or
+        # currently being processed under `_locked_component`) is merged into it, keeping
+        # whichever has the higher severity, and is picked up in the NEXT cycle after the lock on
+        # that component is released, rather than becoming a second, separate adaptation cycle.
+        # See `_enqueue_trigger`/`_pop_next_trigger`/`_handle_trigger`.
+        self._pending_lock = threading.Lock()
+        self._pending_by_component: dict[str, AdaptationTrigger] = {}
+        self._pending_order: list[str] = []  # component names, FIFO by first-pending arrival
+        self._locked_component: str | None = None  # the component currently mid-adaptation-cycle, else None
         self._latest_fidelity: dict[str, float | None] = {}
         # Per-component previous-outcome tracking for the Decision & Root-Cause Analysis Agent's
         # context (prompt.md §18 "previous action taken for this component/incident and its
@@ -223,8 +247,7 @@ class ContinuousOrchestrator:
 
         self.dt_model_registry = DTModelRegistry()
         for name, instance in self._dt_components.items():
-            enabled = settings.dt_models.enable_prb_model if name == "prb_utilization" else True
-            self.dt_model_registry.register(instance, enabled=enabled)
+            self.dt_model_registry.register(instance, enabled=True)
         self.dt_orchestrator = DTOrchestrator(self.dt_model_registry)
 
         self.preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
@@ -256,8 +279,14 @@ class ContinuousOrchestrator:
 
     def _build_telemetry_source(self):
         settings = self._settings
-        if settings.telemetry.source == "zmq":
-            return ZmqTelemetrySource(settings.telemetry.zmq)
+        if settings.telemetry.source == "oai_replay":
+            source = OaiReplaySource(
+                settings.resolve_path("data/processed/oai"), speed=settings.telemetry.replay.speed,
+                default_split=settings.telemetry.replay.default_split,
+            )
+            default_run_ids = getattr(settings.data.splits, settings.telemetry.replay.default_split)
+            source.start(run_ids=default_run_ids)
+            return source
         return MockTelemetrySource(settings.telemetry.mock, max_records=None, realtime=True)
 
     def _bootstrap_dt_models(self) -> None:
@@ -345,15 +374,9 @@ class ContinuousOrchestrator:
         candidate`, called only on a real ACCEPT) or in a past process's lifetime (`_bootstrap_
         dt_models`/`_load_and_restore`, which can only ever find a production version here in the
         first place because some past ACCEPT already promoted it) — never on a rejected or
-        still-pending candidate."""
-        source_path = self.model_registry.source_path(version)
-        if source_path is None:
-            raise RuntimeError(f"version {version.version_id!r} of {version.component!r} has no saved source to load")
-        spec = importlib.util.spec_from_file_location(f"_dt_dynamic_{version.component}_{version.version_id}", source_path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return getattr(module, version.model_class)
+        still-pending candidate. Delegates to `ModelRegistry.load_dynamic_class` — the shared
+        implementation `baselines/_lib.py` also uses, so there is only one copy of this logic."""
+        return self.model_registry.load_dynamic_class(version)
 
     def _component_class_for(self, name: str) -> "type[DTComponent] | None":
         """The class currently backing live serving for `name` — one of the five originals, or
@@ -367,26 +390,19 @@ class ContinuousOrchestrator:
         return self._dynamic_component_classes.get(name) or _DT_COMPONENT_CLASSES.get(name)
 
     def _generate_bootstrap_history(self) -> pd.DataFrame:
-        """A real, bounded telemetry batch through the real Module 2 pipeline — written into a
-        throwaway in-memory-only preprocessing pass (NOT the live D1Store; bootstrap data is a
-        distinct provenance category from live telemetry, per CLAUDE.md's Module 3 entry's scope
-        boundary), used only to bootstrap-train the five DT models before live operation begins."""
+        """The real OAI TRAIN split (prompt2.md Step 5: "Bootstrap: train each component on
+        TRAIN") — `data/processed/oai/train.parquet`, built by `scripts/build_oai_dataset.py`.
+        Never the live D1Store (bootstrap data is a distinct provenance category from live
+        telemetry, per CLAUDE.md's Module 3 entry's scope boundary), and never VAL/TEST."""
         settings = self._settings
-        mock_config = settings.telemetry.mock.model_copy(
-            update={"num_ues": 25, "num_cells": 4, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
-        )
-        source = MockTelemetrySource(mock_config, max_records=1200, realtime=False)
-        preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
-        result = preprocessor.process_batch(source.records())
-        bootstrap_store = D1Store(
-            current_state_path=settings.resolve_path(settings.storage.bootstrap_dir) / "_bootstrap_current.parquet",
-            history_path=settings.resolve_path(settings.storage.bootstrap_dir) / "_bootstrap_history.parquet",
-            quarantine_path=settings.resolve_path(settings.storage.bootstrap_dir) / "_bootstrap_quarantine.parquet",
-            history_retention_rows=len(result.clean_records) + 1,
-        )
-        bootstrap_store.append_history(result.clean_records)
-        history = bootstrap_store.get_history()
-        logger.info("bootstrap telemetry generated", extra={"component": "main", "rows": len(history)})
+        train_path = settings.resolve_path("data/processed/oai/train.parquet")
+        if not train_path.exists():
+            raise FileNotFoundError(
+                f"{train_path} does not exist — run scripts/build_oai_dataset.py before starting "
+                "the orchestrator for the first time (bootstrap training needs the real OAI TRAIN split)"
+            )
+        history = pd.read_parquet(train_path, engine="pyarrow")
+        logger.info("bootstrap telemetry (OAI TRAIN split) loaded", extra={"component": "main", "rows": len(history)})
         return history
 
     def _bootstrap_train_and_register(self, name: str, instance: DTComponent, history: pd.DataFrame) -> None:
@@ -420,29 +436,88 @@ class ContinuousOrchestrator:
         logger.info("orchestrator started — telemetry sync and drift consumption running in the background", extra={"component": "main"})
 
     def stop(self) -> None:
+        """Phase 13 §8.4: deterministic shutdown — signals both background threads to exit, then
+        BLOCKS (bounded by `config.synchronization.shutdown_join_timeout_seconds`) until each
+        actually has, rather than returning immediately while they're still mid-flight (the
+        original race: a caller could treat the orchestrator as fully stopped, e.g. tear down
+        logging or delete its storage directory, while `dt-continuous-sync`/`dt-drift-consumer`
+        were still running and could still log or write). All logging happens BEFORE this method
+        returns, never from either background thread after this call believes shutdown is
+        complete — a thread that doesn't exit within the timeout is reported here, in the caller's
+        own thread, not from the stale background thread itself."""
         self._stop_event.set()
         self.synchronizer.stop()
         self.drift_source.close()
-        logger.info("orchestrator stopped", extra={"component": "main"})
+
+        timeout = self._settings.synchronization.shutdown_join_timeout_seconds
+        still_alive: list[str] = []
+        if self.sync_thread is not None:
+            self.sync_thread.join(timeout=timeout)
+            if self.sync_thread.is_alive():
+                still_alive.append(self.sync_thread.name)
+        if self.drift_thread is not None:
+            self.drift_thread.join(timeout=timeout)
+            if self.drift_thread.is_alive():
+                still_alive.append(self.drift_thread.name)
+
+        if still_alive:
+            logger.warning(
+                "orchestrator stop() timed out waiting for background thread(s) to exit",
+                extra={"component": "main", "still_alive": still_alive, "timeout_seconds": timeout},
+            )
+        else:
+            logger.info("orchestrator stopped — both background threads confirmed exited", extra={"component": "main"})
 
     def _drift_consumer_loop(self) -> None:
         for event in self.drift_detector.process_stream(self.drift_source):
             if self._stop_event.is_set():
                 break
-            self._trigger_queue.put(trigger_from_drift_event(event))
+            self._enqueue_trigger(trigger_from_drift_event(event))
+
+    def _enqueue_trigger(self, trigger: AdaptationTrigger) -> None:
+        """Phase 13 §2: at most one pending trigger per component is ever held — a second
+        trigger for a component that already has one pending (queued OR currently being
+        processed, since `_pop_next_trigger` only removes an entry once it's actually handed to
+        `_handle_trigger`) is coalesced into the existing one, keeping the higher severity, never
+        creating a second separate adaptation cycle for the same component."""
+        with self._pending_lock:
+            existing = self._pending_by_component.get(trigger.component)
+            if existing is None or trigger.severity > existing.severity:
+                self._pending_by_component[trigger.component] = trigger
+            if trigger.component not in self._pending_order:
+                self._pending_order.append(trigger.component)
+
+    def _pop_next_trigger(self) -> "AdaptationTrigger | None":
+        """FIFO by first-pending arrival. Removing `component` from `_pending_order`/
+        `_pending_by_component` here — only once it's actually about to be dispatched — is what
+        lets a trigger that coalesces in WHILE this component is locked (mid-cycle) start a fresh
+        `_pending_order` entry of its own, correctly processed in the NEXT cycle after the lock
+        releases, rather than being lost or merged into a cycle that's already past the point of
+        reading it."""
+        with self._pending_lock:
+            if not self._pending_order:
+                return None
+            component = self._pending_order.pop(0)
+            return self._pending_by_component.pop(component)
 
     # --- the continuous loop itself (prompt.md §39) ---------------------------------------------
 
     def run(self, max_drift_events: int | None = None, prediction_interval_seconds: float = 5.0) -> None:
         """The foreground orchestration loop: periodically run DT prediction + fidelity
-        evaluation (which may itself enqueue a fidelity-based trigger), and dispatch every queued
-        trigger — external drift or fidelity-based, both already normalized to the same
+        evaluation (which may itself enqueue a fidelity-based trigger), and dispatch every
+        pending trigger — external drift or fidelity-based, both already normalized to the same
         `AdaptationTrigger` shape — through the full Decision & Root-Cause Analysis Agent -> agent
-        -> verification -> lifecycle cycle. Runs until `stop()` is called, or (for demo/validation
-        runs only) until `max_drift_events` adaptation cycles have completed — production/live
-        usage passes `max_drift_events=None` and never stops on its own (prompt.md §39: "must not
-        stop after one adaptation event"). Telemetry ingestion (started separately, in `start()`)
-        is completely unaffected by anything this loop does — see this module's own docstring."""
+        -> verification -> lifecycle cycle, one component-scoped adaptation at a time (phase13
+        §2's `lock_policy == "coalesce"`; `config.adaptation.allow_concurrent_components` is
+        structurally forbidden from being anything but `false` — see `Settings._forbid_
+        unsupported_concurrent_components` — so this single-threaded dispatch loop IS the
+        "different components adapt concurrently only if config allows it (default: no)" policy,
+        not merely an approximation of it). Runs until `stop()` is called, or (for demo/
+        validation runs only) until `max_drift_events` adaptation cycles have completed —
+        production/live usage passes `max_drift_events=None` and never stops on its own
+        (prompt.md §39: "must not stop after one adaptation event"). Telemetry ingestion
+        (started separately, in `start()`) is completely unaffected by anything this loop does —
+        see this module's own docstring."""
         handled = 0
         last_prediction = 0.0
         while not self._stop_event.is_set():
@@ -450,9 +525,9 @@ class ContinuousOrchestrator:
             if now - last_prediction >= prediction_interval_seconds:
                 self.run_prediction_and_fidelity_cycle()
                 last_prediction = now
-            try:
-                trigger = self._trigger_queue.get(timeout=0.5)
-            except queue.Empty:
+            trigger = self._pop_next_trigger()
+            if trigger is None:
+                self._stop_event.wait(timeout=0.5)
                 continue
             self._handle_trigger(trigger)
             handled += 1
@@ -477,7 +552,7 @@ class ContinuousOrchestrator:
         history = self.d1_store.get_history()
         if len(history) < self._settings.dt_models.bootstrap_min_rows:
             return {}
-        recent = history.sort_values("timestamp", kind="stable").tail(self._settings.evaluation.window_size).reset_index(drop=True)
+        recent = history.sort_values("ts_1s", kind="stable").tail(self._settings.evaluation.window_size).reset_index(drop=True)
         try:
             predictions = self.dt_orchestrator.run_predictions(recent)
         except OrchestratorError as exc:
@@ -492,7 +567,27 @@ class ContinuousOrchestrator:
                 # still serve correctly (see above); only fidelity tracking for THIS component
                 # is skipped until that's fixed, never the whole cycle (see _load_and_restore).
                 continue
-            result = self.fidelity_evaluator.evaluate(name, recent[target_column], preds, update_window=True)
+            # A residual-based component (src/dt_models/residual_base.py) honestly returns NaN
+            # for the first row of each (run_id, session_id) group, where no y_{t-1} anchor
+            # exists to reconstruct y_t from — a real, structural consequence of the residual
+            # design, not a bug. Module 12's fidelity formula itself must never silently
+            # manufacture a score from such rows (CLAUDE.md §5/§12: "handle ... missing samples
+            # explicitly ... never silently compute a metric from bad data") — so the caller
+            # (here) is responsible for explicitly excluding them before evaluate() ever sees
+            # them, exactly like ResidualDTComponent.evaluate()'s own NaN mask already does for
+            # its component-local RMSE/MAE.
+            target_values = np.asarray(recent[target_column], dtype=float)
+            pred_values = np.asarray(preds, dtype=float)
+            valid_mask = np.isfinite(target_values) & np.isfinite(pred_values)
+            if not valid_mask.any():
+                logger.debug(
+                    "fidelity cycle: no rows with a valid prediction+target this cycle, skipping",
+                    extra={"component": "main", "dt_component": name},
+                )
+                continue
+            result = self.fidelity_evaluator.evaluate(
+                name, target_values[valid_mask], pred_values[valid_mask], update_window=True
+            )
             self._latest_fidelity[name] = result.fidelity_score
         logger.info(
             "prediction + fidelity cycle complete",
@@ -501,7 +596,7 @@ class ContinuousOrchestrator:
 
         fidelity_trigger = self.fidelity_evaluator.check_fidelity_trigger(self._latest_fidelity)
         if fidelity_trigger is not None:
-            self._trigger_queue.put(fidelity_trigger)
+            self._enqueue_trigger(fidelity_trigger)
 
         return dict(self._latest_fidelity)
 
@@ -509,11 +604,18 @@ class ContinuousOrchestrator:
     # -> lifecycle -------------------------------------------------------------------------------
 
     def _handle_trigger(self, trigger: AdaptationTrigger) -> None:
+        """Acquires this trigger's component's adaptation lock (phase13 §2: "at most one
+        adaptation per component at a time") for the duration of the cycle, and ALWAYS releases
+        it in `finally` — on ACCEPT, REJECT, or an unexpected exception from
+        `_run_adaptation_cycle` (e.g. a sandbox failure) alike, so a failure can never leave this
+        component permanently locked ("no deadlock when the sandbox fails")."""
+        self._locked_component = trigger.component
         self.last_adaptation_started_at = time.monotonic()
         try:
             self._run_adaptation_cycle(trigger)
         finally:
             self.last_adaptation_finished_at = time.monotonic()
+            self._locked_component = None
 
     def _previous_outcome_for(self, component: str) -> PreviousOutcome:
         return self._previous_outcome_by_component.get(component, PreviousOutcome())
@@ -710,9 +812,14 @@ class ContinuousOrchestrator:
                     extra={"component": "main", "affected_component": component, "action": action_name, "error": str(exc)},
                 )
 
-        # Module 19: record + report.
+        # Module 19: record + report. OAI migration (prompt2.md Step 6): record which real
+        # telemetry source/run ids/replay speed actually drove this event — never fabricated.
+        source_label = getattr(self.telemetry_source, "SOURCE_LABEL", "MOCK")
+        replayed_run_ids = getattr(self.telemetry_source, "_run_ids", None) if source_label == "OAI_RAN_REPLAY" else None
+        replay_speed = settings.telemetry.replay.speed if source_label == "OAI_RAN_REPLAY" else None
         record = self.lifecycle_agent.record_adaptation_event(
             trigger=trigger, decision=decision, agent_result=agent_result, verification_result=verification_result,
+            telemetry_source=source_label, replayed_run_ids=replayed_run_ids, replay_speed=replay_speed,
         )
         self.lifecycle_agent.generate_maintenance_report(record, rag_knowledge_base=self.rag_kb)
 
@@ -742,7 +849,7 @@ def build_orchestrator(
 ) -> ContinuousOrchestrator:
     settings = load_settings()
     if mode is not None:
-        telemetry_source = "zmq" if mode == "live" else "mock"
+        telemetry_source = "oai_replay" if mode == "live" else "mock"
         settings = settings.model_copy(
             update={"telemetry": settings.telemetry.model_copy(update={"source": telemetry_source}), "environment": mode}
         )
@@ -754,7 +861,7 @@ def build_orchestrator(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AI-Driven Self-Adaptive Network Digital Twin — continuous orchestration loop")
-    parser.add_argument("--mode", choices=["demo", "live"], default=None, help="demo=mock telemetry, live=ZeroMQ telemetry; omit to use config/settings.yaml as-is")
+    parser.add_argument("--mode", choices=["demo", "live"], default=None, help="demo=mock telemetry, live=real OAI RAN KPI replay; omit to use config/settings.yaml as-is")
     parser.add_argument("--max-drift-events", type=int, default=None, help="stop the orchestration loop after this many adaptation cycles (telemetry sync keeps running until stop()); omit for real continuous operation")
     parser.add_argument("--prediction-interval-seconds", type=float, default=5.0)
     args = parser.parse_args(argv)

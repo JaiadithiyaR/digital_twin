@@ -12,12 +12,10 @@ Usage:
     # production storage (config/settings.yaml's own paths — what `python -m src.main` writes to)
     python scripts/visualize_metrics.py
 
-    # the dedicated real-NS-3 end-to-end demo's own storage subtree
-    python scripts/visualize_metrics.py --preset e2e_ns3_demo
-
-    # fully explicit paths (mix and match with the above)
-    python scripts/visualize_metrics.py --history-path data/e2e_ns3_demo/d1_history.parquet \\
-        --models-dir data/e2e_ns3_demo/models --lifecycle-path data/e2e_ns3_demo/lifecycle_records.jsonl
+    # fully explicit paths (OAI migration: no more e2e_ns3_demo preset — that subtree is archived,
+    # see archive/ns3_sim/pre_oai_migration_data/README.md)
+    python scripts/visualize_metrics.py --history-path data/some/other/d1_history.parquet \\
+        --models-dir data/some/other/models --lifecycle-path data/some/other/lifecycle_records.jsonl
 
 Output: PNG charts plus CSVs under --output-dir (default data/artifacts/plots/), plus a printed
 summary — including telemetry_original.csv (the real D1 history, exactly as ingested) and
@@ -56,13 +54,15 @@ from src.adaptation.lifecycle_agent import LifecycleAgent, LifecycleRecord
 _FIDELITY_SCORE_CLIP: tuple[float, float] = (-3.0, 1.0)
 from src.common.config import Settings, load_settings
 from src.dt_models.base import DTComponent
-from src.dt_models.jitter import JitterModel
-from src.dt_models.latency import LatencyModel
+from src.dt_models.dl_bler import DlBlerModel
+from src.dt_models.dl_prb import DlPrbModel
+from src.dt_models.dl_rlc_delay import DlRlcDelayModel
+from src.dt_models.dl_throughput import DlThroughputModel
 from src.dt_models.model_registry import DTModelRegistry
 from src.dt_models.orchestrator import DTOrchestrator, OrchestratorError
-from src.dt_models.packet_loss import PacketLossModel
-from src.dt_models.prb_utilization import PrbUtilizationModel
-from src.dt_models.throughput import ThroughputModel
+from src.dt_models.ul_bler import UlBlerModel
+from src.dt_models.ul_prb import UlPrbModel
+from src.dt_models.ul_throughput import UlThroughputModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.registry.model_registry import ModelRegistry
 
@@ -71,55 +71,51 @@ logger = logging.getLogger("visualize_metrics")
 
 # Reuses the exact same dispatch tables `src/main.py`'s `ContinuousOrchestrator` runs against —
 # not re-declared independently, so this tool can never silently drift from what the real system
-# actually predicts/targets per component.
+# actually predicts/targets per component. OAI migration: the 7 OAI KPI components replace the 5
+# retired NS-3-era ones; each component's own ground-truth column happens to share its exact name.
 _DT_COMPONENT_CLASSES: dict[str, type] = {
-    "throughput": ThroughputModel,
-    "packet_loss": PacketLossModel,
-    "latency": LatencyModel,
-    "prb_utilization": PrbUtilizationModel,
-    "jitter": JitterModel,
+    "dl_bler": DlBlerModel,
+    "ul_bler": UlBlerModel,
+    "dl_prb": DlPrbModel,
+    "ul_prb": UlPrbModel,
+    "dl_throughput": DlThroughputModel,
+    "ul_throughput": UlThroughputModel,
+    "dl_rlc_delay": DlRlcDelayModel,
 }
-_TARGET_COLUMNS: dict[str, str] = {
-    "throughput": "throughput_mbps",
-    "packet_loss": "packet_loss_pct",
-    "latency": "latency_ms",
-    "prb_utilization": "prb_utilization_pct",
-    "jitter": "jitter_ms",
-}
+_TARGET_COLUMNS: dict[str, str] = {name: name for name in _DT_COMPONENT_CLASSES}
 _OUTPUT_FIELDS: dict[str, str] = {name: cls.OUTPUT_FIELD for name, cls in _DT_COMPONENT_CLASSES.items()}
 
 _TELEMETRY_PANELS = [
-    ("throughput_mbps", "Throughput (Mbps)"),
-    ("latency_ms", "Latency (ms)"),
-    ("jitter_ms", "Jitter (ms)"),
-    ("packet_loss_pct", "Packet Loss (%)"),
-    ("prb_utilization_pct", "PRB Utilization (%)"),
+    ("dl_throughput", "DL Throughput (Mbps)"),
+    ("ul_throughput", "UL Throughput (Mbps)"),
+    ("dl_rlc_delay", "DL RLC Delay (ms)"),
+    ("dl_prb", "DL PRBs used/s"),
+    ("ul_prb", "UL PRBs used/s"),
+    ("dl_bler", "DL BLER (0-1)"),
+    ("ul_bler", "UL BLER (0-1)"),
 ]
+# Real lagged RAN-condition/control features (not targets) — the closest OAI equivalent of the
+# retired NS-3-era "radio conditions" panel (SINR/RSRP/RSRQ/UE speed don't exist in this schema).
 _RADIO_PANELS = [
-    ("sinr_db", "SINR (dB)"),
-    ("rsrp_dbm", "RSRP (dBm)"),
-    ("rsrq_db", "RSRQ (dB)"),
-    ("ue_speed_mps", "UE Speed (m/s)"),
+    ("pusch_snr_avg_lag1", "PUSCH SNR (dB, lagged)"),
+    ("wb_cqi_avg_lag1", "Wideband CQI (lagged)"),
+    ("dl_curr_tbs_avg_lag1", "DL Current TBS (lagged)"),
+    ("requested_prb_ratio_lag1", "Requested PRB Ratio (%, lagged)"),
 ]
 
 _COMPONENT_COLORS = {
-    "throughput": "#1f77b4",
-    "packet_loss": "#d62728",
-    "latency": "#2ca02c",
-    "prb_utilization": "#9467bd",
-    "jitter": "#ff7f0e",
+    "dl_bler": "#d62728",
+    "ul_bler": "#ff7f0e",
+    "dl_prb": "#9467bd",
+    "ul_prb": "#8c564b",
+    "dl_throughput": "#1f77b4",
+    "ul_throughput": "#17becf",
+    "dl_rlc_delay": "#2ca02c",
 }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument(
-        "--preset",
-        choices=["production", "e2e_ns3_demo"],
-        default="production",
-        help="production = config/settings.yaml's own storage paths (what `python -m src.main` writes); "
-        "e2e_ns3_demo = the dedicated data/e2e_ns3_demo/ subtree scripts/run_e2e_demo.py writes to",
-    )
     p.add_argument("--config", type=Path, default=None, help="config/settings.yaml override (default: repo's own)")
     p.add_argument("--history-path", type=Path, default=None, help="override the D1 history parquet path")
     p.add_argument("--models-dir", type=Path, default=None, help="override the model registry directory")
@@ -139,20 +135,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def resolve_paths(args: argparse.Namespace, settings: Settings) -> tuple[Path, Path, Path, Path, Path]:
-    """Returns (history_path, models_dir, lifecycle_path, reports_dir, output_dir), applying
-    --preset defaults and then any explicit --history-path/--models-dir/--lifecycle-path/
-    --output-dir overrides."""
-    if args.preset == "e2e_ns3_demo":
-        base = settings.resolve_path("data/e2e_ns3_demo")
-        history_path = base / "d1_history.parquet"
-        models_dir = base / "models"
-        lifecycle_path = base / "lifecycle_records.jsonl"
-        reports_dir = base / "maintenance_reports"
-    else:
-        history_path = settings.resolve_path(settings.storage.d1_history_path)
-        models_dir = settings.resolve_path(settings.storage.models_dir)
-        lifecycle_path = settings.resolve_path(settings.lifecycle.records_path)
-        reports_dir = settings.resolve_path(settings.lifecycle.reports_dir)
+    """Returns (history_path, models_dir, lifecycle_path, reports_dir, output_dir) — config/
+    settings.yaml's own production storage paths, then any explicit --history-path/--models-dir/
+    --lifecycle-path/--output-dir overrides."""
+    history_path = settings.resolve_path(settings.storage.d1_history_path)
+    models_dir = settings.resolve_path(settings.storage.models_dir)
+    lifecycle_path = settings.resolve_path(settings.lifecycle.records_path)
+    reports_dir = settings.resolve_path(settings.lifecycle.reports_dir)
     output_dir = settings.resolve_path("data/artifacts/plots")
 
     if args.history_path is not None:
@@ -175,7 +164,7 @@ def load_telemetry_history(history_path: Path) -> pd.DataFrame:
     df = pd.read_parquet(history_path)
     if df.empty:
         raise ValueError(f"{history_path} exists but has zero rows — nothing to plot")
-    return df.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    return df.sort_values("ts_1s", kind="stable").reset_index(drop=True)
 
 
 def load_lifecycle_records(lifecycle_path: Path, reports_dir: Path) -> list[LifecycleRecord]:
@@ -194,20 +183,20 @@ def load_lifecycle_records(lifecycle_path: Path, reports_dir: Path) -> list[Life
 # Telemetry plots
 # ---------------------------------------------------------------------------
 def plot_telemetry(history: pd.DataFrame, output_dir: Path, show: bool) -> list[Path]:
-    """Per-timestamp mean across UEs (the same aggregation a real cell-wide view would use) for
-    the five DT-predicted quantities and four radio-condition quantities. Real recorded values —
-    no smoothing, no synthetic interpolation."""
+    """Per-timestamp mean across UEs/sessions (the same aggregation a real cell-wide view would
+    use) for the seven OAI DT-predicted quantities and four lagged RAN-condition quantities. Real
+    recorded values — no smoothing, no synthetic interpolation."""
     saved: list[Path] = []
     agg_cols = [c for c, _ in _TELEMETRY_PANELS + _RADIO_PANELS if c in history.columns]
-    agg = history.groupby("timestamp", as_index=False)[agg_cols].mean().sort_values("timestamp")
+    agg = history.groupby("ts_1s", as_index=False)[agg_cols].mean().sort_values("ts_1s")
     source_label = history["source"].mode().iat[0] if "source" in history.columns and not history.empty else "UNKNOWN"
 
-    # Break the line across abnormally large gaps between telemetry ticks (e.g. a real pause
-    # between retried drift-event attempts in scripts/run_e2e_demo.py) instead of letting
-    # matplotlib draw a straight line across the gap — that line would visually invent a smooth
-    # trend across a period with NO real data, which is exactly the kind of fabrication this
-    # project's discipline forbids. A gap is "abnormal" if it's >8x the median tick spacing.
-    gap_seconds = agg["timestamp"].diff().dt.total_seconds()
+    # Break the line across abnormally large gaps between telemetry ticks (e.g. a real replay
+    # pause or a genuine gap in the underlying OAI run) instead of letting matplotlib draw a
+    # straight line across the gap — that line would visually invent a smooth trend across a
+    # period with NO real data, which is exactly the kind of fabrication this project's
+    # discipline forbids. A gap is "abnormal" if it's >8x the median tick spacing.
+    gap_seconds = agg["ts_1s"].diff().dt.total_seconds()
     median_gap = gap_seconds.median()
     if pd.notna(median_gap) and median_gap > 0:
         is_break = gap_seconds > max(8 * median_gap, 1.0)
@@ -232,12 +221,12 @@ def plot_telemetry(history: pd.DataFrame, output_dir: Path, show: bool) -> list[
         if len(present) == 1:
             axes = [axes]
         for ax, (col, label) in zip(axes, present):
-            ax.plot(agg["timestamp"], agg[col], linewidth=1.1, color="#1f77b4")
+            ax.plot(agg["ts_1s"], agg[col], linewidth=1.1, color="#1f77b4")
             ax.set_ylabel(label, fontsize=9)
             ax.grid(alpha=0.3)
         axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         fig.autofmt_xdate()
-        fig.suptitle(f"{title}  (source={source_label}, n={len(history)} rows, {agg['timestamp'].nunique()} ticks)", fontsize=11)
+        fig.suptitle(f"{title}  (source={source_label}, n={len(history)} rows, {agg['ts_1s'].nunique()} ticks)", fontsize=11)
         fig.tight_layout(rect=(0, 0, 1, 0.96))
         out_path = output_dir / filename
         fig.savefig(out_path, dpi=140)
@@ -251,7 +240,7 @@ def plot_telemetry(history: pd.DataFrame, output_dir: Path, show: bool) -> list[
 
 # ---------------------------------------------------------------------------
 # Shared production-model loading — both the fidelity replay and the predicted-telemetry export
-# below need the SAME "whichever of the 5 real components currently has a production version"
+# below need the SAME "whichever of the 7 real OAI components currently has a production version"
 # set, loaded from the SAME real ModelRegistry artifacts; written once here so the two never drift
 # against each other.
 # ---------------------------------------------------------------------------
@@ -307,7 +296,7 @@ def compute_fidelity_timeseries(
                 continue
             results[name].append(
                 {
-                    "timestamp": chunk["timestamp"].iloc[-1],
+                    "timestamp": chunk["ts_1s"].iloc[-1],
                     "fidelity_score": result.fidelity_score,
                     "rmse": result.raw_metrics["rmse"],
                     "mae": result.raw_metrics["mae"],
@@ -324,9 +313,10 @@ def compute_fidelity_timeseries(
 # Original vs. predicted telemetry export — two separate, directly comparable CSVs: the real D1
 # history exactly as ingested, and the DT's own predictions for that same history, computed via
 # ONE real DTOrchestrator.run_predictions() pass (dependency-chained through each component's own
-# LIVE prediction — throughput's prediction feeds latency/prb_utilization/jitter, matching how
-# ContinuousOrchestrator actually serves predictions — never the ground-truth-fed shortcut
-# compute_fidelity_timeseries above uses for independent per-component fidelity windows).
+# LIVE prediction — dl_bler/dl_prb's predictions feed dl_throughput, which in turn feeds
+# dl_rlc_delay, matching how ContinuousOrchestrator actually serves predictions — never the
+# ground-truth-fed shortcut compute_fidelity_timeseries above uses for independent per-component
+# fidelity windows).
 # ---------------------------------------------------------------------------
 def compute_predicted_telemetry(history: pd.DataFrame, loaded: dict[str, DTComponent]) -> pd.DataFrame | None:
     if not loaded:
@@ -345,7 +335,7 @@ def compute_predicted_telemetry(history: pd.DataFrame, loaded: dict[str, DTCompo
         logger.warning("could not compute predicted telemetry: %s", exc)
         return None
 
-    identity_cols = [c for c in ("timestamp", "ue_id", "cell_id") if c in history.columns]
+    identity_cols = [c for c in ("ts_1s", "run_id", "cell_id", "session_id", "ue_id", "slice_id") if c in history.columns]
     result = history[identity_cols].copy()
     for name, series in predictions.items():
         output_field = _DT_COMPONENT_CLASSES[name].OUTPUT_FIELD
@@ -356,8 +346,8 @@ def compute_predicted_telemetry(history: pd.DataFrame, loaded: dict[str, DTCompo
 def save_telemetry_csvs(history: pd.DataFrame, predicted: pd.DataFrame | None, output_dir: Path) -> list[Path]:
     """The two files this tool exists to produce: the real, as-ingested telemetry and the DT's own
     predictions for it, kept as separate files (never merged into one) so each can be opened,
-    diffed, or plotted independently — join them on (timestamp, ue_id, cell_id) if a side-by-side
-    comparison is needed."""
+    diffed, or plotted independently — join them on (ts_1s, run_id, cell_id, session_id) if a
+    side-by-side comparison is needed."""
     saved = []
     original_path = output_dir / "telemetry_original.csv"
     history.to_csv(original_path, index=False)
@@ -576,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Reading telemetry history from: {history_path}")
     history = load_telemetry_history(history_path)
-    print(f"  -> {len(history)} rows, {history['timestamp'].nunique()} distinct timestamps, "
+    print(f"  -> {len(history)} rows, {history['ts_1s'].nunique()} distinct timestamps, "
           f"source={history['source'].unique().tolist() if 'source' in history.columns else 'n/a'}")
 
     print(f"Reading model registry from:    {models_dir}")

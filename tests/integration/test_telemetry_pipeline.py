@@ -1,22 +1,18 @@
 """Integration tests: full Module 2 pipeline wired together using real `config/settings.yaml`
-values — MockTelemetrySource / ZmqTelemetrySource -> TelemetryPreprocessor -> feature windows.
+values — MockTelemetrySource / OaiReplaySource -> TelemetryPreprocessor.
 
-Proves the diagram edge end-to-end: "raw telemetry" in, "validated feature records / time-series
-windows (timestamp, UE ID, cell ID)" out (prompt.md §8, fig-dataflow.png Module 2 -> D1 edge).
+Proves the diagram edge end-to-end: "raw telemetry" in, validated `CleanTelemetryRecord`s
+(identity + lagged features + the 7 raw targets) out (prompt.md §8, fig-dataflow.png Module 2 ->
+D1 edge).
 """
 
 from __future__ import annotations
 
-import json
-import threading
-import time
-
-import zmq
-
 from src.common.config import load_settings
+from src.data.oai_dataset import TARGET_COLUMNS
 from src.telemetry.mock_source import MockTelemetrySource
+from src.telemetry.oai_replay_source import OaiReplaySource
 from src.telemetry.preprocessing import TelemetryPreprocessor
-from src.telemetry.zmq_source import ZmqTelemetrySource
 
 
 def test_mock_source_through_full_pipeline_using_real_config():
@@ -27,73 +23,48 @@ def test_mock_source_through_full_pipeline_using_real_config():
     result = preprocessor.process_batch(source.records())
 
     assert result.total_received == 200
-    # Some imperfection is injected by config (missing_field_rate/out_of_range_rate > 0);
-    # the pipeline must still turn the overwhelming majority into clean records, not discard them.
+    # Some imperfection is injected by config (missing_feature_rate > 0); the pipeline must still
+    # turn the overwhelming majority into clean records, not discard them (a missing feature is
+    # legitimate missingness, never a reason to quarantine the whole record).
     assert len(result.clean_records) > 150
     assert all(r.source == "MOCK" for r in result.clean_records)
-    assert all(r.source != "NS3_5G_LENA" for r in result.clean_records)
+    assert all(r.source != "OAI_RAN_REPLAY" for r in result.clean_records)
 
-    windows = preprocessor.build_feature_windows(result.clean_records)
-    assert len(windows) > 0
-    for window in windows:
-        frame = window.frame
-        assert {"timestamp", "ue_id", "cell_id"}.issubset(frame.columns)
-        assert frame["ue_id"].nunique() == 1
-        assert frame["cell_id"].nunique() == 1
-        assert frame["timestamp"].is_monotonic_increasing
-        assert 0.0 <= window.missing_ratio <= 1.0
-        assert window.quality_flag in ("ok", "low_quality")
-        # canonical units in plausible ranges (weak sanity check, not a range-flag re-test)
-        assert (frame["throughput_mbps"] >= 0).all()
-        assert (frame["packet_loss_pct"] >= 0).all() or window.quality_flag == "low_quality"
+    for record in result.clean_records:
+        for name in TARGET_COLUMNS:
+            assert name in record.targets
+        assert record.targets["dl_throughput"] is None or record.targets["dl_throughput"] >= 0
 
 
-def test_zmq_source_through_full_pipeline_real_transport():
-    """Publishes real telemetry over an actual ZeroMQ socket (standing in for the future
-    NS-3 exporter) and drives it through the exact same preprocessor + windowing used for mock
-    data — proving the ZeroMQ real-source path produces the same validated output shape."""
+def test_real_oai_replay_through_full_pipeline_real_transport(tmp_path):
+    """Drives the REAL processed OAI export through `OaiReplaySource` -> the exact same
+    preprocessor used for mock data — proving the real-replay source path produces the same
+    validated output shape, with the correct `SOURCE=OAI_RAN_REPLAY` provenance."""
+    import pytest
+
     settings = load_settings()
-    zmq_config = settings.telemetry.zmq
+    processed_dir = settings.resolve_path("data/processed/oai")
+    if not (processed_dir / "test.parquet").exists():
+        pytest.skip("data/processed/oai/test.parquet not built — run scripts/build_oai_dataset.py")
 
-    ctx = zmq.Context()
-    pub = ctx.socket(zmq.PUB)
-    port = pub.bind_to_random_port("tcp://127.0.0.1")
-    endpoint = f"tcp://127.0.0.1:{port}"
-    live_config = zmq_config.model_copy(update={"endpoint": endpoint, "recv_timeout_ms": 300})
-
-    source = ZmqTelemetrySource(live_config)
-    time.sleep(0.3)  # slow-joiner
+    source = OaiReplaySource(processed_dir, speed=0.0)
+    source.start(run_ids=settings.data.splits.test)
 
     num_messages = 30
-    mock_generator = MockTelemetrySource(settings.telemetry.mock, max_records=num_messages, realtime=False)
-    raw_messages = list(mock_generator.records())
-
-    def publish():
-        for msg in raw_messages:
-            msg["source"] = "NS3_5G_LENA"  # what a real exporter would legitimately claim
-            pub.send_multipart([zmq_config.topic.encode(), json.dumps(msg).encode("utf-8")])
-            time.sleep(0.005)
-
-    publisher_thread = threading.Thread(target=publish, daemon=True)
-    publisher_thread.start()
-
     received = []
     gen = source.records()
     for _ in range(num_messages):
         received.append(next(gen))
     source.close()
-    publisher_thread.join(timeout=5.0)
-    pub.close()
-    ctx.term()
 
     assert len(received) == num_messages
-    assert all(r["source"] == "NS3_5G_LENA" for r in received)
+    assert all(r["source"] == "OAI_RAN_REPLAY" for r in received)
+    assert all(r["run_id"] in settings.data.splits.test for r in received)
 
     preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
     result = preprocessor.process_batch(received)
     assert len(result.clean_records) > 0
-    assert all(r.source == "NS3_5G_LENA" for r in result.clean_records)
-
-    windows = preprocessor.build_feature_windows(result.clean_records)
-    for window in windows:
-        assert {"timestamp", "ue_id", "cell_id"}.issubset(window.frame.columns)
+    assert all(r.source == "OAI_RAN_REPLAY" for r in result.clean_records)
+    for record in result.clean_records:
+        for name in TARGET_COLUMNS:
+            assert name in record.targets

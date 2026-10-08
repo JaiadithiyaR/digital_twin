@@ -19,19 +19,29 @@ class DataSelectionError(Exception):
 
 
 def select_recent_window(history: pd.DataFrame, window_hours: float) -> pd.DataFrame:
-    """Filter `history` (a D1 snapshot) to rows within the last `window_hours`."""
+    """Filter `history` (a D1 snapshot) to rows within the last `window_hours`.
+
+    OAI migration note: the cutoff is anchored on the DATA's own most recent timestamp
+    (`history["ts_1s"].max()`), not wall-clock `datetime.now()`. Live NS-3 telemetry made "now"
+    and "the latest row's timestamp" the same thing by construction; replayed OAI data carries
+    real, fixed HISTORICAL timestamps (e.g. a run recorded days ago) that can be arbitrarily far
+    from wall-clock "now" — especially at `replay.speed=0` ("as fast as possible"), where an
+    entire run can be ingested in well under a second of real time. Anchoring on `now()` would
+    silently filter out ALL real replayed data the moment it's more than `window_hours` old by
+    the calendar, which is never what "recent" is meant to capture here.
+    """
     if len(history) == 0:
         return history
-    cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
-    timestamps = history["timestamp"]
-    if timestamps.dt.tz is None:
-        timestamps = timestamps.dt.tz_localize(UTC)
-    return history[timestamps >= cutoff].reset_index(drop=True)
+    latest = history["ts_1s"]
+    if latest.dt.tz is None:
+        latest = latest.dt.tz_localize(UTC)
+    cutoff = latest.max() - timedelta(hours=window_hours)
+    return history[latest >= cutoff].reset_index(drop=True)
 
 
 def time_split(df: pd.DataFrame, held_out_fraction: float) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Time-ordered train/held-out split — avoids any leakage between the two sets."""
-    ordered = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    ordered = df.sort_values("ts_1s", kind="stable").reset_index(drop=True)
     split_at = max(1, int(len(ordered) * (1.0 - held_out_fraction)))
     return ordered.iloc[:split_at].reset_index(drop=True), ordered.iloc[split_at:].reset_index(drop=True)
 

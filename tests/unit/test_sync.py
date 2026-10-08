@@ -13,7 +13,7 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
-from src.common.config import MockTelemetryConfig, PreprocessingConfig, SynchronizationConfig
+from src.common.config import MockTelemetryConfig, OaiPreprocessingConfig, SynchronizationConfig
 from src.synchronization.d1_interface import InMemoryD1Stub
 from src.telemetry.base import TelemetrySource
 from src.telemetry.mock_source import MockTelemetrySource
@@ -36,42 +36,29 @@ class _FixedListSource(TelemetrySource):
         self.closed = True
 
 
-def _preprocessing_config(**overrides) -> PreprocessingConfig:
-    base = dict(
-        required_fields=[
-            "timestamp", "ue_id", "cell_id", "throughput_mbps", "offered_load_mbps",
-            "latency_ms", "jitter_ms", "packet_loss_pct", "prb_utilization_pct",
-            "sinr_db", "rsrp_dbm", "rsrq_db", "ue_count", "ue_speed_mps",
-        ],
-        valid_ranges={},
-        feature_window_size=10,
-        max_missing_ratio=0.2,
-    )
+def _preprocessing_config(**overrides) -> OaiPreprocessingConfig:
+    base = dict(max_missing_ratio=0.2)
     base.update(overrides)
-    return PreprocessingConfig(**base)
+    return OaiPreprocessingConfig(**base)
 
 
 def _mock_config(**overrides) -> MockTelemetryConfig:
-    base = dict(
-        seed=42, emit_interval_seconds=0.01, num_ues=5, num_cells=1,
-        missing_field_rate=0.0, out_of_range_rate=0.0,
-    )
+    base = dict(seed=42, num_sessions=5, emit_interval_seconds=0.01, missing_feature_rate=0.0)
     base.update(overrides)
     return MockTelemetryConfig(**base)
 
 
 def _sync_config(**overrides) -> SynchronizationConfig:
-    base = dict(batch_size=5, batch_timeout_seconds=100.0)  # timeout effectively disabled by default
+    base = dict(batch_size=5, batch_timeout_seconds=100.0, shutdown_join_timeout_seconds=5.0)  # timeout effectively disabled by default
     base.update(overrides)
     return SynchronizationConfig(**base)
 
 
 def _raw_record(**overrides) -> dict[str, Any]:
     base = dict(
-        source="MOCK", timestamp=1_700_000_000.0, ue_id="ue-0", cell_id="cell-0",
-        throughput_bps=1e6, offered_load_bps=1e6, latency_s=0.01, jitter_s=0.001,
-        packet_loss_ratio=0.01, prb_utilization_ratio=0.1, sinr_db=10.0, rsrp_dbm=-90.0,
-        rsrq_db=-9.0, ue_count=5, ue_speed_mps=1.0,
+        source="MOCK", run_id=1, cell_id=1, session_id=1, ue_id=1, slice_id=1,
+        ts_1s=1_700_000_000.0, dl_throughput=25.0, ul_throughput=5.0, dl_rlc_delay=2.0,
+        dl_prb=30.0, ul_prb=5.0, dl_bler=0.05, ul_bler=0.02,
     )
     base.update(overrides)
     return base
@@ -83,7 +70,7 @@ def _raw_record(**overrides) -> dict[str, Any]:
 def test_run_synchronizes_every_record_from_a_bounded_source():
     from src.synchronization.sync import ContinuousSynchronizer
 
-    source = MockTelemetrySource(_mock_config(num_ues=5, num_cells=1), max_records=15, realtime=False)
+    source = MockTelemetrySource(_mock_config(num_sessions=5), max_records=15, realtime=False)
     d1 = InMemoryD1Stub()
     synchronizer = ContinuousSynchronizer(
         source, TelemetryPreprocessor(_preprocessing_config()), d1, _sync_config(batch_size=5)
@@ -94,13 +81,13 @@ def test_run_synchronizes_every_record_from_a_bounded_source():
     assert synchronizer.batches_synced == 3  # 15 records / batch_size 5
     assert synchronizer.records_synced == 15
     assert len(d1.get_history()) == 15
-    assert len(d1.get_current_state()) == 5  # 5 UEs, 1 cell each -> 5 distinct keys
+    assert len(d1.get_current_state()) == 5  # 5 sessions -> 5 distinct keys
 
 
 def test_trailing_partial_batch_is_still_flushed_not_dropped():
     from src.synchronization.sync import ContinuousSynchronizer
 
-    source = MockTelemetrySource(_mock_config(num_ues=4, num_cells=1), max_records=12, realtime=False)
+    source = MockTelemetrySource(_mock_config(num_sessions=4), max_records=12, realtime=False)
     d1 = InMemoryD1Stub()
     synchronizer = ContinuousSynchronizer(
         source, TelemetryPreprocessor(_preprocessing_config()), d1, _sync_config(batch_size=5)
@@ -116,8 +103,8 @@ def test_trailing_partial_batch_is_still_flushed_not_dropped():
 def test_quarantined_records_reach_the_d1_audit_sink_not_just_logs():
     from src.synchronization.sync import ContinuousSynchronizer
 
-    good = _raw_record(ue_id="ue-0")
-    bad = _raw_record(ue_id="ue-1", source="NOT_A_REAL_SOURCE")
+    good = _raw_record(session_id=1)
+    bad = _raw_record(session_id=2, source="NOT_A_REAL_SOURCE")
     source = _FixedListSource([good, bad])
     d1 = InMemoryD1Stub()
     synchronizer = ContinuousSynchronizer(
@@ -166,7 +153,7 @@ def test_stop_halts_background_thread_promptly():
     from src.synchronization.sync import ContinuousSynchronizer
 
     source = MockTelemetrySource(
-        _mock_config(num_ues=2, num_cells=1, emit_interval_seconds=0.01), max_records=None, realtime=True
+        _mock_config(num_sessions=2, emit_interval_seconds=0.01), max_records=None, realtime=True
     )
     d1 = InMemoryD1Stub()
     synchronizer = ContinuousSynchronizer(
@@ -189,7 +176,7 @@ def test_run_returns_when_stop_called_before_any_flush_threshold():
     from src.synchronization.sync import ContinuousSynchronizer
 
     source = MockTelemetrySource(
-        _mock_config(num_ues=1, num_cells=1, emit_interval_seconds=0.05), max_records=None, realtime=True
+        _mock_config(num_sessions=1, emit_interval_seconds=0.05), max_records=None, realtime=True
     )
     d1 = InMemoryD1Stub()
     synchronizer = ContinuousSynchronizer(

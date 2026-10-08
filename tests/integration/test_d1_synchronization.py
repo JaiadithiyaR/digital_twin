@@ -32,7 +32,7 @@ def test_synchronizer_updates_d1_current_state_and_appends_history_via_real_d1st
     assert isinstance(store, D1StateSink)  # this IS the Module 3 -> D1 contract, for real
 
     mock_config = settings.telemetry.mock.model_copy(
-        update={"num_ues": 5, "num_cells": 2, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"num_sessions": 5, "missing_feature_rate": 0.0}
     )
     source = MockTelemetrySource(mock_config, max_records=30, realtime=False)
     preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
@@ -64,7 +64,7 @@ def test_synchronizer_updates_d1_current_state_and_appends_history_via_real_d1st
     # current state holds only the LATEST record per key
     for _, row in current.iterrows():
         key_history = history[(history["ue_id"] == row["ue_id"]) & (history["cell_id"] == row["cell_id"])]
-        assert row["timestamp"] == key_history["timestamp"].max()
+        assert row["ts_1s"] == key_history["ts_1s"].max()
 
     # --- real persistence, not just in-memory: a fresh D1Store sees the same data on disk ---
     reloaded = D1Store(
@@ -90,7 +90,7 @@ def test_synchronizer_continuously_updates_real_d1store_with_no_manual_trigger(t
         history_retention_rows=settings.storage.history_retention_rows,
     )
     mock_config = settings.telemetry.mock.model_copy(
-        update={"emit_interval_seconds": 0.02, "num_ues": 3, "num_cells": 1}
+        update={"emit_interval_seconds": 0.02, "num_sessions": 3}
     )
     sync_config = settings.synchronization.model_copy(
         update={"batch_size": 1000, "batch_timeout_seconds": 0.15}

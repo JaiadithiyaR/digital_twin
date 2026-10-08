@@ -16,45 +16,88 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SETTINGS_PATH = REPO_ROOT / "config" / "settings.yaml"
 
+# The five NS-3-era component ids — structurally forbidden from ever reappearing as live
+# component config (OAI migration, prompt2.md addendum item 6: "fail at startup if any old
+# component id or NS-3 setting appears"). Checked explicitly below since `drift.valid_components`
+# is a plain `list[str]`, not a fixed set of typed fields the way `DtModelsConfig` is.
+_RETIRED_COMPONENT_IDS = frozenset({"throughput", "latency", "packet_loss", "prb_utilization", "jitter"})
+
 
 class MockTelemetryConfig(BaseModel):
+    """OAI-shaped mock telemetry — unit tests only (prompt2.md: "mock source stays for unit
+    tests only, tagged SOURCE=MOCK"). Never used in `--mode live`/replay runs."""
+
     seed: int
+    num_sessions: int
     emit_interval_seconds: float
-    num_ues: int
-    num_cells: int
-    missing_field_rate: float
-    out_of_range_rate: float
+    missing_feature_rate: float  # fraction of feature values randomly NaN'd — exercises the same quality-tracking path real gaps would
 
 
-class ZmqTelemetryConfig(BaseModel):
-    endpoint: str
-    topic: str
-    recv_timeout_ms: int
-    high_water_mark: int
+class ReplayConfig(BaseModel):
+    """Module 1 replacement — OAI CSV replay pacing (prompt2.md Step 4)."""
+
+    speed: float  # 0 = as fast as possible (tests/experiments); 1.0 = real time; >1 = accelerated
+    default_split: Literal["train", "test"]  # "val" retired (phase13 §0/§1.1): no held-out val split anymore, only train/tune pool + strictly-held-out test
 
 
-class PreprocessingConfig(BaseModel):
-    required_fields: list[str]
-    valid_ranges: dict[str, tuple[float, float]]
-    feature_window_size: int
-    max_missing_ratio: float
+class OaiPreprocessingConfig(BaseModel):
+    max_missing_ratio: float  # above this, a window/tick is flagged low-quality rather than used
 
 
 class TelemetryConfig(BaseModel):
-    source: Literal["mock", "zmq"]
+    source: Literal["mock", "oai_replay"]
     mock: MockTelemetryConfig
-    zmq: ZmqTelemetryConfig
-    preprocessing: PreprocessingConfig
+    replay: ReplayConfig
+    preprocessing: OaiPreprocessingConfig
+
+
+class DataSplitsConfig(BaseModel):
+    """Config-driven run-id splits (prompt2.md: "so run 10 can be added as an extra test run
+    later ... without code changes"). Disjointness is enforced at load time, not left to the
+    caller to remember.
+
+    Phase 13 (claude_code_prompt_phase13.md §0/§1.1) redesign: there is no longer a separate,
+    strictly-held-out "val" split — `train` is now the full TRAIN/TUNE pool (leave-one-run-out CV
+    folds over it, then a final retrain on all of it combined), and `test` remains strictly held
+    out (never used for training, tuning, debugging, or smoke tests). `smoke_test_run` names
+    which TRAIN run doubles as the designated smoke-test run, so `test` is never touched before
+    genuine TEST-time evaluation."""
+
+    train: list[int]
+    test: list[int]
+    smoke_test_run: int
+
+    @model_validator(mode="after")
+    def _check_disjoint(self) -> "DataSplitsConfig":
+        overlap = set(self.train) & set(self.test)
+        if overlap:
+            raise ValueError(f"run(s) {sorted(overlap)} appear in both 'train' and 'test' splits")
+        if self.smoke_test_run not in self.train:
+            raise ValueError(f"smoke_test_run={self.smoke_test_run} must be a member of train={self.train}")
+        return self
+
+
+class DataConfig(BaseModel):
+    """Module 1 replacement — the read-only OAI export this Digital Twin now replays telemetry
+    from. Never written to, never copied into git (prompt2.md Fixed constraints)."""
+
+    oai_root: str
+    splits: DataSplitsConfig
 
 
 class SynchronizationConfig(BaseModel):
     batch_size: int
     batch_timeout_seconds: float
+    # phase13 §8.4: how long ContinuousOrchestrator.stop() waits for the background
+    # dt-continuous-sync/dt-drift-consumer threads to actually exit before giving up — makes
+    # shutdown deterministic (a bounded wait + explicit outcome) rather than a fire-and-forget
+    # stop_event.set() that returns before the threads have genuinely stopped.
+    shutdown_join_timeout_seconds: float
 
 
 class StorageConfig(BaseModel):
@@ -76,13 +119,22 @@ class ModelSpec(BaseModel):
 
 
 class DtModelsConfig(BaseModel):
-    enable_prb_model: bool
+    """The 7 OAI KPI prediction components (prompt2.md Step 5 — replaces the 5 NS-3-era
+    components entirely). `extra="forbid"` makes loading a config that still names an old
+    component id (e.g. a stray `jitter:` block) a hard validation failure at startup, not a
+    silently-ignored extra key — the structural half of the addendum's "fail at startup if any
+    old component id ... appears" requirement."""
+
+    model_config = {"extra": "forbid"}
+
     bootstrap_min_rows: int
-    throughput: ModelSpec
-    packet_loss: ModelSpec
-    latency: ModelSpec
-    prb_utilization: ModelSpec
-    jitter: ModelSpec
+    dl_throughput: ModelSpec
+    ul_throughput: ModelSpec
+    dl_rlc_delay: ModelSpec
+    dl_prb: ModelSpec
+    ul_prb: ModelSpec
+    dl_bler: ModelSpec
+    ul_bler: ModelSpec
 
 
 class MkMmdConfig(BaseModel):
@@ -158,6 +210,12 @@ class ExpandScopeConfig(BaseModel):
 
 class AdaptationConfig(BaseModel):
     lock_policy: Literal["queue", "coalesce", "defer"]
+    # Phase 13 §2: different components may adapt concurrently only if this is true — default
+    # false matches this orchestrator's actual single-threaded dispatch loop (one adaptation
+    # cycle, across ALL components, running at a time); `true` would need a genuine per-component
+    # worker-thread redesign that isn't built (fails fast at startup instead of silently ignoring
+    # the setting — see Settings._forbid_unsupported_concurrent_components below).
+    allow_concurrent_components: bool
     recalibration: RecalibrationConfig
     regeneration: RegenerationConfig
     expand_scope: ExpandScopeConfig
@@ -170,6 +228,31 @@ class SandboxConfig(BaseModel):
     max_output_bytes: int
 
 
+class PeriodicRetrainBaselineConfig(BaseModel):
+    interval_cycles: int
+    # phase13 §4: "all components retrained every N seconds of replayed data" — every one of the
+    # 7 real OAI components is recalibrated on this fixed schedule, never a single hardcoded one.
+
+
+class RuleBasedBaselineConfig(BaseModel):
+    recalibrate_max_severity: float
+    regenerate_max_severity: float
+
+
+class BaselinesConfig(BaseModel):
+    """Baseline experiment modes (prompt2.md Step 6, extended by claude_code_prompt_phase13.md
+    §4) — static/periodic_retrain/rule_based/full_system, run on the same OAI replay splits/
+    seed/fidelity settings for a fair comparison. 'static' needs no config of its own (never
+    adapts at all); 'full_system' is just the already-configured real system, run once per
+    `seeds` entry."""
+
+    cycles: int
+    seeds: list[int]
+    periodic_retrain: PeriodicRetrainBaselineConfig
+    rule_based: RuleBasedBaselineConfig
+    fallback_rate_invalid_threshold: float
+
+
 class RagConfig(BaseModel):
     chroma_path: str
     collection_name: str
@@ -178,6 +261,43 @@ class RagConfig(BaseModel):
     chunk_overlap: int
     top_k: int
     embedding_model: str
+
+
+class LlmEffortByRoleConfig(BaseModel):
+    """Phase 13 §3.4: thinking level/budget configurable PER ROLE, never one fixed value for
+    every call. `GoogleClient.complete*(..., effort=...)` already accepts a per-call override;
+    this is just where each role's own value is read from (never hardcoded in agent code)."""
+
+    decision: Literal["low", "medium", "high", "xhigh", "max"]
+    codegen: Literal["low", "medium", "high", "xhigh", "max"]
+    explanation: Literal["low", "medium", "high", "xhigh", "max"]
+
+
+class LlmCachingConfig(BaseModel):
+    """Phase 13 §3.3: explicit context caching of the static prompt prefix (system instructions +
+    adaptation policies + OAI/DT doc summary + feature_schema.json, in that fixed order) via the
+    real `client.caches` API (verified present on the installed google-genai SDK — see
+    src/llm/google_client.py). One cache per experiment run; TTL = the expected run length."""
+
+    enabled: bool
+    ttl_seconds: float  # "TTL = the expected run length" (phase13 §3.3) — set per experiment, this is the config default
+    # A conservative, CHARACTER-based proxy for "the model's minimum cacheable size" (the real
+    # minimum Gemini enforces is token-based and model-specific, not documented in a way this
+    # client can look up generically) — below this, caching is skipped (logged, never attempted
+    # and left to fail) rather than guessed at.
+    min_cacheable_chars: int
+
+
+class LlmRatesConfig(BaseModel):
+    """Phase 13 §3.5: USD cost-per-token rates, config-driven so a price change (the spec's own
+    "prices change on 1 January 2027" note) never requires a code change. These are a
+    best-effort estimate for this project's configured model, not a verified live rate card —
+    update this block when real, current pricing is available."""
+
+    input_per_million: float
+    output_per_million: float
+    cached_input_per_million: float
+    cache_storage_per_million_per_hour: float
 
 
 class LlmConfig(BaseModel):
@@ -189,10 +309,16 @@ class LlmConfig(BaseModel):
     temperature: float | None
     # `effort` maps onto Gemini's ThinkingLevel (MINIMAL/LOW/MEDIUM/HIGH — no xhigh/max; those two
     # clamp down to HIGH). See src/llm/google_client.py's module docstring for the full mapping.
+    # The shared/default value — `effort_by_role` below overrides it per call site (phase13 §3.4).
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None
+    effort_by_role: LlmEffortByRoleConfig
     timeout_seconds: int
     max_retries: int  # shared budget for both this client's transport retry loop and its structured-output validation retry loop
     retry_backoff_seconds: float  # base for this client's own exponential backoff (capped internally); the SDK's own internal retry defaults to "never retry" so this is the only retry/backoff path
+    caching: LlmCachingConfig
+    budget_usd: float  # phase13 §3.6 — the budget guard's ceiling for one experiment run
+    service_tier: Literal["standard", "flex"]  # phase13 §3.7 — "flex" only for speed=0 experiments, never live demos
+    rates: LlmRatesConfig
 
 
 class LoggingConfig(BaseModel):
@@ -216,6 +342,7 @@ class Settings(BaseModel):
     model_config = {"frozen": True}
 
     environment: Literal["demo", "live"]
+    data: DataConfig
     telemetry: TelemetryConfig
     synchronization: SynchronizationConfig
     storage: StorageConfig
@@ -225,11 +352,43 @@ class Settings(BaseModel):
     decision_agent: DecisionAgentConfig
     adaptation: AdaptationConfig
     sandbox: SandboxConfig
+    baselines: BaselinesConfig
     rag: RagConfig
     llm: LlmConfig
     logging: LoggingConfig
     lifecycle: LifecycleConfig
     evaluation: EvaluationConfig
+
+    @model_validator(mode="after")
+    def _forbid_retired_ns3_component_ids(self) -> "Settings":
+        """Config-level fail-fast guard (OAI migration addendum item 6). `DtModelsConfig`'s own
+        `extra="forbid"` + explicit new field names already make an old component id there a
+        structural validation error; this additionally covers the one place an old id is still a
+        free-form string rather than a typed field: `drift.valid_components`."""
+        bad = _RETIRED_COMPONENT_IDS.intersection(self.drift.valid_components)
+        if bad:
+            raise ValueError(
+                f"config/settings.yaml drift.valid_components still names retired NS-3-era "
+                f"component id(s) {sorted(bad)} — the OAI migration replaced the entire "
+                f"component set (see CLAUDE.md); update this list to the 7 OAI component ids."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _forbid_unsupported_concurrent_components(self) -> "Settings":
+        """Phase 13 §2 fail-fast guard: `adaptation.allow_concurrent_components=true` has no
+        actual multi-threaded-per-component dispatch implementation behind it (the orchestrator's
+        single dispatch loop processes one adaptation cycle, across ALL components, at a time) —
+        raising here is honest-failure-at-startup instead of silently ignoring a config value that
+        would otherwise do nothing, exactly the discipline `_forbid_retired_ns3_component_ids`
+        above already established for a different setting."""
+        if self.adaptation.allow_concurrent_components:
+            raise ValueError(
+                "config/settings.yaml adaptation.allow_concurrent_components=true is not "
+                "implemented — this orchestrator's dispatch loop only ever runs one adaptation "
+                "cycle at a time, across all components; set this back to false."
+            )
+        return self
 
     def resolve_path(self, relative: str) -> Path:
         """Resolve a config-declared path against the repository root."""

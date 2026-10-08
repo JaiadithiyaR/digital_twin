@@ -1,0 +1,11 @@
+# Baseline comparison
+
+Built only from already-written `baselines/results/<mode>/` outputs — never re-run.
+
+```
+            mode  n_runs  mean_unified_fidelity  mean_unified_fidelity_std  pct_time_above_threshold  mean_recovery_time_cycles  n_triggers  n_adaptations  n_accepted  n_rejected  total_adaptation_duration_seconds  n_llm_decisions  n_llm_fallbacks  fallback_rate  run_invalid_fallback_rate_too_high  llm_input_tokens  llm_output_tokens  llm_cached_tokens  llm_cache_hit_share  llm_cost_usd  llm_time_seconds  budget_spent_usd
+          static       1               0.794241                   0.000000                     100.0                        NaN          14              0           0           0                           0.000000                0                0            0.0                               False                 0                  0                  0             0.000000      0.000000          0.000000          0.000000
+periodic_retrain       1               0.832814                   0.000000                     100.0                        NaN          21             21           3          18                         241.235372                0                0            0.0                               False                 0                  0                  0             0.000000      0.000000          0.000000          0.000000
+      rule_based       1               0.797969                   0.000000                     100.0                        NaN          14              9           1           8                         227.937450                0                0            0.0                               False            118219               6986              70200             0.593813      0.009351        114.689166          0.009351
+     full_system       3               0.742800                   0.090387                     100.0                        1.0          44             38           4          34                        1159.376873               44                0            0.0                               False            790792              41686             529200             0.669203      0.056064        709.995432          0.056064
+```

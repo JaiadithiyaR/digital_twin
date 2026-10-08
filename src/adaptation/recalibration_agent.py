@@ -135,7 +135,7 @@ class RecalibrationAgent:
         n_rows = len(history)
         span_hours = 0.0
         if n_rows > 0:
-            span = history["timestamp"].max() - history["timestamp"].min()
+            span = history["ts_1s"].max() - history["ts_1s"].min()
             span_hours = span.total_seconds() / 3600.0
         prompt = (
             f"A digital twin component named '{component}' needs recalibration (its production "
@@ -256,8 +256,8 @@ class RecalibrationAgent:
 
         # 7. produce a new candidate model version
         training_window = {
-            "start": iso(train_df["timestamp"].min()) if len(train_df) else None,
-            "end": iso(train_df["timestamp"].max()) if len(train_df) else None,
+            "start": iso(train_df["ts_1s"].min()) if len(train_df) else None,
+            "end": iso(train_df["ts_1s"].max()) if len(train_df) else None,
             "n_rows": len(train_df),
             "window_hours": resolved_window_hours,
             "provenance": "d1_history",
@@ -265,8 +265,8 @@ class RecalibrationAgent:
             "cell_id": cell_id,
         }
         evaluation_window = {
-            "start": iso(held_out_df["timestamp"].min()) if len(held_out_df) else None,
-            "end": iso(held_out_df["timestamp"].max()) if len(held_out_df) else None,
+            "start": iso(held_out_df["ts_1s"].min()) if len(held_out_df) else None,
+            "end": iso(held_out_df["ts_1s"].max()) if len(held_out_df) else None,
             "n_rows": len(held_out_df),
             "provenance": "d1_history",
         }

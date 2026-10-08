@@ -18,10 +18,13 @@ from src.adaptation.data_selection import (
 
 
 def test_select_recent_window_excludes_rows_older_than_the_window():
-    now = datetime.now(UTC)
+    """Anchored on the DATA's own most recent timestamp, not wall-clock `now()` (OAI migration
+    fix: replayed historical data's timestamps can be arbitrarily far from real wall-clock time
+    — see `data_selection.py`'s own docstring)."""
+    latest = datetime(2026, 1, 1, tzinfo=UTC)
     df = pd.DataFrame(
         {
-            "timestamp": [now - timedelta(hours=1), now - timedelta(hours=10), now - timedelta(hours=100)],
+            "ts_1s": [latest - timedelta(hours=1), latest - timedelta(hours=10), latest - timedelta(hours=100)],
             "value": [1, 2, 3],
         }
     )
@@ -30,12 +33,12 @@ def test_select_recent_window_excludes_rows_older_than_the_window():
 
 
 def test_select_recent_window_on_empty_history_returns_empty():
-    df = pd.DataFrame({"timestamp": pd.Series([], dtype="datetime64[ns, UTC]"), "value": pd.Series([], dtype=int)})
+    df = pd.DataFrame({"ts_1s": pd.Series([], dtype="datetime64[ns, UTC]"), "value": pd.Series([], dtype=int)})
     assert len(select_recent_window(df, window_hours=24.0)) == 0
 
 
 def test_time_split_is_time_ordered_and_never_leaks():
-    df = pd.DataFrame({"timestamp": [3, 1, 2, 5, 4], "value": ["c", "a", "b", "e", "d"]})
+    df = pd.DataFrame({"ts_1s": [3, 1, 2, 5, 4], "value": ["c", "a", "b", "e", "d"]})
     train_df, held_out_df = time_split(df, held_out_fraction=0.4)
     assert list(train_df["value"]) == ["a", "b", "c"]
     assert list(held_out_df["value"]) == ["d", "e"]

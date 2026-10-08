@@ -23,13 +23,14 @@ import time
 
 import pandas as pd
 
-from src.adaptation.expand_scope_agent import ExpandScopeAgent
+from src.adaptation.expand_scope_agent import ExpandScopeAgent, _GeneratedComponentCode, _ProposedComponentDesign
 from src.common.config import load_settings
+from src.data.oai_dataset import ALL_FEATURES
 from src.dt_models.base import DTComponent
 from src.dt_models.d1_model_store import D1Store
+from src.dt_models.dl_bler import DlBlerModel
 from src.dt_models.model_registry import DTModelRegistry
 from src.dt_models.orchestrator import DTOrchestrator
-from src.dt_models.throughput import ThroughputModel
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 from src.synchronization.sync import ContinuousSynchronizer
@@ -38,17 +39,23 @@ from src.telemetry.preprocessing import TelemetryPreprocessor
 
 SETTINGS = load_settings()
 
-VALID_SOURCE = """
+# A genuinely new target: a real raw feature column, never one of the 7 existing component
+# targets — mirrors prompt.md's own SINR worked example (a raw INPUT no existing component
+# predicts) using this OAI schema's real columns.
+_NEW_TARGET_COLUMN = "wb_cqi_avg_lag1"
+_NEW_REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1", "bsr_avg_lag1")
+
+VALID_SOURCE = f"""
 import pandas as pd
 import joblib
 from sklearn.ensemble import RandomForestRegressor
 from src.dt_models.base import DTComponent
 
-class SinrQualityModel(DTComponent):
-    COMPONENT_NAME = "sinr_quality"
+class CqiQualityModel(DTComponent):
+    COMPONENT_NAME = "cqi_quality"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "ue_speed_mps", "rsrp_dbm")
-    OUTPUT_FIELD = "sinr_db_pred"
+    REQUIRED_FEATURES = {_NEW_REQUIRED_FEATURES!r}
+    OUTPUT_FIELD = "{_NEW_TARGET_COLUMN}_pred"
 
     def __init__(self):
         self._model = RandomForestRegressor(n_estimators=150, max_depth=10, random_state=42)
@@ -59,7 +66,9 @@ class SinrQualityModel(DTComponent):
         return self._trained
 
     def train(self, features, targets):
-        self._model.fit(features[list(self.REQUIRED_FEATURES)], targets)
+        cols = features[list(self.REQUIRED_FEATURES)]
+        valid = cols.notna().all(axis=1) & targets.notna()
+        self._model.fit(cols[valid], targets[valid])
         self._trained = True
 
     def predict(self, features):
@@ -70,7 +79,7 @@ class SinrQualityModel(DTComponent):
         preds = self.predict(features)
         rmse = float(((preds - targets) ** 2).mean() ** 0.5)
         mae = float((preds - targets).abs().mean())
-        return {"rmse": rmse, "mae": mae}
+        return {{"rmse": rmse, "mae": mae}}
 
     def save(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,14 +90,12 @@ class SinrQualityModel(DTComponent):
         self._trained = True
 """
 
-from src.adaptation.expand_scope_agent import _GeneratedComponentCode, _ProposedComponentDesign  # noqa: E402
-
 DESIGN = _ProposedComponentDesign(
-    component_name="sinr_quality",
-    target_column="sinr_db",
+    component_name="cqi_quality",
+    target_column=_NEW_TARGET_COLUMN,
     dependencies=(),
-    required_features=("offered_load_mbps", "prb_utilization_pct", "ue_speed_mps", "rsrp_dbm"),
-    purpose="Predict SINR from load and mobility for proactive handover decisions.",
+    required_features=_NEW_REQUIRED_FEATURES,
+    purpose="Predict channel quality indicator from load and mobility for proactive scheduling.",
     feature_extraction_notes="none needed for this version",
 )
 
@@ -97,7 +104,7 @@ class _FakeLLMClient:
     def complete_structured(self, prompt, schema, **kwargs):
         if schema is _ProposedComponentDesign:
             return DESIGN
-        return schema(class_name="SinrQualityModel", source_code=VALID_SOURCE, reasoning="integration test")
+        return schema(class_name="CqiQualityModel", source_code=VALID_SOURCE, reasoning="integration test")
 
 
 def _bootstrap(tmp_path):
@@ -108,7 +115,7 @@ def _bootstrap(tmp_path):
         history_retention_rows=SETTINGS.storage.history_retention_rows,
     )
     mock_config = SETTINGS.telemetry.mock.model_copy(
-        update={"num_ues": 25, "num_cells": 4, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"num_sessions": 25, "missing_feature_rate": 0.0}
     )
     bootstrap_source = MockTelemetrySource(mock_config, max_records=1200, realtime=False)
     preprocessor = TelemetryPreprocessor(SETTINGS.telemetry.preprocessing)
@@ -119,16 +126,16 @@ def _bootstrap(tmp_path):
     model_registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     dt_model_registry = DTModelRegistry()
     history = store.get_history()
-    features = list(ThroughputModel.REQUIRED_FEATURES)
-    bootstrap_model = ThroughputModel.from_settings(SETTINGS)
-    bootstrap_model.train(history[features], history["throughput_mbps"])
+    features = list(DlBlerModel.REQUIRED_FEATURES)
+    bootstrap_model = DlBlerModel.from_settings(SETTINGS)
+    bootstrap_model.train(history[features], history["dl_bler"])
     model_registry.register_version(
         component_instance=bootstrap_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(history)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=bootstrap_model.evaluate(history[features], history["throughput_mbps"]),
+        evaluation_metrics=bootstrap_model.evaluate(history[features], history["dl_bler"]),
         status="production",
     )
     dt_model_registry.register(bootstrap_model)
@@ -149,27 +156,26 @@ def test_expand_scope_produces_a_real_sandboxed_new_component(tmp_path):
     agent = _agent(tmp_path, store, model_registry, dt_model_registry)
 
     result = agent.expand_scope(
-        lambda: ThroughputModel.from_settings(SETTINGS),
+        lambda: DlBlerModel.from_settings(SETTINGS),
         window_hours=48,
         held_out_fraction=0.2,
-        expand_scope_context="SINR degradation not explained by any existing component",
+        expand_scope_context="CQI degradation not explained by any existing component",
     )
 
-    assert result.version.component == "sinr_quality"
+    assert result.version.component == "cqi_quality"
     assert result.version.status == "candidate"
     assert result.version.parent_version_id is None
     assert result.sandbox_result.accepted
     assert "rmse" in result.version.evaluation_metrics
     # The live orchestrator registry is untouched — see module docstring for why.
-    assert [c.COMPONENT_NAME for c in dt_model_registry.list_components()] == ["throughput"]
+    assert [c.COMPONENT_NAME for c in dt_model_registry.list_components()] == ["dl_bler"]
 
 
 def test_telemetry_keeps_synchronizing_into_d1_while_expand_scope_is_in_progress(tmp_path):
     store, model_registry, dt_model_registry, preprocessor = _bootstrap(tmp_path)
 
     live_mock_config = SETTINGS.telemetry.mock.model_copy(
-        update={"seed": 999, "num_ues": 10, "num_cells": 2, "emit_interval_seconds": 0.01,
-                "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"seed": 999, "num_sessions": 10, "emit_interval_seconds": 0.01, "missing_feature_rate": 0.0}
     )
     live_source = MockTelemetrySource(live_mock_config, max_records=None, realtime=True)
     live_sync_config = SETTINGS.synchronization.model_copy(update={"batch_size": 10, "batch_timeout_seconds": 0.05})
@@ -192,7 +198,7 @@ def test_telemetry_keeps_synchronizing_into_d1_while_expand_scope_is_in_progress
     sampler.start()
 
     start = time.monotonic()
-    result = agent.expand_scope(lambda: ThroughputModel.from_settings(SETTINGS), window_hours=48, held_out_fraction=0.2)
+    result = agent.expand_scope(lambda: DlBlerModel.from_settings(SETTINGS), window_hours=48, held_out_fraction=0.2)
     end = time.monotonic()
 
     stop_sampling.set()
@@ -215,17 +221,17 @@ def test_telemetry_keeps_synchronizing_into_d1_while_expand_scope_is_in_progress
     assert live_synchronizer.records_synced > during[0]
 
 
-class _TrustedSinrQualityModel(DTComponent):
+class _TrustedCqiQualityModel(DTComponent):
     """A TRUSTED, test-authored stand-in for what Module 17 would eventually promote and load —
     NEVER the raw LLM/sandbox output (see this file's module docstring and
     `expand_scope_agent.py`'s for why importing that directly here would be unsafe/premature).
     Used only to prove `DTModelRegistry`/`DTOrchestrator` place no hardcoded limit on component
     names or count — the exact mechanism a future, vetted promotion step would rely on."""
 
-    COMPONENT_NAME = "sinr_quality"
+    COMPONENT_NAME = "cqi_quality"
     DEPENDENCIES: tuple[str, ...] = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct")
-    OUTPUT_FIELD = "sinr_db_pred"
+    REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1")
+    OUTPUT_FIELD = f"{_NEW_TARGET_COLUMN}_pred"
 
     def __init__(self) -> None:
         self._trained = False
@@ -255,56 +261,67 @@ class _TrustedSinrQualityModel(DTComponent):
 def test_dt_model_registry_dynamically_accepts_a_brand_new_component_alongside_existing_ones(tmp_path):
     """Proves prompt.md §27's "must be added dynamically through the registry" at the mechanism
     level: `DTModelRegistry`/`DTOrchestrator` (Module 5, unmodified — no code was added or
-    changed there for this module) correctly schedule and run a SIXTH component whose name never
-    appears anywhere in Module 5's own source, alongside the five real, already-registered
-    Modules 6-10 components."""
-    from src.dt_models.jitter import JitterModel
-    from src.dt_models.latency import LatencyModel
-    from src.dt_models.packet_loss import PacketLossModel
-    from src.dt_models.prb_utilization import PrbUtilizationModel
+    changed there for this module) correctly schedule and run an EIGHTH component whose name
+    never appears anywhere in Module 5's own source, alongside the real, already-registered
+    7 OAI KPI components."""
+    from src.dt_models.dl_prb import DlPrbModel
+    from src.dt_models.dl_rlc_delay import DlRlcDelayModel
+    from src.dt_models.dl_throughput import DlThroughputModel
+    from src.dt_models.ul_bler import UlBlerModel
+    from src.dt_models.ul_prb import UlPrbModel
+    from src.dt_models.ul_throughput import UlThroughputModel
 
     store, model_registry, dt_model_registry, _ = _bootstrap(tmp_path)
     history = store.get_history()
 
-    throughput = dt_model_registry.get("throughput")  # already registered + trained by _bootstrap
+    dl_bler = dt_model_registry.get("dl_bler")  # already registered + trained by _bootstrap
 
-    packet_loss = PacketLossModel.from_settings(SETTINGS)
-    packet_loss.train(history[list(PacketLossModel.REQUIRED_FEATURES)], history["packet_loss_pct"])
-    dt_model_registry.register(packet_loss)
+    ul_bler = UlBlerModel.from_settings(SETTINGS)
+    ul_bler.train(history[list(UlBlerModel.REQUIRED_FEATURES)], history["ul_bler"])
+    dt_model_registry.register(ul_bler)
 
-    latency = LatencyModel.from_settings(SETTINGS)
-    latency_train = history.assign(throughput_mbps_pred=history["throughput_mbps"])
-    latency.train(latency_train[list(LatencyModel.REQUIRED_FEATURES) + ["throughput_mbps_pred"]], latency_train["latency_ms"])
-    dt_model_registry.register(latency)
+    dl_prb = DlPrbModel.from_settings(SETTINGS)
+    dl_prb.train(history[list(DlPrbModel.REQUIRED_FEATURES)], history["dl_prb"])
+    dt_model_registry.register(dl_prb)
 
-    prb = PrbUtilizationModel.from_settings(SETTINGS)
-    prb_train = history.assign(throughput_mbps_pred=history["throughput_mbps"])
-    prb.train(prb_train[list(PrbUtilizationModel.REQUIRED_FEATURES) + ["throughput_mbps_pred"]], prb_train["prb_utilization_pct"])
-    dt_model_registry.register(prb)
+    ul_prb = UlPrbModel.from_settings(SETTINGS)
+    ul_prb.train(history[list(UlPrbModel.REQUIRED_FEATURES)], history["ul_prb"])
+    dt_model_registry.register(ul_prb)
 
-    jitter = JitterModel.from_settings(SETTINGS)
-    jitter_train = history.assign(
-        throughput_mbps_pred=history["throughput_mbps"],
-        latency_ms_pred=history["latency_ms"],
-        packet_loss_pct_pred=history["packet_loss_pct"],
-    )
-    jitter_cols = list(JitterModel.REQUIRED_FEATURES) + ["throughput_mbps_pred", "latency_ms_pred", "packet_loss_pct_pred"]
-    jitter.train(jitter_train[jitter_cols], jitter_train["jitter_ms"])
-    dt_model_registry.register(jitter)
+    dl_throughput = DlThroughputModel.from_settings(SETTINGS)
+    dlt_train = history.assign(dl_bler_pred=history["dl_bler"], dl_prb_pred=history["dl_prb"])
+    dlt_cols = list(DlThroughputModel.REQUIRED_FEATURES) + ["dl_bler_pred", "dl_prb_pred"]
+    dl_throughput.train(dlt_train[dlt_cols], dlt_train["dl_throughput"])
+    dt_model_registry.register(dl_throughput)
 
-    # The genuinely NEW, sixth component — its name appears nowhere in Module 5's source.
-    sinr_quality = _TrustedSinrQualityModel()
-    sinr_quality.train(history[list(_TrustedSinrQualityModel.REQUIRED_FEATURES)], history["sinr_db"])
-    dt_model_registry.register(sinr_quality)
+    ul_throughput = UlThroughputModel.from_settings(SETTINGS)
+    ult_train = history.assign(ul_bler_pred=history["ul_bler"], ul_prb_pred=history["ul_prb"])
+    ult_cols = list(UlThroughputModel.REQUIRED_FEATURES) + ["ul_bler_pred", "ul_prb_pred"]
+    ul_throughput.train(ult_train[ult_cols], ult_train["ul_throughput"])
+    dt_model_registry.register(ul_throughput)
 
-    assert len(dt_model_registry.list_components()) == 6
+    dl_rlc_delay = DlRlcDelayModel.from_settings(SETTINGS)
+    delay_train = history.assign(dl_throughput_pred=history["dl_throughput"], dl_bler_pred=history["dl_bler"])
+    delay_cols = list(DlRlcDelayModel.REQUIRED_FEATURES) + ["dl_throughput_pred", "dl_bler_pred"]
+    dl_rlc_delay.train(delay_train[delay_cols], delay_train["dl_rlc_delay"])
+    dt_model_registry.register(dl_rlc_delay)
+
+    # The genuinely NEW, eighth component — its name appears nowhere in Module 5's source.
+    cqi_quality = _TrustedCqiQualityModel()
+    cqi_quality.train(history[list(_TrustedCqiQualityModel.REQUIRED_FEATURES)], history[_NEW_TARGET_COLUMN])
+    dt_model_registry.register(cqi_quality)
+
+    assert len(dt_model_registry.list_components()) == 8
 
     orchestrator = DTOrchestrator(dt_model_registry)
     order = orchestrator.build_execution_order()
-    assert "sinr_quality" in order
-    assert order.index("throughput") < order.index("sinr_quality") or "throughput" not in order  # no false dependency
+    assert "cqi_quality" in order
+    assert order.index("dl_bler") < order.index("cqi_quality") or "dl_bler" not in order  # no false dependency
 
     predictions = orchestrator.run_predictions(history)
-    assert "sinr_quality" in predictions
-    assert len(predictions["sinr_quality"]) == len(history)
-    assert (predictions["throughput"] == throughput.predict(history[list(ThroughputModel.REQUIRED_FEATURES)])).all()
+    assert "cqi_quality" in predictions
+    assert len(predictions["cqi_quality"]) == len(history)
+    # .equals() (not ==) because dl_bler's residual-reconstruction predict() legitimately returns
+    # NaN for each session's first row (no y_t-1 anchor) — NaN != NaN under ==, which would fail
+    # this assertion even though the two predictions are genuinely identical.
+    assert predictions["dl_bler"].equals(dl_bler.predict(history[list(DlBlerModel.REQUIRED_FEATURES)]))

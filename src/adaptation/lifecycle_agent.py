@@ -134,6 +134,12 @@ class LifecycleRecord(BaseModel):
     model_metadata: dict[str, Any]
     llm_metadata: dict[str, Any] | None
     final_status: Literal["promoted", "rejected"]
+    # OAI migration (prompt2.md Step 6): "record source=OAI_RAN_REPLAY, the run ids replayed,
+    # and the replay speed" — real values from the telemetry source actually driving this event,
+    # never fabricated. `source` matches schema.ALLOWED_SOURCES ("OAI_RAN_REPLAY" | "MOCK").
+    telemetry_source: str
+    replayed_run_ids: list[int] | None
+    replay_speed: float | None
 
 
 def _summarize_agent_action(agent_result: Any) -> dict[str, Any]:
@@ -184,21 +190,34 @@ class LifecycleAgent:
         records_path: Path,
         reports_dir: Path,
         llm_client: "GoogleClient | None" = None,
+        llm_effort: str | None = None,
+        static_prefix: str | None = None,
     ) -> None:
         self._records_path = records_path
         self._reports_dir = reports_dir
         self._llm_client = llm_client
+        # Phase 13 §3.4: "explanation" role — human-readable prose FROM already-final,
+        # already-recorded facts (see this class's own docstring), never deep reasoning.
+        self._llm_effort = llm_effort
+        # Phase 13 §3.3 — see RegenerationAgent's own entry for the full rationale: `None` for
+        # every non-baseline caller, which keeps this agent's prompt content byte-for-byte
+        # unchanged from before this feature existed.
+        self._static_prefix = static_prefix
         self._lock = threading.Lock()
         self._records_path.parent.mkdir(parents=True, exist_ok=True)
         self._reports_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
-    def from_settings(cls, settings: "Settings", llm_client: "GoogleClient | None" = None) -> "LifecycleAgent":
+    def from_settings(
+        cls, settings: "Settings", llm_client: "GoogleClient | None" = None, static_prefix: str | None = None
+    ) -> "LifecycleAgent":
         cfg = settings.lifecycle
         return cls(
             records_path=settings.resolve_path(cfg.records_path),
             reports_dir=settings.resolve_path(cfg.reports_dir),
             llm_client=llm_client,
+            llm_effort=settings.llm.effort_by_role.explanation,
+            static_prefix=static_prefix,
         )
 
     # --- recording -----------------------------------------------------------------------------
@@ -210,6 +229,9 @@ class LifecycleAgent:
         decision: "DecisionOutput",
         agent_result: "RecalibrationResult | RegenerationResult | ExpandScopeResult",
         verification_result: "VerificationResult",
+        telemetry_source: str = "MOCK",
+        replayed_run_ids: list[int] | None = None,
+        replay_speed: float | None = None,
     ) -> LifecycleRecord:
         """Build and durably append exactly one `LifecycleRecord` for one full adaptation event.
         Every argument is a real object a real upstream module (11/12/13/14-16/17) already
@@ -250,6 +272,9 @@ class LifecycleAgent:
             },
             llm_metadata=updated_version.llm_metadata,
             final_status="promoted" if verification_result.decision == "ACCEPT" else "rejected",
+            telemetry_source=telemetry_source,
+            replayed_run_ids=replayed_run_ids,
+            replay_speed=replay_speed,
         )
         self._append_record(record)
         logger.info(
@@ -308,7 +333,11 @@ class LifecycleAgent:
     # --- maintenance report (prompt.md §38) --------------------------------------------------
 
     def generate_maintenance_report(
-        self, record: LifecycleRecord, *, rag_knowledge_base: "RagKnowledgeBase | None" = None
+        self,
+        record: LifecycleRecord,
+        *,
+        rag_knowledge_base: "RagKnowledgeBase | None" = None,
+        cache_key: str | None = None,
     ) -> MaintenanceReport:
         """Automatically produce a human-readable vendor maintenance report for `record` (prompt.md
         §38's exact list: what drifted, affected scope, why adaptation was triggered, what the
@@ -322,7 +351,8 @@ class LifecycleAgent:
         llm_used = False
         if self._llm_client is not None:
             prompt = self._report_prompt(record, deterministic_text, rag_context)
-            response = self._llm_client.complete_safe(prompt)
+            sent_prompt = prompt if cache_key is not None else (f"{self._static_prefix}\n\n{prompt}" if self._static_prefix else prompt)
+            response = self._llm_client.complete_safe(sent_prompt, effort=self._llm_effort, cache_key=cache_key)
             if response is not None:
                 report_text = response.text
                 llm_used = True

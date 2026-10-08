@@ -1,0 +1,89 @@
+{
+  "throughput": [
+    {
+      "component": "throughput",
+      "version_id": "throughput-v1",
+      "model_class": "ThroughputModel",
+      "artifact_path": "throughput/throughput-v1.joblib",
+      "source_path": null,
+      "dependencies": [],
+      "feature_schema": [
+        "offered_load_mbps",
+        "prb_utilization_pct",
+        "sinr_db",
+        "rsrp_dbm",
+        "rsrq_db",
+        "ue_count",
+        "ue_speed_mps"
+      ],
+      "output_field": "throughput_mbps_pred",
+      "adaptation_type": "bootstrap",
+      "parent_version_id": null,
+      "created_at": "2026-10-01T10:41:57.054908Z",
+      "training_window": {
+        "n_rows": 900
+      },
+      "evaluation_window": {
+        "n_rows": 0
+      },
+      "evaluation_metrics": {
+        "rmse": 0.24152080429279374,
+        "mae": 0.1766998187398284
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "production",
+      "llm_metadata": null
+    },
+    {
+      "component": "throughput",
+      "version_id": "throughput-v2",
+      "model_class": "ThroughputModel",
+      "artifact_path": "throughput/throughput-v2.joblib",
+      "source_path": "throughput/throughput-v2.py",
+      "dependencies": [],
+      "feature_schema": [
+        "offered_load_mbps",
+        "prb_utilization_pct",
+        "sinr_db",
+        "rsrp_dbm",
+        "rsrq_db",
+        "ue_count",
+        "ue_speed_mps",
+        "ue_position_x",
+        "ue_position_y"
+      ],
+      "output_field": "throughput_mbps_pred",
+      "adaptation_type": "regenerate",
+      "parent_version_id": "throughput-v1",
+      "created_at": "2026-10-01T10:42:43.013477Z",
+      "training_window": {
+        "start": "2026-10-01T10:41:57.061819+00:00",
+        "end": "2026-10-01T10:41:57.398838+00:00",
+        "n_rows": 960,
+        "window_hours": 96,
+        "provenance": "d1_history",
+        "ue_id": null,
+        "cell_id": null
+      },
+      "evaluation_window": {
+        "start": "2026-10-01T10:41:57.398838+00:00",
+        "end": "2026-10-01T10:41:57.469895+00:00",
+        "n_rows": 240,
+        "provenance": "d1_history"
+      },
+      "evaluation_metrics": {
+        "rmse": 1.1713257360745812,
+        "mae": 0.9309412729807716
+      },
+      "fidelity_before": 0.9917642665469043,
+      "fidelity_after": 0.9770102728165804,
+      "status": "rejected",
+      "llm_metadata": {
+        "model": "gemini-3.6-flash",
+        "reasoning": "Rebuilt the ThroughputModel pipeline to handle structural network densification drift. Expanded REQUIRED_FEATURES to include spatial telemetry (ue_position_x, ue_position_y) and introduced engineered features including UE distance from cell center, Shannon spectral efficiency derived from linear SINR, load-to-PRB utilization ratio, and SINR-to-RSRP ratio. Upgraded internal regressor to GradientBoostingRegressor to capture complex non-linear spatial load interactions.",
+        "attempts": 1
+      }
+    }
+  ]
+}

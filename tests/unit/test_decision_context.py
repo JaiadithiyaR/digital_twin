@@ -20,22 +20,23 @@ from src.rag.rag_kb import RagUnavailableError, RetrievedChunk
 
 
 def _trigger(**overrides) -> AdaptationTrigger:
-    base = dict(component="jitter", severity=0.42, timestamp=datetime.now(UTC), trigger_type="fidelity_degradation")
+    base = dict(component="dl_bler", severity=0.42, timestamp=datetime.now(UTC), trigger_type="fidelity_degradation")
     base.update(overrides)
     return AdaptationTrigger(**base)
 
 
 def _history_row(**overrides) -> dict:
     base = dict(
-        timestamp=datetime.now(UTC),
-        throughput_mbps=10.0,
-        offered_load_mbps=12.0,
-        latency_ms=5.0,
-        jitter_ms=1.0,
-        packet_loss_pct=0.5,
-        prb_utilization_pct=40.0,
-        sinr_db=15.0,
-        ue_speed_mps=2.0,
+        ts_1s=datetime.now(UTC),
+        dl_throughput=10.0,
+        ul_throughput=2.0,
+        dl_rlc_delay=5.0,
+        dl_prb=30.0,
+        ul_prb=5.0,
+        dl_bler=0.05,
+        ul_bler=0.02,
+        requested_prb_ratio_lag1=50.0,
+        ue_count_cell_lag1=6.0,
         unrelated_column="ignored",
     )
     base.update(overrides)
@@ -50,26 +51,26 @@ def test_summarize_network_state_empty_history_returns_empty_dict():
 
 
 def test_summarize_network_state_computes_mean_of_known_features():
-    df = pd.DataFrame([_history_row(throughput_mbps=10.0), _history_row(throughput_mbps=20.0)])
+    df = pd.DataFrame([_history_row(dl_throughput=10.0), _history_row(dl_throughput=20.0)])
     result = summarize_network_state(df)
-    assert result["throughput_mbps"] == pytest.approx(15.0)
+    assert result["dl_throughput"] == pytest.approx(15.0)
     assert "unrelated_column" not in result  # only the fixed, bounded feature set
 
 
 def test_summarize_network_state_bounded_to_recent_rows():
-    rows = [_history_row(throughput_mbps=float(i)) for i in range(300)]
+    rows = [_history_row(dl_throughput=float(i)) for i in range(300)]
     for i, r in enumerate(rows):
-        r["timestamp"] = pd.Timestamp("2026-01-01") + pd.Timedelta(seconds=i)
+        r["ts_1s"] = pd.Timestamp("2026-01-01") + pd.Timedelta(seconds=i)
     df = pd.DataFrame(rows)
     result = summarize_network_state(df, recent_rows=10)
     # mean of the LAST 10 throughput values (290..299), not all 300
-    assert result["throughput_mbps"] == pytest.approx(sum(range(290, 300)) / 10)
+    assert result["dl_throughput"] == pytest.approx(sum(range(290, 300)) / 10)
 
 
 def test_summarize_network_state_missing_columns_are_simply_excluded():
-    df = pd.DataFrame([{"timestamp": datetime.now(UTC), "throughput_mbps": 5.0}])
+    df = pd.DataFrame([{"ts_1s": datetime.now(UTC), "dl_throughput": 5.0}])
     result = summarize_network_state(df)
-    assert result == {"throughput_mbps": 5.0}
+    assert result == {"dl_throughput": 5.0}
     assert set(result).issubset(set(NETWORK_STATE_FEATURES))
 
 
@@ -95,11 +96,11 @@ class _UnavailableRagKb:
 
 
 def test_retrieve_rag_context_none_knowledge_base_returns_empty_list():
-    assert retrieve_rag_context(None, "jitter", "fidelity_degradation") == []
+    assert retrieve_rag_context(None, "dl_bler", "fidelity_degradation") == []
 
 
 def test_retrieve_rag_context_unavailable_returns_empty_list_never_raises():
-    assert retrieve_rag_context(_UnavailableRagKb(), "jitter", "fidelity_degradation") == []
+    assert retrieve_rag_context(_UnavailableRagKb(), "dl_bler", "fidelity_degradation") == []
 
 
 def test_retrieve_rag_context_formats_real_chunks():
@@ -108,31 +109,31 @@ def test_retrieve_rag_context_formats_real_chunks():
         document_id="doc1", chunk_index=0, version="v1", distance=0.1,
     )
     kb = _FakeRagKb([chunk])
-    result = retrieve_rag_context(kb, "jitter", "fidelity_degradation")
+    result = retrieve_rag_context(kb, "dl_bler", "fidelity_degradation")
     assert len(result) == 1
     assert "policies/adaptation_policies.md" in result[0]
     assert "Relevant policy text." in result[0]
-    assert "jitter" in kb.queries[0]  # the component is genuinely embedded in the retrieval query
+    assert "dl_bler" in kb.queries[0]  # the component is genuinely embedded in the retrieval query
 
 
 # --- build_decision_context -------------------------------------------------------------------
 
 
 def test_build_decision_context_assembles_every_required_field():
-    trigger = _trigger(component="latency", severity=0.7, trigger_type="external_drift")
-    fidelity = {"throughput": 0.8, "latency": 0.2, "jitter": None}
+    trigger = _trigger(component="dl_prb", severity=0.7, trigger_type="external_drift")
+    fidelity = {"dl_throughput": 0.8, "dl_prb": 0.2, "dl_bler": None}
     prev = PreviousOutcome(action="recalibrate", verification_result="REJECT", fidelity_before=0.5, fidelity_after=0.3)
     history = pd.DataFrame([_history_row()])
 
     context = build_decision_context(trigger, fidelity, unified_fidelity_score=0.45, previous_outcome=prev, history=history)
 
-    assert context.affected_component == "latency"
+    assert context.affected_component == "dl_prb"
     assert context.trigger_type == "external_drift"
     assert context.severity == 0.7
     assert context.component_fidelity == fidelity
     assert context.unified_fidelity_score == 0.45
     assert context.previous_outcome == prev
-    assert context.network_state_summary["throughput_mbps"] == 10.0
+    assert context.network_state_summary["dl_throughput"] == 10.0
     assert context.rag_context == []  # no knowledge base supplied
 
 

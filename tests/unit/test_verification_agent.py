@@ -30,7 +30,8 @@ from src.adaptation.verification_agent import (
 )
 from src.common.config import load_settings
 from src.dt_models.base import DTComponent
-from src.dt_models.throughput import ThroughputModel
+from src.data.oai_dataset import ALL_FEATURES
+from src.dt_models.dl_bler import DlBlerModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RetrievedChunk
@@ -64,38 +65,31 @@ def _prewarm(evaluator: FidelityEvaluator, component: str, noise_stds: list[floa
 
 def _synthetic_features(n: int, seed: int) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    return pd.DataFrame(
-        {
-            "offered_load_mbps": rng.uniform(5, 60, n),
-            "prb_utilization_pct": rng.uniform(10, 90, n),
-            "sinr_db": rng.uniform(0, 30, n),
-            "rsrp_dbm": rng.uniform(-120, -60, n),
-            "rsrq_db": rng.uniform(-15, -5, n),
-            "ue_count": rng.integers(1, 10, n).astype(float),
-            "ue_speed_mps": rng.uniform(0, 15, n),
-        }
-    )
+    return pd.DataFrame({col: rng.uniform(0, 1, n) for col in ALL_FEATURES})
 
 
 def _synthetic_target(features: pd.DataFrame, noise_std: float, seed: int) -> pd.Series:
     rng = np.random.default_rng(seed)
-    base = 0.6 * features["offered_load_mbps"] + 0.4 * features["sinr_db"] - 0.1 * features["prb_utilization_pct"]
+    base = (
+        0.6 * features["pusch_snr_avg_lag1"] + 0.4 * features["wb_cqi_avg_lag1"]
+        - 0.1 * features["dl_curr_tbs_avg_lag1"]
+    )
     return base + rng.normal(0.0, noise_std, len(features))
 
 
-def _good_throughput_model(seed: int) -> ThroughputModel:
+def _good_dl_bler_model(seed: int) -> DlBlerModel:
     """Trained on real signal, ample clean data — genuinely fits the real generative function."""
-    model = ThroughputModel.from_settings(SETTINGS)
+    model = DlBlerModel.from_settings(SETTINGS)
     features = _synthetic_features(400, seed)
     target = _synthetic_target(features, noise_std=0.3, seed=seed + 1)
     model.train(features, target)
     return model
 
 
-def _bad_throughput_model(seed: int) -> ThroughputModel:
+def _bad_dl_bler_model(seed: int) -> DlBlerModel:
     """Trained on a CONSTANT target, unrelated to the real generative function — systematically,
     not just noisily, bad on held-out data drawn from the real function, regardless of RNG."""
-    model = ThroughputModel.from_settings(SETTINGS)
+    model = DlBlerModel.from_settings(SETTINGS)
     features = _synthetic_features(200, seed)
     target = pd.Series(np.full(len(features), 5.0))
     model.train(features, target)
@@ -190,7 +184,7 @@ class _UnavailableRagKb:
 
 def test_verifying_a_non_candidate_version_raises(tmp_path):
     registry = _registry(tmp_path)
-    model = _good_throughput_model(seed=1)
+    model = _good_dl_bler_model(seed=1)
     version = _register(registry, model, status="rejected")
     agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))
     features = _synthetic_features(10, seed=2)
@@ -204,15 +198,15 @@ def test_verifying_a_non_candidate_version_raises(tmp_path):
 
 def test_clearly_better_candidate_is_accepted_and_promoted(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _bad_throughput_model(seed=10)
+    production_model = _bad_dl_bler_model(seed=10)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=20)
+    candidate_model = _good_dl_bler_model(seed=20)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
 
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
     agent = VerificationAgent(SETTINGS, registry, evaluator)
 
     eval_features = _synthetic_features(150, seed=30)
@@ -224,28 +218,28 @@ def test_clearly_better_candidate_is_accepted_and_promoted(tmp_path):
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
 
     assert result.decision == "ACCEPT"
     assert all(c.passed for c in result.checks)
     assert result.fidelity_before is not None and result.fidelity_after is not None
     assert result.fidelity_after > result.fidelity_before + VERIFICATION_DELTA
-    assert registry.get_current_version("throughput").version_id == candidate_version.version_id
-    assert registry.get_version("throughput", prod_version.version_id).status == "superseded"
+    assert registry.get_current_version("dl_bler").version_id == candidate_version.version_id
+    assert registry.get_version("dl_bler", prod_version.version_id).status == "superseded"
 
 
 def test_clearly_worse_candidate_is_rejected_and_production_unchanged(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _good_throughput_model(seed=40)
+    production_model = _good_dl_bler_model(seed=40)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _bad_throughput_model(seed=50)
+    candidate_model = _bad_dl_bler_model(seed=50)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
 
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
     agent = VerificationAgent(SETTINGS, registry, evaluator)
 
     eval_features = _synthetic_features(150, seed=60)
@@ -257,24 +251,24 @@ def test_clearly_worse_candidate_is_rejected_and_production_unchanged(tmp_path):
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
 
     assert result.decision == "REJECT"
-    assert registry.get_current_version("throughput").version_id == prod_version.version_id
-    assert registry.get_version("throughput", candidate_version.version_id).status == "rejected"
+    assert registry.get_current_version("dl_bler").version_id == prod_version.version_id
+    assert registry.get_version("dl_bler", candidate_version.version_id).status == "rejected"
 
 
 def test_nan_candidate_predictions_are_rejected_not_crashed(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _good_throughput_model(seed=70)
+    production_model = _good_dl_bler_model(seed=70)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=71)
+    candidate_model = _good_dl_bler_model(seed=71)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
     agent = VerificationAgent(SETTINGS, registry, evaluator)
 
     eval_features = _synthetic_features(20, seed=72)
@@ -286,7 +280,7 @@ def test_nan_candidate_predictions_are_rejected_not_crashed(tmp_path):
         eval_features,
         eval_target,
         nan_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
     assert result.decision == "REJECT"
     assert any(c.name == "no_invalid_output" and not c.passed for c in result.checks)
@@ -294,14 +288,14 @@ def test_nan_candidate_predictions_are_rejected_not_crashed(tmp_path):
 
 def test_length_mismatched_predictions_are_rejected_not_crashed(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _good_throughput_model(seed=74)
+    production_model = _good_dl_bler_model(seed=74)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=75)
+    candidate_model = _good_dl_bler_model(seed=75)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
     agent = VerificationAgent(SETTINGS, registry, evaluator)
 
     eval_features = _synthetic_features(20, seed=76)
@@ -313,7 +307,7 @@ def test_length_mismatched_predictions_are_rejected_not_crashed(tmp_path):
         eval_features,
         eval_target,
         mismatched_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
     assert result.decision == "REJECT"
     assert any(c.name == "evaluation_ran" and not c.passed for c in result.checks)
@@ -321,16 +315,16 @@ def test_length_mismatched_predictions_are_rejected_not_crashed(tmp_path):
 
 def test_missing_candidate_artifact_is_rejected(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _good_throughput_model(seed=80)
+    production_model = _good_dl_bler_model(seed=80)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=81)
+    candidate_model = _good_dl_bler_model(seed=81)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     registry.artifact_path(candidate_version).unlink()  # simulate a corrupt/missing artifact on disk
 
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
     agent = VerificationAgent(SETTINGS, registry, evaluator)
 
     eval_features = _synthetic_features(20, seed=82)
@@ -342,7 +336,7 @@ def test_missing_candidate_artifact_is_rejected(tmp_path):
         eval_features,
         eval_target,
         preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
     assert result.decision == "REJECT"
     assert any(c.name == "candidate_artifact_present" and not c.passed for c in result.checks)
@@ -353,14 +347,14 @@ def test_missing_production_factory_with_existing_baseline_is_rejected_not_skipp
     evaluate it under the same protocol — this must REJECT, never silently skip the primary
     regression criterion (which would let an unverifiable candidate slip through)."""
     registry = _registry(tmp_path)
-    production_model = _good_throughput_model(seed=90)
+    production_model = _good_dl_bler_model(seed=90)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=91)
+    candidate_model = _good_dl_bler_model(seed=91)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
     agent = VerificationAgent(SETTINGS, registry, evaluator)
 
     eval_features = _synthetic_features(20, seed=92)
@@ -370,7 +364,7 @@ def test_missing_production_factory_with_existing_baseline_is_rejected_not_skipp
     result = agent.verify(candidate_version, eval_features, eval_target, preds)  # no factory supplied
     assert result.decision == "REJECT"
     assert any(c.name == "production_baseline_evaluable" and not c.passed for c in result.checks)
-    assert registry.get_current_version("throughput").version_id == prod_version.version_id
+    assert registry.get_current_version("dl_bler").version_id == prod_version.version_id
 
 
 # --- "no production baseline exists" (expand-scope-shaped) ----------------------------------------
@@ -428,14 +422,14 @@ def test_no_production_baseline_rejects_when_candidate_fidelity_not_yet_computab
 
 def test_llm_disagreement_never_changes_the_deterministic_accept_decision(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _bad_throughput_model(seed=100)
+    production_model = _bad_dl_bler_model(seed=100)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=101)
+    candidate_model = _good_dl_bler_model(seed=101)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
 
     disagreeing_llm = _FakeLLMClient(
         explanation="I disagree with the gate — this candidate should be REJECTED, the numbers are misleading.",
@@ -452,7 +446,7 @@ def test_llm_disagreement_never_changes_the_deterministic_accept_decision(tmp_pa
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
 
     # The deterministic gate wins: ACCEPT, and the candidate was genuinely promoted — the LLM's
@@ -460,19 +454,19 @@ def test_llm_disagreement_never_changes_the_deterministic_accept_decision(tmp_pa
     assert result.decision == "ACCEPT"
     assert result.llm_used is True
     assert "REJECTED" in result.explanation  # the LLM's text is stored verbatim...
-    assert registry.get_current_version("throughput").version_id == candidate_version.version_id  # ...but never acted on
+    assert registry.get_current_version("dl_bler").version_id == candidate_version.version_id  # ...but never acted on
 
 
 def test_llm_disagreement_never_changes_the_deterministic_reject_decision(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _good_throughput_model(seed=110)
+    production_model = _good_dl_bler_model(seed=110)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _bad_throughput_model(seed=111)
+    candidate_model = _bad_dl_bler_model(seed=111)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
 
     disagreeing_llm = _FakeLLMClient(
         explanation="I strongly recommend ACCEPTING this candidate — it is clearly superior to production.",
@@ -489,14 +483,14 @@ def test_llm_disagreement_never_changes_the_deterministic_reject_decision(tmp_pa
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
 
     assert result.decision == "REJECT"
     assert result.llm_used is True
     assert "ACCEPTING" in result.explanation  # the LLM's text is stored verbatim...
-    assert registry.get_current_version("throughput").version_id == prod_version.version_id  # ...but never acted on
-    assert registry.get_version("throughput", candidate_version.version_id).status == "rejected"
+    assert registry.get_current_version("dl_bler").version_id == prod_version.version_id  # ...but never acted on
+    assert registry.get_version("dl_bler", candidate_version.version_id).status == "rejected"
 
 
 def test_llm_reasoning_schema_has_no_field_that_could_express_a_verdict():
@@ -514,14 +508,14 @@ def test_llm_reasoning_schema_has_no_field_that_could_express_a_verdict():
 
 def test_llm_failure_degrades_to_deterministic_explanation_decision_still_stands(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _bad_throughput_model(seed=120)
+    production_model = _bad_dl_bler_model(seed=120)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=121)
+    candidate_model = _good_dl_bler_model(seed=121)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
 
     failing_llm = _FakeLLMClient(raise_on_call=LLMClientError("simulated transport failure"))
     agent = VerificationAgent(SETTINGS, registry, evaluator, llm_client=failing_llm)
@@ -535,12 +529,12 @@ def test_llm_failure_degrades_to_deterministic_explanation_decision_still_stands
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
     )
     assert result.decision == "ACCEPT"  # the deterministic decision is entirely unaffected
     assert result.llm_used is False
     assert "Deterministic gate decision: ACCEPT" in result.explanation
-    assert registry.get_current_version("throughput").version_id == candidate_version.version_id
+    assert registry.get_current_version("dl_bler").version_id == candidate_version.version_id
 
 
 # --- RAG consultation (D2) -------------------------------------------------------------------------
@@ -548,14 +542,14 @@ def test_llm_failure_degrades_to_deterministic_explanation_decision_still_stands
 
 def test_rag_context_is_retrieved_and_reaches_the_llm_prompt_when_available(tmp_path):
     registry = _registry(tmp_path)
-    production_model = _bad_throughput_model(seed=130)
+    production_model = _bad_dl_bler_model(seed=130)
     prod_version = _register(registry, production_model, status="production")
-    candidate_model = _good_throughput_model(seed=131)
+    candidate_model = _good_dl_bler_model(seed=131)
     candidate_version = _register(
         registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
     )
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
-    _prewarm(evaluator, "throughput")
+    _prewarm(evaluator, "dl_bler")
 
     chunk = RetrievedChunk(
         text="verification_delta is 0.01 per the enforced adaptation policy.",
@@ -579,7 +573,7 @@ def test_rag_context_is_retrieved_and_reaches_the_llm_prompt_when_available(tmp_
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
         rag_knowledge_base=rag_kb,
     )
     assert result.decision == "ACCEPT"
@@ -591,12 +585,12 @@ def test_rag_context_is_retrieved_and_reaches_the_llm_prompt_when_available(tmp_
 def test_rag_unavailable_degrades_gracefully_and_is_never_fabricated(tmp_path):
     registry = _registry(tmp_path)
     agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))
-    context = agent._retrieve_rag_context("throughput", _UnavailableRagKb())  # noqa: SLF001 - focused unit test
+    context = agent._retrieve_rag_context("dl_bler", _UnavailableRagKb())  # noqa: SLF001 - focused unit test
     assert context == "not available"
 
 
 def test_rag_none_is_reported_as_not_available(tmp_path):
     registry = _registry(tmp_path)
     agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))
-    context = agent._retrieve_rag_context("throughput", None)  # noqa: SLF001 - focused unit test
+    context = agent._retrieve_rag_context("dl_bler", None)  # noqa: SLF001 - focused unit test
     assert context == "not available"

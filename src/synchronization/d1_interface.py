@@ -75,7 +75,7 @@ class InMemoryD1Stub(D1StateSink):
                 # "Latest" means latest by telemetry timestamp, not arrival order — network
                 # delivery can reorder records, and an out-of-order arrival must never regress
                 # current state (prompt.md §0.7: telemetry is the authoritative state update).
-                if existing is not None and record.timestamp < existing.timestamp:
+                if existing is not None and record.ts_1s < existing.ts_1s:
                     continue
                 self._current_state[key] = record
 

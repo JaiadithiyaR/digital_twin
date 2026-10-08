@@ -59,9 +59,11 @@ no component for at all, or after repeated failures on the same incident with ot
 
 ## Drift Detection Interface Policy
 
-- `drift.valid_components = [throughput, latency, packet_loss, prb_utilization, jitter]` — an
-  incoming drift event naming any other component is rejected (quarantined), never routed to a
-  strategy, since it cannot be mapped to a real, adaptable DT scope.
+- `drift.valid_components = [dl_throughput, ul_throughput, dl_rlc_delay, dl_prb, ul_prb, dl_bler,
+  ul_bler]` — the 7 OAI KPI components (replacing the retired NS-3-era throughput/latency/
+  packet_loss/prb_utilization/jitter set). An incoming drift event naming any other component is
+  rejected (quarantined), never routed to a strategy, since it cannot be mapped to a real,
+  adaptable DT scope.
 - `drift.severity_range = [0.0, 1.0]` — a severity outside this inclusive range is likewise
   rejected rather than clamped, since a malformed trigger must fail safely rather than be guessed
   at.

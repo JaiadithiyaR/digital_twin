@@ -18,22 +18,16 @@ from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
 from tests.dummy_dt_components import DummyAdder, DummyDoubler, DummySummer
 
 
-def _clean_record(ue_id: str, cell_id: str, sinr_db: float, throughput_mbps: float) -> CleanTelemetryRecord:
+def _clean_record(session_id: int, cell_id: int, sinr_db: float, throughput_mbps: float) -> CleanTelemetryRecord:
     return CleanTelemetryRecord(
-        timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
-        ue_id=ue_id,
+        run_id=1,
         cell_id=cell_id,
-        throughput_mbps=throughput_mbps,
-        offered_load_mbps=60.0,
-        latency_ms=20.0,
-        jitter_ms=3.0,
-        packet_loss_pct=1.0,
-        prb_utilization_pct=40.0,
-        sinr_db=sinr_db,
-        rsrp_dbm=-90.0,
-        rsrq_db=-9.0,
-        ue_count=12,
-        ue_speed_mps=3.5,
+        session_id=session_id,
+        ue_id=session_id,
+        slice_id=1,
+        ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+        features={"sinr_db": sinr_db},
+        targets={"throughput_mbps": throughput_mbps},
         source="MOCK",
         quality=RecordQuality(),
     )
@@ -50,9 +44,9 @@ def test_orchestrator_runs_predictions_from_real_d1_current_state(tmp_path):
     # elsewhere) so this test isolates exactly what it's checking: orchestrator <- D1 wiring.
     store.update_current_state(
         [
-            _clean_record("ue-0", "cell-0", sinr_db=10.0, throughput_mbps=50.0),
-            _clean_record("ue-1", "cell-0", sinr_db=20.0, throughput_mbps=80.0),
-            _clean_record("ue-2", "cell-1", sinr_db=5.0, throughput_mbps=30.0),
+            _clean_record(1, 1, sinr_db=10.0, throughput_mbps=50.0),
+            _clean_record(2, 1, sinr_db=20.0, throughput_mbps=80.0),
+            _clean_record(3, 2, sinr_db=5.0, throughput_mbps=30.0),
         ]
     )
 

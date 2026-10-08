@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 # provenance, and quality-audit metadata) — excluded from the feature-statistics summary and the
 # "available columns" list handed to the LLM, so it isn't tempted to declare them as features.
 _NON_FEATURE_COLUMNS = frozenset(
-    {"ue_id", "cell_id", "timestamp", "source", "quality_missing_fields", "quality_imputed_fields", "quality_out_of_range_fields"}
+    {"run_id", "cell_id", "session_id", "ue_id", "slice_id", "ts_1s", "source", "quality_missing_fields"}
 )
 
 
@@ -142,6 +142,7 @@ class RegenerationAgent:
         llm_client: "GoogleClient",
         sandbox_executor: SandboxExecutor,
         fidelity_evaluator: FidelityEvaluator | None = None,
+        static_prefix: str | None = None,
     ) -> None:
         self._settings = settings
         self._d1_store = d1_store
@@ -149,10 +150,23 @@ class RegenerationAgent:
         self._llm_client = llm_client
         self._sandbox = sandbox_executor
         self._fidelity_evaluator = fidelity_evaluator
+        # Phase 13 §3.4: the "codegen" role's own configured thinking effort — source-code
+        # generation genuinely benefits from more thinking than the closed-enum decision call.
+        self._effort = settings.llm.effort_by_role.codegen
+        # Phase 13 §3.3: the shared, cacheable static prompt prefix (system instructions +
+        # adaptation policies + OAI/DT doc summary + feature_schema.json), set only by the
+        # baselines/ harness — every other (non-baseline) caller leaves this `None`, which keeps
+        # this agent's prompt content byte-for-byte unchanged from before this feature existed.
+        self._static_prefix = static_prefix
 
     @classmethod
     def from_settings(
-        cls, settings: "Settings", d1_store: "D1Store", model_registry: ModelRegistry, llm_client: "GoogleClient"
+        cls,
+        settings: "Settings",
+        d1_store: "D1Store",
+        model_registry: ModelRegistry,
+        llm_client: "GoogleClient",
+        static_prefix: str | None = None,
     ) -> "RegenerationAgent":
         return cls(
             settings,
@@ -161,6 +175,7 @@ class RegenerationAgent:
             llm_client,
             sandbox_executor=SandboxExecutor.from_settings(settings),
             fidelity_evaluator=FidelityEvaluator(settings.fidelity),
+            static_prefix=static_prefix,
         )
 
     # --- main entrypoint ---------------------------------------------------------------------
@@ -177,6 +192,7 @@ class RegenerationAgent:
         held_out_fraction: float = 0.2,
         drift_context: str | None = None,
         rag_knowledge_base: "RagKnowledgeBase | None" = None,
+        cache_key: str | None = None,
     ) -> RegenerationResult:
         """Rebuild `component_factory()`'s component's pipeline from scratch via LLM-generated,
         sandboxed code, and register the accepted result as a new candidate version.
@@ -237,7 +253,7 @@ class RegenerationAgent:
         previous_attempt: dict[str, Any] | None = None
         attempt = 0
         for attempt in range(1, max_attempts + 1):
-            generated = self._generate_candidate(component_name, expected_output_field, context, previous_attempt)
+            generated = self._generate_candidate(component_name, expected_output_field, context, previous_attempt, cache_key=cache_key)
             sandbox_result = self._sandbox.run_candidate(
                 source_code=generated.source_code,
                 class_name=generated.class_name,
@@ -299,8 +315,8 @@ class RegenerationAgent:
         # 7. register the accepted candidate — never a live instance this process trusts, only
         # the bytes/metadata the sandbox already validated and handed back as data.
         training_window = {
-            "start": iso(train_df["timestamp"].min()) if len(train_df) else None,
-            "end": iso(train_df["timestamp"].max()) if len(train_df) else None,
+            "start": iso(train_df["ts_1s"].min()) if len(train_df) else None,
+            "end": iso(train_df["ts_1s"].max()) if len(train_df) else None,
             "n_rows": len(train_df),
             "window_hours": resolved_window_hours,
             "provenance": "d1_history",
@@ -308,8 +324,8 @@ class RegenerationAgent:
             "cell_id": cell_id,
         }
         evaluation_window = {
-            "start": iso(held_out_df["timestamp"].min()) if len(held_out_df) else None,
-            "end": iso(held_out_df["timestamp"].max()) if len(held_out_df) else None,
+            "start": iso(held_out_df["ts_1s"].min()) if len(held_out_df) else None,
+            "end": iso(held_out_df["ts_1s"].max()) if len(held_out_df) else None,
             "n_rows": len(held_out_df),
             "provenance": "d1_history",
         }
@@ -449,6 +465,8 @@ class RegenerationAgent:
         expected_output_field: str,
         context: dict[str, Any],
         previous_attempt: dict[str, Any] | None,
+        *,
+        cache_key: str | None = None,
     ) -> _GeneratedComponentCode:
         interface_contract = (
             "The class MUST subclass `src.dt_models.base.DTComponent` and implement: "
@@ -497,7 +515,14 @@ class RegenerationAgent:
                 f"Fix the issue and produce a corrected, complete module."
             )
 
+        # Phase 13 §3.3: when a shared context cache is active (`cache_key` resolved by the
+        # caller), the static prefix (system instructions + adaptation policies + OAI/DT doc
+        # summary + feature_schema.json) is already server-side — send only this dynamic part.
+        # Otherwise (no caching configured for this run, or `static_prefix` was never supplied —
+        # the default for every non-baseline caller), prepend it inline so content delivered to
+        # the model is the same either way; never change prompt CONTENT to accommodate caching.
+        sent_prompt = prompt if cache_key is not None else (f"{self._static_prefix}\n\n{prompt}" if self._static_prefix else prompt)
         try:
-            return self._llm_client.complete_structured(prompt, _GeneratedComponentCode)
+            return self._llm_client.complete_structured(sent_prompt, _GeneratedComponentCode, effort=self._effort, cache_key=cache_key)
         except LLMClientError as exc:
             raise RegenerationError(f"LLM code generation failed for {component_name!r}: {exc}") from exc

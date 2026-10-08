@@ -86,18 +86,34 @@ The step-by-step run guide and this file itself now live in `docs/` — see sect
 
 ---
 
-## 5. `ns3_sim/` — the pretend (but realistic) 5G network
+## 5. `archive/ns3_sim/` — the retired pretend 5G network (historical reference only)
 
-Since we don't have a real 5G tower to plug into, this project uses **ns-3**, a widely-used
-network simulator, together with an add-on called **5G-LENA** that makes it behave like real 5G
-equipment. This is "Module 1" in the architecture — the stand-in for the real physical network.
+This project originally used **ns-3** (a widely-used network simulator) plus an add-on called
+**5G-LENA** as "Module 1," a stand-in for a real physical network. The OAI migration
+(prompt2.md) replaced this entirely with a replay of **real exported OAI RAN KPI data** — a real
+testbed's actual measurements, not a simulation — so Module 1 is now a data source (see section
+5a below), and everything that used to live under `ns3_sim/` has been moved to
+`archive/ns3_sim/` and is never built or run as part of this project's runtime anymore.
 
-| File | What it's for |
+| File | What it used to be for |
 |---|---|
-| `ns3_sim/README.md` | Explains exactly which versions of the simulator are used, how to install its prerequisites, and the rule that real simulator output must never be confused with fake/mock data. |
-| `ns3_sim/nr_5g_telemetry_sim.cc` | **The actual simulated 5G network**, written in C++ (the language ns-3 is built in). Sets up one cell tower and six moving phones, runs a realistic radio simulation (signal strength, interference, motion), and streams out live readings (speed, delay, signal quality, etc.) over the network so the rest of this Python project can consume them, exactly like a real base station would. |
-| `ns3_sim/validate_e2e.py` | A stand-alone sanity-check script: starts the simulator above, listens for its output, and confirms the data it sends is well-formed and realistic — used to verify Module 1 works correctly on its own, before wiring it into the bigger system. |
-| `ns3_sim/ns-3-dev/` *(not tracked in git)* | The actual ns-3 simulator software itself, downloaded and built by `scripts/setup_ns3.sh`. Not part of this project's own code — it's an external tool (like a compiler), so it isn't stored in the repository, only referenced. |
+| `archive/ns3_sim/README.md` | Explains the retirement and why the code is kept (never deleted) for historical reference. |
+| `archive/ns3_sim/nr_5g_telemetry_sim.cc` | The old simulated 5G network (C++, one cell tower + six moving phones) that used to stream synthetic telemetry over ZeroMQ. |
+| `archive/ns3_sim/validate_e2e.py` | The old standalone sanity-check script for the simulator above. |
+| `archive/ns3_sim/zmq_source.py` | The old real-telemetry listener that connected to the simulator over ZeroMQ. |
+| `archive/ns3_sim/run_e2e_demo.py` | The old real-NS-3 end-to-end demo script. |
+| `archive/ns3_sim/pre_oai_migration_data/` | The actual NS-3-era runtime state (D1 history, lifecycle records, model artifacts, demo outputs) this project had accumulated before the OAI migration — kept for historical comparison, structurally incompatible with the current D1 schema. |
+| `archive/ns3_sim/ns-3-dev/` *(not tracked in git)* | The actual ns-3 simulator software, downloaded/built by the now-retired `setup_ns3.sh`. |
+
+## 5a. `data/processed/oai/` and `config.data` — the real OAI replay data source
+
+The real Module 1 now: a config-driven, read-only replay of real exported OAI RAN KPI CSVs,
+never copied into this repo. `config.data.oai_root` points at the real export (outside this
+repo); `config.data.splits` (train/val/test, by run id) is config-driven, not hardcoded, so a
+new run can be added later without a code change. `scripts/build_oai_dataset.py` reads the raw
+export and writes the model-ready `data/processed/oai/{train,val,test}.parquet` this system
+actually trains/replays from — see `docs/oai_twin.md` for the full real KPI catalog, the
+causality-correct lagged-feature design, and the 7-component dependency graph it was built for.
 
 ---
 
@@ -118,10 +134,10 @@ architecture's stages. Below is every folder, in the order data flows through th
 | File | What it's for |
 |---|---|
 | `src/telemetry/base.py` | The common "shape" every telemetry source must follow (mock or real) — just says "you must be able to give me a stream of readings, and you must honestly label where they came from." |
-| `src/telemetry/schema.py` | Defines exactly what a single valid telemetry reading looks like (which fields it has, what units they're in) and how to convert between "raw" wire formats and the clean format the rest of the system expects. |
-| `src/telemetry/mock_source.py` | A fake-but-realistic telemetry generator, used when the real simulator isn't running. It doesn't just spit out random numbers — it makes throughput, delay, signal strength etc. behave like they would on a real network (e.g. more phones → more congestion → less throughput per phone), so the machine-learning models have something real to learn from. |
-| `src/telemetry/zmq_source.py` | The real telemetry listener — connects to the actual ns-3 simulator (or a real network exporter) over a messaging protocol called ZeroMQ and receives its live readings. |
-| `src/telemetry/preprocessing.py` | The "cleaning station." Takes raw incoming readings and: fills in small gaps sensibly, flags (but never silently deletes) values that look physically impossible, and groups readings into small time-windows the machine-learning models can consume. Bad data is quarantined and kept for inspection, never just thrown away. |
+| `src/telemetry/schema.py` | Defines exactly what a single valid OAI telemetry record looks like (identity fields, feature dict, target dict, source label, quality flags) and the allowed source labels (`OAI_RAN_REPLAY` / `MOCK`). |
+| `src/telemetry/mock_source.py` | A fake-but-realistic OAI-schema-shaped telemetry generator, used for fast iteration and unit tests (never presented as real — always tagged `SOURCE=MOCK`). A per-session radio-quality random walk drives correlated MAC features and the 7 real targets. |
+| `src/telemetry/oai_replay_source.py` | **The real telemetry source.** Streams the real exported OAI RAN KPI rows (built by `scripts/build_oai_dataset.py`) back in genuine timestamp order at a config-driven speed (`0` = as fast as possible, `1` = real time) — this is what makes `--mode live` real, not simulated, telemetry. Always tagged `SOURCE=OAI_RAN_REPLAY`. |
+| `src/telemetry/preprocessing.py` | The "cleaning station." Checks every canonical OAI feature/target for presence and validity, flags (never silently drops) quality issues, and keeps bad records in a separate quarantine pile for inspection rather than discarding them. |
 
 ### 6.3 `src/synchronization/` — Module 3: keeping the twin's memory always up to date
 
@@ -141,12 +157,11 @@ This is the biggest folder — it holds both the twin's "memory" and the actual 
 | `src/dt_models/base.py` | The common "shape" every prediction model (throughput, latency, etc.) must follow — must be able to train itself, make predictions, evaluate how good it is, and save/load itself to disk. |
 | `src/dt_models/regressors.py` | A small shared helper that builds the underlying machine-learning algorithm (either "XGBoost" or "Random Forest" — two well-known prediction techniques) for whichever prediction model asks for one. |
 | `src/dt_models/model_registry.py` | A lightweight "which prediction models exist and in what order should they run" catalog used while the system is live (different from the *versioned* registry below — this one doesn't track history, just "what's currently wired up"). |
-| `src/dt_models/orchestrator.py` | **The conductor.** Figures out the correct order to run the five prediction models in (since some depend on others' output — e.g. "jitter" needs "throughput" and "latency" to already be predicted), then runs them all in that order automatically. |
-| `src/dt_models/throughput.py` | Predicts **throughput** (how many Mbps a phone is actually getting) from things like signal quality and how many other phones are competing for the same tower. |
-| `src/dt_models/latency.py` | Predicts **latency** (the delay in milliseconds) — depends on the throughput prediction, since a busier connection tends to be slower to respond. |
-| `src/dt_models/packet_loss.py` | Predicts **packet loss** (the percentage of data that gets lost in transit) from signal quality and congestion. |
-| `src/dt_models/prb_utilization.py` | Predicts **PRB utilization** — basically, "how full is the cell tower's radio capacity right now," a key congestion indicator. Can be switched off independently of the other four without breaking anything. |
-| `src/dt_models/jitter.py` | Predicts **jitter** (how inconsistent the delay is, tick to tick) — the most complex model, since it depends on throughput, latency, *and* packet loss all at once. |
+| `src/dt_models/orchestrator.py` | **The conductor.** Figures out the correct order to run the 7 prediction models in (since some depend on others' output — e.g. `dl_throughput` needs `dl_bler`/`dl_prb` already predicted), then runs them all in that order automatically. |
+| `src/dt_models/dl_bler.py` / `ul_bler.py` | Predict **downlink/uplink Block Error Rate** (the fraction of MAC-layer transport blocks that fail) from real RAN features — root nodes, no dependencies. |
+| `src/dt_models/dl_prb.py` / `ul_prb.py` | Predict **downlink/uplink PRBs used per second** — a real radio-resource-usage count — root nodes, no dependencies. |
+| `src/dt_models/dl_throughput.py` / `ul_throughput.py` | Predict **downlink/uplink per-UE RLC/PDCP throughput** (kbps) — depend on that direction's own BLER and PRB predictions. |
+| `src/dt_models/dl_rlc_delay.py` | Predicts **downlink RLC queueing delay** (ms, not application-layer latency) — depends on `dl_throughput` and `dl_bler`. |
 
 ### 6.5 `src/fidelity/` — Module 12: "how close are our predictions to reality?"
 
@@ -229,10 +244,12 @@ training, or demonstrations.
 | File | What it's for |
 |---|---|
 | `scripts/setup.py` | Checks that your local computer is properly set up (right folders exist, `.env` is filled in, all required software libraries are installed) — run this once after installing dependencies. |
-| `scripts/setup_ns3.sh` | Downloads and builds the ns-3/5G-LENA network simulator (a big one-time step, since it's a full C++ project). |
+| `scripts/build_oai_dataset.py` | Reads the real, read-only OAI export (`config.data.oai_root`) and writes the model-ready `data/processed/oai/{train,val,test}.parquet` splits this whole system trains/replays from — run this once before the first bootstrap. |
 | `scripts/ingest_rag.py` | Reads every document in `rag_data/` and loads it into the searchable AI reference library (`src/rag/rag_kb.py`'s storage) — run this once (or whenever the documents change) so the AI agents have something to search. |
 | `scripts/run_orchestrator_demo.py` | A ready-to-run demo that starts the whole system using **fake (mock) telemetry**, lets it run through one full "drift → fix → verify → record" cycle unattended, and prints exactly what happened — good for a quick, fast sanity check. |
-| `scripts/run_e2e_demo.py` | The more serious demo — starts the **real** ns-3/5G-LENA network simulator as an actual running program, connects the whole system to its real live telemetry, and runs a full real adaptation cycle against genuinely simulated 5G behavior (not fake data). |
+| `scripts/run_oai_e2e_smoke.py` | The real-data demo — replays part of real OAI run 8 (the TEST split) through the whole system at full speed, forces one adaptation trigger so the run is deterministic, and runs a full real adaptation cycle against genuinely real (replayed) network behavior, not fake data. |
+| `scripts/run_baselines.py` | Runs all four experiment modes (`static`/`periodic_retrain`/`rule_based`/`full`) over the same real OAI TEST-split replay, for comparing the real LLM-driven decision agent against simple deterministic baselines. |
+| `scripts/bootstrap_oai_models.py` | Trains all 7 real components on the real TRAIN split and evaluates them on real VAL, reporting honest RMSE/MAE against a persistence baseline (never a cherry-picked result). |
 | `scripts/visualize_metrics.py` | A stand-alone charting and export tool. Reads whatever real data the system has already produced (telemetry history, prediction accuracy, past fix outcomes) and produces both PNG graphs (network metrics over time, prediction-accuracy over time, a before/after chart of every automatic fix ever attempted) and CSV files — including the real, as-recorded telemetry and the digital twin's own predictions for that same telemetry, as two separate files you can open or compare directly. Never runs the system itself, only reads and reports on what already happened. |
 
 ---
@@ -246,10 +263,11 @@ Plain text/Markdown reference material, loaded into the searchable library by
 |---|---|
 | `rag_data/oran/architecture_overview.md` | Real public documentation explaining O-RAN (an industry-standard way of building flexible, software-driven mobile networks) — background context the AI can reference. |
 | `rag_data/oran/a1_interface.md` | Real public documentation about one specific piece of the O-RAN standard (the "A1" interface, used for sending policies to network components). |
-| `rag_data/digital_twin/architecture_overview.md` | A description of *this project's own* architecture (based on `CLAUDE.md`) — lets the AI explain decisions using this project's actual design, not guesses. |
+| `rag_data/digital_twin/architecture_overview.md` | A description of *this project's own* architecture (based on `CLAUDE.md`), including the current 7-OAI-component dependency graph — lets the AI explain decisions using this project's actual design, not guesses. |
 | `rag_data/digital_twin/adaptation_agents_and_lifecycle.md` | A description of *this project's own* six AI agents and how they work together — same idea as above, focused specifically on the self-healing part. |
-| `rag_data/policies/adaptation_policies.md` | A plain-English summary of this project's actual current settings (from `config/settings.yaml`) — e.g. how big a fidelity improvement is required before a fix is accepted — so the AI's explanations stay accurate to the real configured rules. |
-| `rag_data/history/development_validation_records.md` | A record of real events from this project's own development/testing — openly labeled as a thin starting example, since genuine long-term production history doesn't exist yet. |
+| `rag_data/digital_twin/oai_twin.md` | The real OAI KPI catalog, the 7-component dependency graph, and the honest bootstrap-vs-persistence validation metrics — a copy of `docs/oai_twin.md` for RAG ingestion. |
+| `rag_data/policies/adaptation_policies.md` | A plain-English summary of this project's actual current settings (from `config/settings.yaml`) — e.g. how big a fidelity improvement is required before a fix is accepted, and the current valid component ids — so the AI's explanations stay accurate to the real configured rules. |
+| `rag_data/history/development_validation_records.md` | A record of real events from this project's own NS-3-era development/testing — explicitly labeled legacy (`source=ns3_legacy` metadata) and prefaced with an OAI-migration notice, since these predate the OAI migration and are not comparable to current production history. |
 | `rag_data/chroma/` *(not tracked in git)* | The actual searchable database built from all the documents above — regenerated automatically by `scripts/ingest_rag.py`, not something to edit by hand. |
 
 ---
@@ -258,11 +276,12 @@ Plain text/Markdown reference material, loaded into the searchable library by
 
 | File | What it's for |
 |---|---|
-| `docs/HOW_TO_RUN.md` | Step-by-step instructions: install dependencies, run the tests, build the network simulator, run the whole system. This is the "just tell me the commands" file. |
+| `docs/HOW_TO_RUN.md` | Step-by-step instructions: install dependencies, run the tests, build the real OAI dataset, run the whole system. This is the "just tell me the commands" file. |
 | `docs/MANUAL.md` | This file — plain-English explanation of every file. |
-| `docs/FORMULAS.pdf` | An 11-page PDF collecting every mathematical formula actually used in this project (prediction-accuracy math, the reinforcement-learning math, telemetry-derived formulas) with the exact source-code location each one came from. |
-| `docs/IEEE_Digital_Twin_Paper.docx` | A formal, publication-style research paper describing this project's design and real measured results, written in the standard two-column academic format used by IEEE journals/conferences — a ready-to-open Microsoft Word version. |
-| `docs/architecture_diagram.drawio` | A single-figure, presentation-ready system architecture / data-flow diagram covering all 19 numbered modules plus D1/D2, both adaptation-trigger sources, all three adaptation strategies, the sandbox isolation boundary, the deterministic verification gate, and the hot-swap/lifecycle loop — with real source file paths labeled on every box. Open it free at [app.diagrams.net](https://app.diagrams.net) (File → Open From → Device) or the draw.io desktop/VS Code app; export to PNG/SVG/PDF from there for slides. |
+| `docs/oai_twin.md` | The real OAI KPI catalog (units, cumulative-vs-instantaneous flags, verified from direct schema inspection), the data-splits table (with an honest note on the run-10-exclusion), the 7-component dependency graph, and the honest bootstrap-vs-persistence validation metrics. |
+| `docs/FORMULAS.pdf` | An 11-page PDF collecting every mathematical formula actually used in this project (prediction-accuracy math, the reinforcement-learning math, telemetry-derived formulas) with the exact source-code location each one came from. **Predates the OAI migration** — the fidelity formula itself is unchanged, but references to the 5 retired NS-3-era components are stale. |
+| `docs/IEEE_Digital_Twin_Paper.docx` | A formal, publication-style research paper describing this project's design and real measured results, written in the standard two-column academic format used by IEEE journals/conferences — a ready-to-open Microsoft Word version. **Predates the OAI migration.** |
+| `docs/architecture_diagram.drawio` | A single-figure, presentation-ready system architecture / data-flow diagram covering all 19 numbered modules plus D1/D2, both adaptation-trigger sources, all three adaptation strategies, the sandbox isolation boundary, the deterministic verification gate, and the hot-swap/lifecycle loop — with real source file paths labeled on every box. **Predates the OAI migration** (still shows the 5 retired NS-3-era components/Module 1 as NS-3; an open item — see IMPLEMENTATION_STATUS.md). Open it free at [app.diagrams.net](https://app.diagrams.net) (File → Open From → Device) or the draw.io desktop/VS Code app; export to PNG/SVG/PDF from there for slides. |
 
 ---
 
@@ -274,13 +293,15 @@ so you know what you're looking at if you open it:
 
 | Path | What lives there |
 |---|---|
-| `data/bootstrap/` | The one-time starter dataset used to train each prediction model for the very first time, before any real telemetry has accumulated. |
+| `data/processed/oai/{train,val,test}.parquet` | The real, model-ready OAI splits built by `scripts/build_oai_dataset.py` — what every component actually trains/replays from. Regenerable from the read-only OAI export, never committed. |
+| `data/bootstrap/` | The one-time starter dataset used to train each prediction model for the very first time, before any real telemetry has accumulated (for mock-mode bootstrap only — OAI-mode bootstrap reads the real TRAIN split directly). |
 | `data/artifacts/d1_current_state.parquet` / `d1_history.parquet` / `d1_quarantine.parquet` | The digital twin's actual memory (D1) — current readings, full history, and any rejected/bad readings — saved to disk. |
-| `data/artifacts/lifecycle_records.jsonl` | The permanent audit log of every single automatic fix attempt ever made (Module 19's output). |
+| `data/artifacts/lifecycle_records.jsonl` | The permanent audit log of every single automatic fix attempt ever made (Module 19's output) — each record now also carries the telemetry source (`OAI_RAN_REPLAY`/`MOCK`), which run ids were replayed, and the replay speed. |
 | `data/artifacts/maintenance_reports/` | Human-readable summary reports, one per fix attempt. |
 | `data/artifacts/plots/` | Charts and CSVs produced by `scripts/visualize_metrics.py`, including `telemetry_original.csv` (the real telemetry as recorded) and `telemetry_predicted.csv` (the digital twin's own predictions for that same telemetry). |
 | `data/models/` | Every version of every trained prediction model. |
-| `data/e2e_ns3_demo/` | A completely separate copy of all of the above, used only by `scripts/run_e2e_demo.py` so its real-simulator run never gets mixed up with fake/mock-telemetry runs. |
+| `data/e2e_oai_smoke/` | A completely separate copy of D1/registry/lifecycle state, used only by `scripts/run_oai_e2e_smoke.py` so its real-OAI-replay run never gets mixed up with production data. |
+| `archive/ns3_sim/pre_oai_migration_data/` | The pre-migration NS-3-era equivalent of all of the above, kept for historical reference only — see section 5. |
 
 ---
 
@@ -304,20 +325,23 @@ tests themselves rather than testing anything on their own:
 |---|---|
 | `tests/dummy_dt_components.py` | Three intentionally trivial, fake prediction models (a doubler, an adder, a summer) used only to test the general "run models in the right order" orchestration logic (`src/dt_models/orchestrator.py`) without needing a real, slow machine-learning model. |
 | `tests/integration/conftest.py` | Shared setup code several integration tests reuse — most importantly, generating one realistic batch of bootstrap telemetry data once per test run, so every model's training test doesn't have to regenerate it separately. |
+| `tests/unit/test_no_archive_imports.py` | A structural guard (parses every file under `src/` and walks its imports) proving nothing in the live application ever imports anything from `archive/` or `zmq` — catches an accidental NS-3-era dependency creeping back in, not just a convention. |
 
 The full list of test files, grouped by what they check:
 
 | Area | Test files |
 |---|---|
 | Configuration & logging | `test_config.py`, `test_logging.py` |
-| Telemetry (Module 2) | `test_mock_source.py`, `test_zmq_source.py`, `test_preprocessing.py`, `test_telemetry_pipeline.py` |
+| OAI dataset build (Step 3) | `test_oai_dataset.py` |
+| Telemetry (Module 2) | `test_mock_source.py`, `test_oai_replay_source.py`, `test_preprocessing.py`, `test_telemetry_pipeline.py` |
 | Continuous sync (Module 3) | `test_sync.py`, `test_d1_interface.py`, `test_continuous_sync.py`, `test_d1_synchronization.py` |
-| Twin memory & orchestration (D1/Module 5) | `test_d1_model_store.py`, `test_component_registry.py`, `test_dt_model_registry.py`, `test_orchestrator.py`, `test_orchestrator_with_d1.py`, `test_full_dependency_chain.py` |
-| Prediction models (Modules 6–10) | `test_throughput_model.py`/`test_throughput_training.py`, `test_latency_model.py`/`test_latency_training.py`, `test_packet_loss_model.py`/`test_packet_loss_training.py`, `test_prb_utilization_model.py`/`test_prb_utilization_training.py`, `test_jitter_model.py`/`test_jitter_training.py` |
+| Twin memory & orchestration (D1/Module 5) | `test_d1_model_store.py`, `test_component_registry.py`, `test_dt_model_registry.py`, `test_orchestrator.py`, `test_orchestrator_with_d1.py`, `test_oai_components_training.py` |
+| Prediction models (7 OAI components) | `test_oai_components_training.py` (all 7, including the full dependency chain through a real orchestrator) |
 | Drift alerts (Module 11) | `test_mock_drift_source.py`, `test_drift_detector.py`, `test_drift_pipeline.py` |
-| Fidelity scoring (Module 12) | `test_fidelity_metrics.py`, `test_fidelity_evaluator.py`, `test_fidelity_evaluation.py` |
+| Fidelity scoring (Module 12) | `test_fidelity_metrics.py`, `test_fidelity_evaluator.py`, `test_fidelity_evaluation.py`, `test_fidelity_trigger.py` |
 | AI decision-maker (Module 13) | `test_decision_context.py`, `test_decision_agent.py` |
 | Fix strategies (Modules 14–16) | `test_recalibration_agent.py` (x2), `test_regeneration_agent.py` (x2), `test_expand_scope_agent.py` (x2) |
+| Baseline experiment modes (prompt2.md Step 6) | `test_baseline_policies.py` |
 | Sandbox safety cage | `test_sandbox_executor.py` |
 | Talking to the AI | `test_google_client.py` |
 | Searchable AI library (D2) | `test_rag_kb.py` (x2) |
@@ -347,5 +371,8 @@ The full list of test files, grouped by what they check:
   genuinely better before it's allowed to go live.
 - **Lifecycle record** — the permanent written history of one complete "something went wrong, here's
   what we did about it, here's whether it worked" event.
-- **Mock** — fake-but-realistic stand-in data, used when the real thing (a real 5G network) isn't
-  available — always clearly labeled as mock, never confused with the real thing.
+- **Mock** — fake-but-realistic stand-in telemetry, used for fast iteration and unit tests —
+  always clearly labeled `SOURCE=MOCK`, never confused with the real thing.
+- **OAI replay** — the real thing: genuine exported RAN KPI measurements from a real OpenAirInterface
+  5G testbed, streamed back in true timestamp order — always labeled `SOURCE=OAI_RAN_REPLAY`,
+  never presented as live.

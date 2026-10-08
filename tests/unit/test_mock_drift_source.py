@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.common.config import MockDriftConfig
 from src.drift.mock_drift_source import MockDriftSource
 
-VALID_COMPONENTS = ["throughput", "latency", "packet_loss", "prb_utilization", "jitter"]
+VALID_COMPONENTS = ["dl_bler", "ul_bler", "dl_prb", "ul_prb", "dl_throughput", "ul_throughput", "dl_rlc_delay"]
 SEVERITY_RANGE = (0.0, 1.0)
 
 

@@ -6,7 +6,7 @@ replaced with a fake that returns hand-written source strings standing in for wh
 would generate, exactly the way `test_google_client.py` mocks the transport layer rather than
 faking "a real call happened." Everything downstream of that one substitution — the sandbox
 execution, the conformance/train/evaluate pipeline, the registry writes, the fidelity comparison
-— is REAL, unmocked code, run for real against a small hand-built D1-shaped history.
+— is REAL, unmocked code, run for real against a small hand-built D1-shaped (OAI schema) history.
 """
 
 from __future__ import annotations
@@ -20,8 +20,9 @@ import pytest
 
 from src.adaptation.regeneration_agent import RegenerationAgent, RegenerationError, _GeneratedComponentCode
 from src.common.config import load_settings
+from src.data.oai_dataset import ALL_FEATURES
 from src.dt_models.d1_model_store import D1Store
-from src.dt_models.throughput import ThroughputModel
+from src.dt_models.dl_bler import DlBlerModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RetrievedChunk
@@ -30,19 +31,20 @@ from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
 
 SETTINGS = load_settings()
-REQUIRED_FEATURES = ThroughputModel.REQUIRED_FEATURES
+REQUIRED_FEATURES = DlBlerModel.REQUIRED_FEATURES
+_SAMPLE_FEATURES = ("dl_bler_lag1", "dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1")
 
-VALID_SOURCE = """
+VALID_SOURCE = f"""
 import pandas as pd
 import joblib
 from sklearn.linear_model import LinearRegression
 from src.dt_models.base import DTComponent
 
-class RebuiltThroughput(DTComponent):
-    COMPONENT_NAME = "throughput"
+class RebuiltDlBler(DTComponent):
+    COMPONENT_NAME = "dl_bler"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "sinr_db")
-    OUTPUT_FIELD = "throughput_mbps_pred"
+    REQUIRED_FEATURES = {_SAMPLE_FEATURES!r}
+    OUTPUT_FIELD = "dl_bler_pred"
 
     def __init__(self):
         self._model = LinearRegression()
@@ -63,7 +65,7 @@ class RebuiltThroughput(DTComponent):
     def evaluate(self, features, targets):
         preds = self.predict(features)
         rmse = float(((preds - targets) ** 2).mean() ** 0.5)
-        return {"rmse": rmse}
+        return {{"rmse": rmse}}
 
     def save(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,9 +78,9 @@ class RebuiltThroughput(DTComponent):
 
 BROKEN_SOURCE = """
 from src.dt_models.base import DTComponent
-class RebuiltThroughput(DTComponent):
-    COMPONENT_NAME = "throughput"
-    OUTPUT_FIELD = "throughput_mbps_pred"
+class RebuiltDlBler(DTComponent):
+    COMPONENT_NAME = "dl_bler"
+    OUTPUT_FIELD = "dl_bler_pred"
     def __init__(self):
         raise RuntimeError("intentionally broken")
     @property
@@ -97,7 +99,7 @@ class _FakeLLMClient:
 
     def __init__(self, responses=None, source_map=None, raise_on_call: Exception | None = None):
         self._responses = list(responses) if responses is not None else None
-        self._source_map = source_map  # {attempt_number: source_code}, all use class RebuiltThroughput
+        self._source_map = source_map  # {attempt_number: source_code}, all use class RebuiltDlBler
         self._raise_on_call = raise_on_call
         self.calls: list[str] = []
 
@@ -108,7 +110,7 @@ class _FakeLLMClient:
         if self._responses is not None:
             return self._responses[len(self.calls) - 1]
         source = self._source_map[len(self.calls)]
-        return schema(class_name="RebuiltThroughput", source_code=source, reasoning=f"attempt {len(self.calls)}")
+        return schema(class_name="RebuiltDlBler", source_code=source, reasoning=f"attempt {len(self.calls)}")
 
 
 class _FakeRagKb:
@@ -122,15 +124,17 @@ class _FakeRagKb:
         return self._chunks
 
 
-def _clean_record(ue_id: str, cell_id: str, timestamp: datetime, **overrides) -> CleanTelemetryRecord:
+def _clean_record(session_id: int, cell_id: int, ts_1s: datetime, **overrides) -> CleanTelemetryRecord:
+    features = {col: float(np.random.uniform(0, 1)) for col in ALL_FEATURES}
+    targets = {
+        "dl_throughput": float(np.random.uniform(1, 50)), "ul_throughput": float(np.random.uniform(0, 10)),
+        "dl_rlc_delay": float(np.random.uniform(0.1, 20)), "dl_prb": float(np.random.uniform(1, 90)),
+        "ul_prb": float(np.random.uniform(1, 20)), "dl_bler": float(np.random.uniform(0, 0.3)),
+        "ul_bler": float(np.random.uniform(0, 0.2)),
+    }
     base = dict(
-        timestamp=timestamp, ue_id=ue_id, cell_id=cell_id,
-        throughput_mbps=float(np.random.uniform(5, 50)), offered_load_mbps=float(np.random.uniform(5, 60)),
-        latency_ms=float(np.random.uniform(1, 20)), jitter_ms=float(np.random.uniform(0, 2)),
-        packet_loss_pct=float(np.random.uniform(0, 5)), prb_utilization_pct=float(np.random.uniform(10, 90)),
-        sinr_db=float(np.random.uniform(0, 30)), rsrp_dbm=float(np.random.uniform(-120, -60)),
-        rsrq_db=float(np.random.uniform(-15, -5)), ue_count=int(np.random.randint(1, 10)),
-        ue_speed_mps=float(np.random.uniform(0, 15)), source="MOCK", quality=RecordQuality(),
+        run_id=1, cell_id=cell_id, session_id=session_id, ue_id=session_id, slice_id=1,
+        ts_1s=ts_1s, features=features, targets=targets, source="MOCK", quality=RecordQuality(),
     )
     base.update(overrides)
     return CleanTelemetryRecord(**base)
@@ -145,20 +149,20 @@ def _build_store(tmp_path: Path, n_rows: int = 300, hours_back_span: float = 2.0
     records = []
     for i in range(n_rows):
         ts = now - timedelta(hours=hours_back_span * (1 - i / max(n_rows - 1, 1)))
-        records.append(_clean_record(f"ue-{i % 10}", f"cell-{i % 2}", ts))
+        records.append(_clean_record(i % 10 + 1, i % 2 + 1, ts))
     store.append_history(records)
     return store
 
 
-def _bootstrap_registry(tmp_path: Path, store: D1Store) -> tuple[ModelRegistry, ThroughputModel]:
+def _bootstrap_registry(tmp_path: Path, store: D1Store) -> tuple[ModelRegistry, DlBlerModel]:
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     history = store.get_history()
-    model = ThroughputModel.from_settings(SETTINGS)
-    model.train(history[list(REQUIRED_FEATURES)], history["throughput_mbps"])
+    model = DlBlerModel.from_settings(SETTINGS)
+    model.train(history[list(REQUIRED_FEATURES)], history["dl_bler"])
     registry.register_version(
         component_instance=model, adaptation_type="bootstrap", parent_version_id=None,
         training_window={"n_rows": len(history)}, evaluation_window={"n_rows": 0},
-        evaluation_metrics=model.evaluate(history[list(REQUIRED_FEATURES)], history["throughput_mbps"]),
+        evaluation_metrics=model.evaluate(history[list(REQUIRED_FEATURES)], history["dl_bler"]),
         status="production",
     )
     return registry, model
@@ -178,7 +182,7 @@ def test_regenerate_raises_without_a_production_version(tmp_path):
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     agent = _agent(tmp_path, store, registry, _FakeLLMClient(source_map={1: VALID_SOURCE}))
     with pytest.raises(RegenerationError, match="no production version"):
-        agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps")
+        agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler")
 
 
 def test_regenerate_raises_when_window_has_too_few_rows(tmp_path):
@@ -186,7 +190,7 @@ def test_regenerate_raises_when_window_has_too_few_rows(tmp_path):
     registry, _ = _bootstrap_registry(tmp_path, store)
     agent = _agent(tmp_path, store, registry, _FakeLLMClient(source_map={1: VALID_SOURCE}))
     with pytest.raises(RegenerationError, match="need >="):
-        agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=1e-9)
+        agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=1e-9)
 
 
 def test_successful_regeneration_registers_a_candidate(tmp_path):
@@ -195,14 +199,14 @@ def test_successful_regeneration_registers_a_candidate(tmp_path):
     llm = _FakeLLMClient(source_map={1: VALID_SOURCE})
     agent = _agent(tmp_path, store, registry, llm)
 
-    result = agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+    result = agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
     assert result.attempts == 1
     assert result.version.status == "candidate"
     assert result.version.adaptation_type == "regenerate"
-    assert result.version.model_class == "RebuiltThroughput"
-    assert result.version.parent_version_id == "throughput-v1"
-    assert result.version.feature_schema == ("offered_load_mbps", "prb_utilization_pct", "sinr_db")
+    assert result.version.model_class == "RebuiltDlBler"
+    assert result.version.parent_version_id == "dl_bler-v1"
+    assert result.version.feature_schema == _SAMPLE_FEATURES
     assert result.version.source_path is not None
     source_file = (tmp_path / "models" / result.version.source_path)
     assert source_file.exists()
@@ -215,10 +219,10 @@ def test_production_version_is_never_touched_by_regeneration(tmp_path):
     registry, _ = _bootstrap_registry(tmp_path, store)
     agent = _agent(tmp_path, store, registry, _FakeLLMClient(source_map={1: VALID_SOURCE}))
 
-    agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+    agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
-    current = registry.get_current_version("throughput")
-    assert current.version_id == "throughput-v1"
+    current = registry.get_current_version("dl_bler")
+    assert current.version_id == "dl_bler-v1"
     assert current.adaptation_type == "bootstrap"
 
 
@@ -228,7 +232,7 @@ def test_regenerate_never_writes_to_d1(tmp_path):
     agent = _agent(tmp_path, store, registry, _FakeLLMClient(source_map={1: VALID_SOURCE}))
 
     before_rows = len(store.get_history())
-    agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+    agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
     after_rows = len(store.get_history())
 
     assert before_rows == after_rows
@@ -240,7 +244,7 @@ def test_self_correction_retries_after_sandbox_rejection(tmp_path):
     llm = _FakeLLMClient(source_map={1: BROKEN_SOURCE, 2: VALID_SOURCE})
     agent = _agent(tmp_path, store, registry, llm)
 
-    result = agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+    result = agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
     assert result.attempts == 2
     assert len(llm.calls) == 2
@@ -255,10 +259,10 @@ def test_exhausting_max_attempts_raises_and_registers_nothing(tmp_path):
     agent = _agent(tmp_path, store, registry, llm)
 
     with pytest.raises(RegenerationError, match="no accepted candidate"):
-        agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+        agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
     assert len(llm.calls) == SETTINGS.adaptation.regeneration.max_llm_iterations
-    assert len(registry.list_versions("throughput")) == 1  # only the bootstrap version, no candidate
+    assert len(registry.list_versions("dl_bler")) == 1  # only the bootstrap version, no candidate
 
 
 def test_llm_transport_failure_is_wrapped_as_regeneration_error(tmp_path):
@@ -268,9 +272,9 @@ def test_llm_transport_failure_is_wrapped_as_regeneration_error(tmp_path):
     agent = _agent(tmp_path, store, registry, llm)
 
     with pytest.raises(RegenerationError, match="LLM code generation failed"):
-        agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+        agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
-    assert len(registry.list_versions("throughput")) == 1
+    assert len(registry.list_versions("dl_bler")) == 1
 
 
 def test_fidelity_before_after_none_without_prior_history(tmp_path):
@@ -279,7 +283,7 @@ def test_fidelity_before_after_none_without_prior_history(tmp_path):
     evaluator = FidelityEvaluator(SETTINGS.fidelity)  # fresh, no prior points
     agent = _agent(tmp_path, store, registry, _FakeLLMClient(source_map={1: VALID_SOURCE}), fidelity_evaluator=evaluator)
 
-    result = agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+    result = agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
     assert result.fidelity_before is None
     assert result.fidelity_after is None
@@ -290,13 +294,13 @@ def test_fidelity_before_after_real_values_when_evaluator_prewarmed(tmp_path):
     registry, bootstrap_model = _bootstrap_registry(tmp_path, store)
     evaluator = FidelityEvaluator(SETTINGS.fidelity)
     history = store.get_history()
-    y_true = history["throughput_mbps"]
+    y_true = history["dl_bler"]
     y_pred = bootstrap_model.predict(history[list(REQUIRED_FEATURES)])
     for _ in range(SETTINGS.fidelity.min_history_for_normalization + 1):
-        evaluator.evaluate("throughput", y_true, y_pred, update_window=True)
+        evaluator.evaluate("dl_bler", y_true, y_pred, update_window=True)
 
     agent = _agent(tmp_path, store, registry, _FakeLLMClient(source_map={1: VALID_SOURCE}), fidelity_evaluator=evaluator)
-    result = agent.regenerate(lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48)
+    result = agent.regenerate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48)
 
     assert result.fidelity_before is not None
     assert result.fidelity_after is not None
@@ -309,12 +313,12 @@ def test_prompt_includes_current_source_and_drift_context(tmp_path):
     agent = _agent(tmp_path, store, registry, llm)
 
     agent.regenerate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48,
         drift_context="decision agent selected regenerate due to severity 0.87",
     )
 
     prompt = llm.calls[0]
-    assert "class ThroughputModel" in prompt  # current production source code included
+    assert "class DlBlerModel" in prompt  # current production source code included
     assert "severity 0.87" in prompt
     assert "not available" in prompt  # no rag_knowledge_base supplied -> honestly reported, never faked
 
@@ -332,7 +336,7 @@ def test_rag_context_is_retrieved_and_reaches_the_prompt(tmp_path):
     rag_kb = _FakeRagKb([chunk])
 
     agent.regenerate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48,
         rag_knowledge_base=rag_kb,
     )
 
@@ -349,7 +353,7 @@ def test_no_rag_knowledge_base_reports_not_available_and_never_crashes(tmp_path)
     agent = _agent(tmp_path, store, registry, llm)
 
     result = agent.regenerate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48,
         rag_knowledge_base=None,
     )
 
@@ -366,7 +370,7 @@ def test_unavailable_rag_knowledge_base_degrades_honestly(tmp_path):
     rag_kb.is_available = False
 
     agent.regenerate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48,
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48,
         rag_knowledge_base=rag_kb,
     )
 

@@ -38,16 +38,19 @@ logger = logging.getLogger(__name__)
 # fixed, well-dimensioned feature list the old rl_env.py used for the same purpose, prompt.md
 # §18's "kept well-dimensioned" — but summarized as plain human-readable numbers for an LLM
 # prompt here, not a normalized ML observation vector, since there is no fixed-size input space
-# to fill anymore).
+# to fill anymore). OAI migration (prompt2.md): the 7 raw KPI targets themselves — radio-level
+# BLER (not end-to-end packet loss), RAN queueing delay (not end-to-end latency), per-second PRB
+# usage, per-second throughput — plus the controller's requested PRB ratio and UE/slice load.
 NETWORK_STATE_FEATURES: tuple[str, ...] = (
-    "throughput_mbps",
-    "offered_load_mbps",
-    "latency_ms",
-    "jitter_ms",
-    "packet_loss_pct",
-    "prb_utilization_pct",
-    "sinr_db",
-    "ue_speed_mps",
+    "dl_throughput",
+    "ul_throughput",
+    "dl_rlc_delay",
+    "dl_prb",
+    "ul_prb",
+    "dl_bler",
+    "ul_bler",
+    "requested_prb_ratio_lag1",
+    "ue_count_cell_lag1",
 )
 
 _NETWORK_STATE_RECENT_ROWS = 200  # bounded window — never dump unbounded raw telemetry into the prompt (prompt.md §18)
@@ -91,7 +94,7 @@ def summarize_network_state(history: pd.DataFrame, recent_rows: int = _NETWORK_S
     present = [c for c in NETWORK_STATE_FEATURES if c in history.columns]
     if not present:
         return {}
-    recent = history.sort_values("timestamp", kind="stable").tail(recent_rows)
+    recent = history.sort_values("ts_1s", kind="stable").tail(recent_rows)
     means = recent[present].mean(numeric_only=True)
     return {col: float(means[col]) for col in present if pd.notna(means[col])}
 

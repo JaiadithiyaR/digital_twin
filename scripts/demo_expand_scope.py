@@ -100,7 +100,7 @@ def main() -> int:
         history_retention_rows=settings.storage.history_retention_rows,
     )
     mock_config = settings.telemetry.mock.model_copy(
-        update={"num_ues": 25, "num_cells": 4, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"num_sessions": 25, "missing_feature_rate": 0.0}
     )
     preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
     sync_config = settings.synchronization.model_copy(update={"batch_size": 100})

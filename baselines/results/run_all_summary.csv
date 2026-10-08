@@ -1,0 +1,4 @@
+mode,seed,cycles,run_ids,n_triggers,n_adaptations,n_accepted,n_rejected,n_decisions,n_fallbacks,fallback_rate,invalid,incomplete_reason,mean_unified_fidelity,total_duration_seconds,budget_spent_usd,out_dir
+full_system,1,15,[8],14,13,2,11,14,0,0.0,False,,0.7994578346411896,306.97333566199995,0.0177613,/home/harie06/dt_adaptation/baselines/results/full_system/seed_1
+full_system,2,15,[8],15,13,1,12,15,0,0.0,False,,0.6385617559060609,329.3513422950009,0.019101399999999998,/home/harie06/dt_adaptation/baselines/results/full_system/seed_2
+full_system,3,15,[8],15,12,1,11,15,0,0.0,False,,0.7903814701561485,523.0521954949995,0.019200900000000003,/home/harie06/dt_adaptation/baselines/results/full_system/seed_3

@@ -35,10 +35,7 @@ def bootstrap_history(tmp_path_factory) -> pd.DataFrame:
     )
     mock_config = settings.telemetry.mock.model_copy(
         update={
-            "num_ues": 25,
-            "num_cells": 4,
-            "missing_field_rate": 0.0,  # bootstrap data should be clean; imputation is Module 2's concern
-            "out_of_range_rate": 0.0,
+            "num_sessions": 25, "missing_feature_rate": 0.0,
         }
     )
     source = MockTelemetrySource(mock_config, max_records=1200, realtime=False)
@@ -55,6 +52,6 @@ def bootstrap_history(tmp_path_factory) -> pd.DataFrame:
 
 def time_split(history: pd.DataFrame, train_fraction: float = 0.8) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Time-ordered train/held-out split — avoids any leakage between the two sets."""
-    ordered = history.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    ordered = history.sort_values("ts_1s", kind="stable").reset_index(drop=True)
     split_at = int(len(ordered) * train_fraction)
     return ordered.iloc[:split_at], ordered.iloc[split_at:]

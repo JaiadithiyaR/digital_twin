@@ -41,15 +41,31 @@ data/demo_recalibration/
 data/demo_regeneration/
 data/demo_expand_scope/
 
+# scripts/run_oai_e2e_smoke.py's own dedicated storage subtree (prompt2.md Step 7's required
+# smoke test) — same rationale as the demo_* dirs above and the retired e2e_ns3_demo subtree.
+data/e2e_oai_smoke/
+
 # Candidate sandbox workspaces
 sandbox_workspaces/
 /tmp_candidates/
 
-# Vendored ns-3-dev + contrib/nr (5G-LENA) source trees are an external build
-# dependency fetched by scripts/setup_ns3.sh (pinned tags recorded in ns3_sim/README.md),
-# not project-authored code — excluded the same way a compiler toolchain would be.
-# Our own scenario source lives directly under ns3_sim/ and IS tracked.
-ns3_sim/ns-3-dev/
+# RETIRED (OAI migration, prompt2.md): NS-3/5G-LENA is no longer part of the runtime — see
+# archive/ns3_sim/README.md. Vendored ns-3-dev + contrib/nr (5G-LENA) source trees were an
+# external build dependency fetched by the retired scripts/setup_ns3.sh, not project-authored
+# code — excluded the same way a compiler toolchain would be. Kept gitignored under archive/ for
+# historical reference only; never built or run as part of this project's runtime anymore.
+archive/ns3_sim/ns-3-dev/
+
+# OAI replay export data (read-only, outside the repo at /home/harie06/oai_db/) is never copied
+# into git. Processed model-ready tables derived from it are regenerable, local-only artifacts.
+data/processed/
+
+# Safety net: raw OAI export CSVs must never enter git even if a copy ends up inside the repo
+# root by accident (e.g. a manual download/extract into the wrong directory) — the real,
+# authoritative read-only export lives OUTSIDE this repo at config.data.oai_root
+# (/home/harie06/oai_db/data/rankpi_kpi/). See the user-facing note about an apparent duplicate
+# found at ./rankpi_kpi/ during the OAI migration's final review.
+/rankpi_kpi/
 
 # Logs
 *.log

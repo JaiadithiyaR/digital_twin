@@ -39,7 +39,7 @@ def _config(**overrides) -> FidelityConfig:
 
 def test_first_evaluation_is_insufficient_history():
     evaluator = FidelityEvaluator(_config(min_history_for_normalization=1))
-    result = evaluator.evaluate("throughput", [0.0, 0.0], [1.0, 1.0])
+    result = evaluator.evaluate("dl_throughput", [0.0, 0.0], [1.0, 1.0])
     assert result.status == "insufficient_history"
     assert result.fidelity_score is None
     assert result.normalized_metrics is None
@@ -47,7 +47,7 @@ def test_first_evaluation_is_insufficient_history():
 
 def test_insufficient_history_still_returns_raw_and_squared_metrics():
     evaluator = FidelityEvaluator(_config(min_history_for_normalization=5))
-    result = evaluator.evaluate("throughput", [0.0, 0.0], [1.0, 1.0])
+    result = evaluator.evaluate("dl_throughput", [0.0, 0.0], [1.0, 1.0])
     assert result.raw_metrics["rmse"] == pytest.approx(1.0)
     assert result.squared_metrics["rmse"] == pytest.approx(1.0)
 
@@ -180,9 +180,9 @@ def test_raises_on_invalid_input_not_silently_swallowed():
 
 def test_different_components_have_independent_rolling_windows():
     evaluator = FidelityEvaluator(_config(min_history_for_normalization=1))
-    evaluator.evaluate("throughput", [0.0, 0.0], [1.0, 1.0])
-    result = evaluator.evaluate("latency", [0.0, 0.0], [5.0, 5.0])
-    # "latency" has zero prior history of its own, independent of "throughput"'s.
+    evaluator.evaluate("dl_throughput", [0.0, 0.0], [1.0, 1.0])
+    result = evaluator.evaluate("dl_rlc_delay", [0.0, 0.0], [5.0, 5.0])
+    # "dl_rlc_delay" has zero prior history of its own, independent of "dl_throughput"'s.
     assert result.status == "insufficient_history"
 
 
@@ -192,38 +192,38 @@ def test_different_components_have_independent_rolling_windows():
 def test_unified_score_hand_computed_equal_weighting():
     evaluator = FidelityEvaluator(_config(unified_weights=None, unified_min_components=2))
     # equal weighting (unified_weights=None) -> plain mean of the defined scores
-    result = evaluator.compute_unified_score({"throughput": 0.8, "latency": 0.4, "jitter": None})
+    result = evaluator.compute_unified_score({"dl_throughput": 0.8, "dl_rlc_delay": 0.4, "ul_bler": None})
 
     assert result.status == "ok"
     assert result.n_components_defined == 2
     assert result.unified_score == pytest.approx((0.8 + 0.4) / 2)
-    assert result.worst_component == "latency"  # argmin over the DEFINED scores
-    assert result.component_scores == {"throughput": 0.8, "latency": 0.4}
+    assert result.worst_component == "dl_rlc_delay"  # argmin over the DEFINED scores
+    assert result.component_scores == {"dl_throughput": 0.8, "dl_rlc_delay": 0.4}
 
 
 def test_unified_score_hand_computed_weighted():
     evaluator = FidelityEvaluator(
-        _config(unified_weights={"throughput": 3.0, "latency": 1.0}, unified_min_components=2)
+        _config(unified_weights={"dl_throughput": 3.0, "dl_rlc_delay": 1.0}, unified_min_components=2)
     )
-    result = evaluator.compute_unified_score({"throughput": 0.9, "latency": 0.1})
+    result = evaluator.compute_unified_score({"dl_throughput": 0.9, "dl_rlc_delay": 0.1})
 
     # (3.0*0.9 + 1.0*0.1) / (3.0 + 1.0) = 2.8/4.0 = 0.7
     assert result.unified_score == pytest.approx(0.7)
-    assert result.worst_component == "latency"
+    assert result.worst_component == "dl_rlc_delay"
 
 
 def test_unified_score_none_components_excluded_not_treated_as_zero():
     evaluator = FidelityEvaluator(_config(unified_min_components=2))
-    result = evaluator.compute_unified_score({"throughput": 1.0, "latency": None, "jitter": 0.5})
+    result = evaluator.compute_unified_score({"dl_throughput": 1.0, "dl_rlc_delay": None, "ul_bler": 0.5})
 
-    # If None were treated as 0 the mean would be 0.5; it must instead ignore "latency" entirely.
+    # If None were treated as 0 the mean would be 0.5; it must instead ignore "dl_rlc_delay" entirely.
     assert result.unified_score == pytest.approx((1.0 + 0.5) / 2)
     assert result.n_components_defined == 2
 
 
 def test_unified_score_insufficient_history_when_too_few_components_defined():
     evaluator = FidelityEvaluator(_config(unified_min_components=3))
-    result = evaluator.compute_unified_score({"throughput": 0.8, "latency": None, "jitter": None})
+    result = evaluator.compute_unified_score({"dl_throughput": 0.8, "dl_rlc_delay": None, "ul_bler": None})
 
     assert result.status == "insufficient_history"
     assert result.unified_score is None
@@ -236,7 +236,7 @@ def test_unified_score_insufficient_history_when_too_few_components_defined():
 def _scores(unified_target: float) -> dict[str, float | None]:
     """Two components at the same value -> unified score (equal weighting) == that value exactly,
     keeping these trigger tests' arithmetic hand-verifiable."""
-    return {"throughput": unified_target, "latency": unified_target}
+    return {"dl_throughput": unified_target, "dl_rlc_delay": unified_target}
 
 
 def test_trigger_does_not_fire_on_a_single_below_threshold_cycle():
@@ -251,7 +251,7 @@ def test_trigger_fires_exactly_at_min_consecutive_evaluations():
     trigger = evaluator.check_fidelity_trigger(_scores(0.2))  # 3 -> fires
     assert trigger is not None
     assert trigger.trigger_type == "fidelity_degradation"
-    assert trigger.component in ("throughput", "latency")
+    assert trigger.component in ("dl_throughput", "dl_rlc_delay")
     # severity = clip((threshold - unified)/threshold, 0, 1) = (0.5-0.2)/0.5 = 0.6
     assert trigger.severity == pytest.approx(0.6)
 
@@ -281,7 +281,7 @@ def test_trigger_never_fires_from_insufficient_history_and_resets_counter():
     )
     assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1 below-threshold cycle
     # A cycle with too few defined components can't be evaluated at all -> must reset, not fire.
-    assert evaluator.check_fidelity_trigger({"throughput": 0.2, "latency": None}) is None
+    assert evaluator.check_fidelity_trigger({"dl_throughput": 0.2, "dl_rlc_delay": None}) is None
     # Counter was reset, so one more below-threshold cycle must NOT fire (would need 2 fresh ones).
     assert evaluator.check_fidelity_trigger(_scores(0.2)) is None
 
@@ -296,6 +296,6 @@ def test_trigger_severity_is_clipped_to_zero_one():
 
 def test_trigger_component_is_the_worst_scoring_one():
     evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=1))
-    trigger = evaluator.check_fidelity_trigger({"throughput": 0.3, "latency": 0.1, "jitter": 0.9})
+    trigger = evaluator.check_fidelity_trigger({"dl_throughput": 0.3, "dl_rlc_delay": 0.1, "ul_bler": 0.9})
     assert trigger is not None
-    assert trigger.component == "latency"  # argmin, matches compute_unified_score's own worst_component
+    assert trigger.component == "dl_rlc_delay"  # argmin, matches compute_unified_score's own worst_component

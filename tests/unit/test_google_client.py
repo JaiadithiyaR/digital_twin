@@ -54,7 +54,9 @@ def _fake_response(text: str, *, model: str = "gemini-2.5-flash", finish_reason:
         text=text,
         model_version=model,
         candidates=[SimpleNamespace(finish_reason=SimpleNamespace(value=finish_reason))],
-        usage_metadata=SimpleNamespace(prompt_token_count=12, candidates_token_count=7),
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=12, candidates_token_count=7, cached_content_token_count=0, thoughts_token_count=0
+        ),
     )
 
 
@@ -212,6 +214,21 @@ def test_complete_retries_on_transient_transport_exception(monkeypatch):
     # hypothetical, so this client must classify these as retryable too.
     client = _client(max_retries=1)
     fake = _patch_transport(client, [httpx.ConnectError("connection refused"), _fake_response("ok")])
+    monkeypatch.setattr(client, "_sleep", lambda s: None)
+
+    response = client.complete("say hello")
+
+    assert response.text == "ok"
+    assert len(fake.calls) == 2
+
+
+def test_complete_retries_on_remote_protocol_error(monkeypatch):
+    # "Server disconnected without sending a response" — a real transient network hiccup
+    # observed mid-run during baseline validation (not in the SDK's own _HTTPX_TRANSIENT_EXC
+    # tuple either) that previously propagated uncaught straight through complete_structured_safe,
+    # crashing the whole run instead of retrying. Must be classified retryable like ConnectError.
+    client = _client(max_retries=1)
+    fake = _patch_transport(client, [httpx.RemoteProtocolError("Server disconnected without sending a response."), _fake_response("ok")])
     monkeypatch.setattr(client, "_sleep", lambda s: None)
 
     response = client.complete("say hello")
@@ -425,6 +442,152 @@ def test_from_settings_raises_clearly_when_no_real_key_configured():
     placeholder_secrets = Secrets(google_api_key=None)
     with pytest.raises(RuntimeError, match="GOOGLE_API_KEY"):
         GoogleClient.from_settings(SETTINGS, placeholder_secrets)
+
+
+# --- phase13 §3.7: service tier ----------------------------------------------------------------
+
+
+def test_every_call_sends_the_configured_service_tier():
+    client = _client()
+    fake = _patch_transport(client, [_fake_response("ok")])
+    client.complete("hello")
+    assert fake.calls[0]["config"].service_tier == genai_types.ServiceTier.STANDARD
+
+
+def test_flex_service_tier_is_sent_when_configured():
+    client = _client(service_tier="flex")
+    fake = _patch_transport(client, [_fake_response("ok")])
+    client.complete("hello")
+    assert fake.calls[0]["config"].service_tier == genai_types.ServiceTier.FLEX
+
+
+# --- phase13 §3.3: explicit context caching -----------------------------------------------------
+
+
+class _FakeCachedContent:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeCaches:
+    """Stands in for the real `client.caches` resource (verified present on the installed SDK —
+    see google_client.py's module docstring) — never a real network call."""
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+        self.deleted: list[str] = []
+        self._next_name = "cachedContents/fake-1"
+
+    def create(self, *, model: str, config: Any) -> _FakeCachedContent:
+        self.created.append({"model": model, "config": config})
+        return _FakeCachedContent(self._next_name)
+
+    def delete(self, *, name: str) -> None:
+        self.deleted.append(name)
+
+
+def _patch_caches(client: GoogleClient) -> _FakeCaches:
+    fake = _FakeCaches()
+    client._client._caches = fake  # noqa: SLF001 - same pattern _patch_transport already uses for ._models
+    return fake
+
+
+def test_start_cache_creates_a_real_cache_and_stores_its_name():
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"min_cacheable_chars": 10}))
+    fake_caches = _patch_caches(client)
+    ok = client.start_cache("run1", "a long enough static prefix " * 50, system_instruction="sys")
+    assert ok is True
+    assert len(fake_caches.created) == 1
+    assert fake_caches.created[0]["config"].system_instruction == "sys"
+
+
+def test_start_cache_skipped_when_below_min_cacheable_chars():
+    client = _client()
+    fake_caches = _patch_caches(client)
+    ok = client.start_cache("run1", "too short")
+    assert ok is False
+    assert fake_caches.created == []
+
+
+def test_start_cache_skipped_when_caching_disabled_in_config():
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"enabled": False, "min_cacheable_chars": 10}))
+    fake_caches = _patch_caches(client)
+    ok = client.start_cache("run1", "a long enough static prefix " * 50)
+    assert ok is False
+    assert fake_caches.created == []
+
+
+def test_start_cache_failure_degrades_gracefully_never_raises():
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"min_cacheable_chars": 10}))
+    fake_caches = _patch_caches(client)
+
+    def _raise(**kwargs):
+        raise RuntimeError("simulated: prefix below Gemini's own real token minimum")
+
+    fake_caches.create = _raise
+    ok = client.start_cache("run1", "a long enough static prefix " * 50)
+    assert ok is False  # logged, never raised — a caching failure must never block the real call
+
+
+def test_end_cache_deletes_a_real_cache():
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"min_cacheable_chars": 10}))
+    fake_caches = _patch_caches(client)
+    client.start_cache("run1", "a long enough static prefix " * 50)
+    client.end_cache("run1")
+    assert fake_caches.deleted == ["cachedContents/fake-1"]
+
+
+def test_end_cache_on_a_never_started_key_is_a_harmless_noop():
+    client = _client()
+    fake_caches = _patch_caches(client)
+    client.end_cache("never-started")  # must not raise
+    assert fake_caches.deleted == []
+
+
+def test_end_all_caches_deletes_every_cache_this_client_created():
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"min_cacheable_chars": 10}))
+    fake_caches = _patch_caches(client)
+    client.start_cache("a", "a long enough static prefix " * 50)
+    client.start_cache("b", "a different, also long enough static prefix " * 50)
+    client.end_all_caches()
+    assert len(fake_caches.deleted) == 2
+
+
+def test_complete_with_cache_key_attaches_cached_content_and_omits_system_instruction():
+    """The assembled model input must be byte-identical to the uncached version — Gemini
+    prepends the cached content server-side, so the client must NOT also send `system_instruction`
+    inline (that would duplicate it) and must NOT re-send the static prefix as part of the
+    prompt (the caller is responsible for passing only the dynamic part when using a cache)."""
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"min_cacheable_chars": 10}))
+    _patch_caches(client)
+    client.start_cache("run1", "STATIC PREFIX TEXT", system_instruction="SYSTEM TEXT")
+
+    fake = _patch_transport(client, [_fake_response("ok")])
+    client.complete("DYNAMIC PART ONLY", system="SYSTEM TEXT", cache_key="run1")
+
+    sent_config = fake.calls[0]["config"]
+    assert sent_config.cached_content == "cachedContents/fake-1"
+    assert sent_config.system_instruction is None  # never duplicated — it's already in the cache
+    assert fake.calls[0]["contents"] == "DYNAMIC PART ONLY"  # never re-includes the static prefix
+
+
+def test_complete_without_a_started_cache_falls_back_to_a_plain_uncached_call():
+    client = _client()
+    fake = _patch_transport(client, [_fake_response("ok")])
+    client.complete("hello", system="sys", cache_key="never-started")  # no cache exists for this key
+    sent_config = fake.calls[0]["config"]
+    assert sent_config.cached_content is None
+    assert sent_config.system_instruction == "sys"  # falls back to sending it inline, as normal
+
+
+def test_complete_structured_also_supports_cache_key():
+    client = _client(caching=SETTINGS.llm.caching.model_copy(update={"min_cacheable_chars": 10}))
+    _patch_caches(client)
+    client.start_cache("run1", "STATIC PREFIX TEXT")
+    fake = _patch_transport(client, [_fake_response(json.dumps({"message": "hi", "count": 1}))])
+
+    client.complete_structured("dynamic part", Echo, cache_key="run1")
+    assert fake.calls[0]["config"].cached_content == "cachedContents/fake-1"
 
 
 # --- optional live smoke test ---------------------------------------------------------------

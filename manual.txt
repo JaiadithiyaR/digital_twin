@@ -8,39 +8,55 @@ a clean checkout, using the exact commands that were run and confirmed working
 on this machine. For architecture/design background, see CLAUDE.md. For a
 plain-English explanation of every individual file, see docs/MANUAL.md.
 
+OAI MIGRATION NOTICE: this system no longer uses NS-3/5G-LENA simulated
+telemetry. Module 1 (the network data source) is now a config-driven,
+read-only replay of real exported OAI (OpenAirInterface) RAN KPI data from an
+actual 5G testbed, streamed back in genuine timestamp order. The 5 old
+NS-3-era prediction components (throughput/latency/packet_loss/
+prb_utilization/jitter) have been replaced by 7 real OAI KPI components
+(dl_bler, ul_bler, dl_prb, ul_prb, dl_throughput, ul_throughput,
+dl_rlc_delay). The retired NS-3 code and its pre-migration runtime state are
+kept, never deleted, under archive/ns3_sim/ for historical reference only —
+see archive/ns3_sim/README.md.
+
 Everything below was actually executed end to end (not just written down) on
-2026-09-28, including a REAL NS-3/5G-LENA simulation run, immediately before
-this manual was written:
-  - 487 unit tests: PASSED
-  - 44 integration tests: PASSED
-  - ns3_sim/validate_e2e.py (real NS-3 producer sanity check): PASSED
-  - scripts/run_e2e_demo.py (real NS-3 full adaptation cycle): PASSED
+2026-10-06, immediately before this manual was rewritten:
+  - 473 unit tests: PASSED
+  - 33 integration tests: PASSED (506 passed total, 0 failures)
   - scripts/run_orchestrator_demo.py (mock-telemetry full adaptation cycle): PASSED
-  - scripts/visualize_metrics.py (real-data plotting): PASSED
+  - scripts/run_oai_e2e_smoke.py (real OAI run-8 replay, forced-trigger full
+    adaptation cycle): PASSED
+  - scripts/visualize_metrics.py (real-data plotting, 7 OAI components): PASSED
 
 --------------------------------------------------------------------------------
  0. WHAT THIS SYSTEM IS
 --------------------------------------------------------------------------------
 
-A modular AI-driven self-adaptive Digital Twin (DT) of a 5G network. It:
-  - Ingests telemetry from a real NS-3 / 5G-LENA simulation (or a mock
-    generator when NS-3 isn't built/running).
+A modular AI-driven self-adaptive Digital Twin (DT) of a real 5G RAN. It:
+  - Ingests real, exported OAI RAN KPI telemetry, replayed in genuine
+    timestamp order (or an OAI-schema-shaped mock generator for unit tests).
   - Keeps a continuously synchronized DT state (D1).
-  - Runs 5 dependency-aware prediction models (throughput, latency, packet
-    loss, PRB utilization, jitter).
-  - Computes a deterministic per-component and system-wide fidelity score.
+  - Runs 7 dependency-aware prediction models for real RAN KPIs: downlink/
+    uplink BLER, downlink/uplink PRBs used, downlink/uplink throughput, and
+    downlink RLC delay.
+  - Computes a deterministic per-component and system-wide fidelity score
+    (the ORIGINAL RMSE/MAE/Wasserstein/MK-MMD formula, unchanged by the
+    component-set migration).
   - Detects two kinds of adaptation triggers (external drift events, and an
     internal fidelity-degradation trigger) and reacts using a Google
     Gemini-backed Decision & Root-Cause Analysis Agent.
   - Executes one of three adaptation strategies (recalibrate / regenerate /
     expand_scope) inside an isolated sandbox, deterministically verifies the
     result, and only then promotes it to production (with rollback safety).
-  - Records every adaptation event in an auditable lifecycle log and generates
-    a human-readable maintenance report.
+  - Records every adaptation event in an auditable lifecycle log (including
+    which telemetry source/run ids/replay speed were in effect) and
+    generates a human-readable maintenance report.
   - Runs continuously and autonomously (no human in the loop).
 
 19 modules + 2 extra components (D1 state store, D2 RAG knowledge base) + 6
-agents. Full detail in CLAUDE.md.
+agents. Full detail in CLAUDE.md. OAI-specific design (real KPI catalog, the
+causality-correct lagged-feature replay design, the 7-component dependency
+graph) is in docs/oai_twin.md.
 
 --------------------------------------------------------------------------------
  1. PREREQUISITES
@@ -49,12 +65,16 @@ agents. Full detail in CLAUDE.md.
   - Linux (this was built/tested on WSL2 / Ubuntu-family).
   - Python 3.10+ (this machine uses 3.14.4).
   - git.
-  - A C++ toolchain if you want to build the real NS-3 simulator:
-      g++ >= 11.1, cmake >= 3.25, ninja (or make), python3 >= 3.10.
+  - Read access to a real exported OAI RAN KPI dataset (CSV export under a
+    directory matching config.data.oai_root — default
+    /home/harie06/oai_db/data/rankpi_kpi/ — read-only, never copied into
+    this repo). Only needed to (re)build data/processed/oai/ (section 3b);
+    the pytest suite and mock-telemetry runs do not need it.
   - (Optional but recommended) a real Google AI Studio API key, so the LLM
     agents genuinely run instead of falling back to their deterministic
     default. Get one free at https://aistudio.google.com/apikey
-  - No GPU is required anywhere in this system.
+  - No GPU is required anywhere in this system. No C++ toolchain is required
+    anymore (the NS-3 build step is retired — see archive/ns3_sim/README.md).
 
 --------------------------------------------------------------------------------
  2. ONE-TIME SETUP
@@ -86,29 +106,30 @@ agents. Full detail in CLAUDE.md.
   # Expected final line: "[setup] OK — environment ready"
 
 All tunable parameters live in config/settings.yaml. You should not need to
-edit it for a normal run.
+edit it for a normal run, except config.data.oai_root if your real OAI export
+lives at a different path than the checked-in default.
 
 --------------------------------------------------------------------------------
  3. RUN THE AUTOMATED TEST SUITE
 --------------------------------------------------------------------------------
 
-  # Fast, isolated unit tests (~2-3 minutes)
+  # Fast, isolated unit tests (~2 minutes)
   .venv/bin/python -m pytest tests/unit -q
 
   # Slower integration tests: real pipelines, real (small) model training,
-  # real sandboxed subprocess runs (~3 minutes)
+  # real sandboxed subprocess runs (several minutes)
   .venv/bin/python -m pytest tests/integration -q
 
-  # Everything in one call (~530 tests total). On a memory-constrained
-  # machine (under ~8GB RAM) prefer running unit and integration SEPARATELY
-  # as above — a single combined run can occasionally be OOM-killed by the
-  # OS on small machines; this is an environment limit, not a test failure.
+  # Everything in one call. On a memory-constrained machine (under ~8GB RAM)
+  # prefer running unit and integration SEPARATELY as above — a single
+  # combined run can occasionally be OOM-killed by the OS on small machines;
+  # this is an environment limit, not a test failure.
   .venv/bin/python -m pytest tests -q
 
-Expected result (confirmed on this machine, 2026-09-28):
-  487 passed   (tests/unit)
-   44 passed   (tests/integration)
-  531 passed total, 0 failures
+Expected result (confirmed on this machine, 2026-10-06):
+  473 passed   (tests/unit)
+   33 passed   (tests/integration)
+  506 passed total, 0 failures
 
 Notes:
   - No test hits a real network/API by default. The Google AI client's
@@ -119,48 +140,34 @@ Notes:
     quota (20 requests/day/model) has already been exhausted by other real
     calls made the same day — e.g. by running the demo scripts below several
     times. That is deliberate test design, not a bug: this project never
-    hides a genuine failure behind a skip.
+    hides a genuine failure behind a skip. The same genuine daily-quota
+    exhaustion was observed while validating this exact revision (see
+    section 7's notice).
   - tests/e2e is currently empty ("no tests ran") — this is expected; the
     real end-to-end validation for this project lives in the standalone
-    scripts in section 6 below (they need a running subprocess/simulator
-    and real wall-clock time, so they are not part of the pytest suite).
+    scripts in section 6 below (they need real wall-clock replay time, so
+    they are not part of the pytest suite).
 
 --------------------------------------------------------------------------------
- 4. BUILD THE REAL NS-3 / 5G-LENA SIMULATOR (for real telemetry, not mock)
+ 3b. BUILD THE REAL OAI DATASET (one-time, before first bootstrap/replay)
 --------------------------------------------------------------------------------
 
-Only needed if you want REAL simulated 5G network telemetry (--mode live,
-scripts/run_e2e_demo.py). Everything else (--mode demo, all pytest tests, RAG
-ingestion) uses a mock telemetry generator and does not need this section.
+Reads the real, read-only OAI export and writes the model-ready,
+config-driven train/val/test splits (config.data.splits — run ids, never
+hardcoded in code) this system actually trains and replays from. Never
+copies the raw CSVs into this repo.
 
-  # Idempotent: clones ns-3.48 + 5G-LENA "nr" v5.1 into ns3_sim/ns-3-dev,
-  # configures, and builds. First run takes a while (2000+ build targets);
-  # re-runs are fast (no-op if already built).
-  ./scripts/setup_ns3.sh
+  python scripts/build_oai_dataset.py
 
-Some of the nr module's own and this project's telemetry-exporter C++
-dependencies need root to install (only required once, per machine):
-
-  sudo apt-get update
-  sudo apt-get install -y sqlite3 libsqlite3-dev libeigen3-dev \
-      libzmq3-dev libzmq5 cppzmq-dev
-
-(scripts/setup_ns3.sh will warn, not fail, if these are missing — they are
-only required for the real NS-3 telemetry path, never for tests or mock mode.)
-
-Sanity-check the real compiled simulator + real ZeroMQ telemetry transport in
-isolation (no orchestrator, no LLM, no adaptation logic involved — just "does
-the simulator emit valid telemetry"):
-
-  python ns3_sim/validate_e2e.py
-
-Expected result (confirmed on this machine): a message ending in
-  "OK: 162 real SOURCE=NS3_5G_LENA records ... -> 162 clean records,
-   0 quarantined, 6 feature windows built."
-runtime ~15-20 seconds.
+Produces data/processed/oai/{train,val,test}.parquet, feature_schema.json,
+and data_report.md (NaN/reset/gap counts per split, and an honest note on any
+excluded incomplete run — e.g. this project's own run 10 was excluded for
+exactly this reason; see docs/oai_twin.md section 1). Run this once before
+the first real bootstrap/replay — --mode demo/live and every script in
+sections 6-8 read these files.
 
 --------------------------------------------------------------------------------
- 5. (OPTIONAL) BUILD THE RAG KNOWLEDGE BASE
+ 4. (OPTIONAL) BUILD THE RAG KNOWLEDGE BASE
 --------------------------------------------------------------------------------
 
 The Decision & Root-Cause Analysis Agent and several other LLM-backed agents
@@ -173,24 +180,24 @@ If you skip this step, the system still runs correctly: every RAG lookup
 degrades to an honest "not available" context (logged, never fabricated).
 
 --------------------------------------------------------------------------------
- 6. RUN THE FULL SYSTEM
+ 5. RUN THE FULL SYSTEM
 --------------------------------------------------------------------------------
 
 The real continuous loop lives in src/main.py (ContinuousOrchestrator). It
 runs: telemetry -> preprocessing -> continuous D1 synchronization ->
-dependency-aware DT prediction -> fidelity evaluation -> drift/fidelity
-trigger -> Decision & Root-Cause Analysis Agent -> recalibrate / regenerate /
-expand_scope -> sandboxed candidate -> deterministic verification -> hot-swap
-promotion or rejection -> lifecycle record -> repeat, forever, without
-stopping (Ctrl-C to stop).
+dependency-aware DT prediction (the 7 OAI KPI components) -> fidelity
+evaluation -> drift/fidelity trigger -> Decision & Root-Cause Analysis Agent
+-> recalibrate / regenerate / expand_scope -> sandboxed candidate ->
+deterministic verification -> hot-swap promotion or rejection -> lifecycle
+record -> repeat, forever, without stopping (Ctrl-C to stop).
 
-  # Mock telemetry, runs forever
+  # OAI-schema-shaped mock telemetry (SOURCE=MOCK), runs forever — no real
+  # OAI export needed, fast iteration / unit-test-style use
   python -m src.main --mode demo
 
-  # REAL NS-3 telemetry over ZeroMQ (needs section 4 built, AND a separately
-  # running NS-3 process publishing on the configured endpoint — for a
-  # fully automated version of this, use scripts/run_e2e_demo.py instead,
-  # which launches the NS-3 subprocess for you — see section 7)
+  # REAL OAI RAN KPI replay (SOURCE=OAI_RAN_REPLAY), streamed from
+  # data/processed/oai/ (section 3b) in genuine timestamp order at
+  # config.telemetry.replay.speed
   python -m src.main --mode live
 
   # Bounded run for testing/demo purposes — stop after exactly one full
@@ -201,47 +208,60 @@ It writes to this repo's real configured storage paths (see section 9) and
 logs structured JSON to logs/digital_twin.log as well as stdout.
 
 --------------------------------------------------------------------------------
- 7. RUN THE TWO PERMANENT, REPO-TRACKED FULL END-TO-END DEMO SCRIPTS
+ 6. RUN THE PERMANENT, REPO-TRACKED FULL END-TO-END DEMO/VALIDATION SCRIPTS
 --------------------------------------------------------------------------------
 
-Both are unattended, single-adaptation-cycle runs. Each prints its own real
+Each is an unattended, single-adaptation-cycle run. Each prints its own real
 observed results (LLM/RAG availability, live telemetry accumulation, real
-fidelity values, a concrete before/after proof that telemetry never stopped
-during the adaptation cycle, the full lifecycle record, and the maintenance
-report path) and exits non-zero if anything genuinely did not happen as
-claimed — there is no fabricated "success" message anywhere in this system.
+fidelity values, the full lifecycle record, and the maintenance report path)
+and exits non-zero if anything genuinely did not happen as claimed — there is
+no fabricated "success" message anywhere in this system.
 
-  # Mock telemetry — fast (~1-2 minutes), good for quick iteration
+  # Mock telemetry — fast (~1-2 minutes), good for quick iteration, no real
+  # OAI export needed
   python scripts/run_orchestrator_demo.py
 
-  # REAL NS-3 telemetry — launches the compiled NS-3 binary from section 4
-  # as a subprocess, connects the orchestrator to it over real ZeroMQ, and
-  # runs one full real adaptation cycle end to end (~2-4 minutes). Writes to
-  # its OWN dedicated storage path (data/e2e_ns3_demo/) so it can never be
-  # confused with a mock-telemetry run's data.
-  python scripts/run_e2e_demo.py 2>&1 | tee logs/e2e_demo_output.log
+  # REAL OAI run-8 (TEST split) replay at speed=0, with a forced adaptation
+  # trigger for determinism (prompt2.md Step 7's required smoke test) — runs
+  # real predictions -> real fidelity -> forced trigger -> real decision ->
+  # real sandboxed adaptation -> real verification -> real lifecycle record.
+  # Writes to its OWN dedicated storage path (data/e2e_oai_smoke/), never the
+  # shared --mode demo/live paths.
+  python scripts/run_oai_e2e_smoke.py
 
-Confirmed real result on this machine, 2026-09-28 (real NS-3 run):
-  - Real compiled ns3.48-nr_5g_telemetry_sim binary launched, published 1170
-    real telemetry records over 20 simulated seconds.
-  - Real bootstrap training of all 5 DT models (throughput, packet_loss,
-    latency, prb_utilization, jitter).
-  - Real live D1 history accumulated purely from NS-3 telemetry (source
-    label confirmed NS3_5G_LENA only).
-  - Real external drift event fired on component "jitter" (severity 0.1846).
-  - Real Google Gemini API call succeeded: Decision & Root-Cause Analysis
-    Agent selected strategy "recalibrate" with confidence 0.88, and produced
-    a root-cause explanation genuinely grounded in that run's real PRB
-    utilization / UE speed figures (not generic template text).
-  - Real recalibration candidate (jitter-v2) trained and independently
-    re-verified by the deterministic verification gate: REJECTed (the
-    candidate was genuinely worse than production) — production
-    (jitter-v1) correctly, automatically preserved untouched.
-  - Telemetry ingestion proven NEVER blocked: records_synced grew from 380
-    to 720 strictly DURING the ~90-second adaptation cycle.
-  - Full lifecycle record and human-readable maintenance report written.
-  - Script printed: "[e2e] OK — one full real cycle completed unattended
-    over REAL NS-3 telemetry; telemetry never stopped synchronizing."
+  # All four baseline experiment modes (static / periodic_retrain /
+  # rule_based / full) over the same real OAI TEST-split replay, for
+  # comparing the real LLM-driven decision agent against simple
+  # deterministic baselines
+  python scripts/run_baselines.py --mode full
+
+Confirmed real result on this machine, 2026-10-06 (scripts/run_oai_e2e_smoke.py):
+  - Real OAI run 8 (TEST split) replayed at speed=0 into D1 — source label
+    confirmed OAI_RAN_REPLAY, run_id confirmed {8} only.
+  - Real DT prediction + fidelity cycles run against all 7 real components
+    past min_history_for_normalization.
+  - A forced external_drift trigger (component=dl_bler, severity=0.42) was
+    enqueued and deterministically processed (a naturally-fired fidelity
+    trigger from the warm-up cycles was drained first so the forced one is
+    guaranteed to be the one this run's single adaptation cycle handles).
+  - Google Gemini free-tier daily quota (20 requests/day/model) was already
+    exhausted by earlier validation calls the same day — every LLM call
+    genuinely received a real 429 RESOURCE_EXHAUSTED response and correctly,
+    automatically fell back to the deterministic default strategy
+    (recalibrate, confidence=0.0), logged as a WARNING every time. This is
+    expected, documented, fail-safe behavior (see the quota note in
+    section 7 of docs/HOW_TO_RUN.md's style precedent), not a bug.
+  - Real recalibration candidate (dl_bler-v2) trained and independently
+    re-verified by the deterministic verification gate: REJECTed (fidelity
+    0.8233 -> 0.8199, short of the required +delta) — production (dl_bler-v1)
+    correctly, automatically preserved untouched.
+  - Full lifecycle record confirmed: telemetry_source=OAI_RAN_REPLAY,
+    replayed_run_ids=[8], replay_speed=0.0, affected_component=dl_bler,
+    trigger_severity=0.4200 (matches the forced trigger exactly, proving the
+    drain step worked), verification_result=REJECT, final_status=rejected.
+  - Script printed: "[smoke] OK — real OAI run-8 replay -> real predictions
+    -> real fidelity -> forced trigger -> decision (recalibrate) -> adaptation
+    -> verification (REJECT) -> lifecycle record."
   - Exit code: 0.
 
 (A REJECT outcome from the verification gate is just as valid and complete a
@@ -249,7 +269,7 @@ demonstration as an ACCEPT would be — it proves the deterministic safety gate
 is genuinely protecting production, not rubber-stamping every candidate.)
 
 Note on the Google AI free tier: the free tier is capped at 20
-requests/day/model. Running both demo scripts back-to-back (each makes
+requests/day/model. Running several demo scripts back-to-back (each makes
 several real LLM calls: decision, verification explanation, maintenance
 report) can exhaust that daily quota partway through — when it does, every
 subsequent LLM call correctly, automatically falls back to the deterministic
@@ -259,24 +279,31 @@ be waited out by the built-in retry/backoff, so the system correctly gives up
 retrying and degrades instead of hanging.
 
 --------------------------------------------------------------------------------
- 8. VISUALIZE RESULTS FROM A PREVIOUS RUN
+ 7. VISUALIZE RESULTS FROM A PREVIOUS RUN
 --------------------------------------------------------------------------------
 
 scripts/visualize_metrics.py is read-only — it never runs the pipeline
 itself, only reads and plots whatever real data the system has already
-produced. Run it any time after section 6 or 7 above:
+produced. Run it any time after section 5 or 6 above:
 
   # Production storage (config/settings.yaml's own paths -- what
   # "python -m src.main" writes)
   python scripts/visualize_metrics.py
 
-  # The dedicated real-NS-3 end-to-end demo's own storage subtree
-  python scripts/visualize_metrics.py --preset e2e_ns3_demo \
-      --output-dir data/e2e_ns3_demo/plots
+  # An explicit alternate storage path (e.g. a demo script's own dedicated
+  # subtree)
+  python scripts/visualize_metrics.py \
+      --history-path data/e2e_oai_smoke/d1_history.parquet \
+      --models-dir data/e2e_oai_smoke/models \
+      --lifecycle-path data/e2e_oai_smoke/lifecycle_records.jsonl
 
 Produces, under --output-dir (default data/artifacts/plots/):
-  telemetry_core_metrics.png        throughput/latency/jitter/loss/PRB over time
-  telemetry_radio_conditions.png    SINR/RSRP/RSRQ/UE-speed over time
+  telemetry_core_metrics.png        the 7 OAI KPI targets over time (dl/ul
+                                     throughput, dl_rlc_delay, dl/ul_prb,
+                                     dl/ul_bler)
+  telemetry_radio_conditions.png    lagged RAN-condition/control features
+                                     (PUSCH SNR, wideband CQI, DL current
+                                     TBS, requested PRB ratio)
   telemetry_original.csv            raw telemetry export
   telemetry_predicted.csv           DT-predicted telemetry export
   fidelity_over_time.png            composite FidelityScore + raw RMSE per component
@@ -287,30 +314,40 @@ Produces, under --output-dir (default data/artifacts/plots/):
                                          green=ACCEPT / red=REJECT
   lifecycle_outcomes.csv
 
+Confirmed run on this machine, 2026-10-06, against real production data (12000
+rows replayed from real OAI run 8): all 7 components plotted correctly, PNGs
+and CSVs produced, fidelity scores recomputed for all 7 components (e.g.
+ul_bler latest_score=0.9180, dl_rlc_delay latest_score=0.8273).
+
 --------------------------------------------------------------------------------
- 9. WHERE OUTPUT FILES END UP
+ 8. WHERE OUTPUT FILES END UP
 --------------------------------------------------------------------------------
 
+data/processed/oai/{train,val,test}.parquet   model-ready OAI splits (section 3b)
 data/artifacts/d1_current_state.parquet    live DT current state (D1)
 data/artifacts/d1_history.parquet          live DT history
 data/artifacts/d1_quarantine.parquet       rejected telemetry (never silently dropped)
-data/models/<component>/<version>.joblib   versioned DT model artifacts
+data/models/<component>/<version>.joblib   versioned DT model artifacts (7 OAI components)
 data/models/registry_index.json            versioned model registry
-data/artifacts/lifecycle_records.jsonl     every adaptation event ever recorded
+data/artifacts/lifecycle_records.jsonl     every adaptation event ever recorded (now also
+                                            carries telemetry_source/replayed_run_ids/replay_speed)
 data/artifacts/maintenance_reports/*.md    human-readable report per adaptation event
 rag_data/chroma/                           RAG vector store
 logs/digital_twin.log                      structured JSON log of every run
-logs/ns3_e2e_demo_stdout.log               real NS-3 simulator's own console output
-data/e2e_ns3_demo/                         the real-NS-3 demo script's OWN dedicated
-                                            D1/registry/lifecycle state (section 7) --
+data/e2e_oai_smoke/                        scripts/run_oai_e2e_smoke.py's OWN dedicated
+                                            D1/registry/lifecycle state (section 6) --
                                             kept separate so it is never confused
-                                            with a mock-telemetry run's data
+                                            with a production run
+archive/ns3_sim/                           retired NS-3/5G-LENA code + pre-migration
+                                            runtime state -- historical reference only
 
-All of the above are gitignored: they are real, regenerable runtime state,
-not source code, and are safe to delete and regenerate at any time.
+All of the above (except archive/ns3_sim/, which is tracked source + a
+gitignored vendored build subtree) are gitignored: they are real, regenerable
+runtime state, not source code, and are safe to delete and regenerate at any
+time.
 
 --------------------------------------------------------------------------------
- 10. TROUBLESHOOTING
+ 9. TROUBLESHOOTING
 --------------------------------------------------------------------------------
 
 "pip install" fails on a system package
@@ -320,9 +357,11 @@ not source code, and are safe to delete and regenerate at any time.
 scripts/setup.py reports MISSING DEPENDENCIES
   -> Run: pip install -r requirements.txt   (safe to re-run, idempotent)
 
-scripts/setup_ns3.sh warns about missing packages
-  -> Run the sudo apt-get command in section 4 once, then re-run
-     scripts/setup_ns3.sh.
+scripts/build_oai_dataset.py fails with a missing-file / incomplete-run error
+  -> Check config.data.oai_root points at your real OAI export, and that
+     config.data.splits only names runs with COMPLETE exports (no .partial
+     files) -- see docs/oai_twin.md section 1 for how this project's own
+     run 10 was excluded for exactly this reason.
 
 pytest gets OOM-killed on "pytest tests -q"
   -> Run tests/unit and tests/integration as two separate invocations
@@ -332,7 +371,7 @@ pytest gets OOM-killed on "pytest tests -q"
 
 test_live_api_smoke_if_key_configured fails with a 429 / quota error
   -> Expected if you already exhausted that day's 20-requests/day free-tier
-     quota (e.g. by running the demo scripts in section 7 several times the
+     quota (e.g. by running the demo scripts in section 6 several times the
      same day). It will pass again once the quota resets (daily, UTC). This
      is a genuine, honest failure by design -- not something to silence.
 
@@ -344,17 +383,15 @@ Decision agent / LLM calls always fall back to the deterministic default
      response -- but you will not see genuine LLM-grounded root-cause
      analysis until a real, working key with quota available is configured.
 
-scripts/run_e2e_demo.py: "FAIL: <binary> not built"
-  -> Run ./scripts/setup_ns3.sh first (section 4).
-
 Want a completely clean slate (fresh D1/model/lifecycle state)?
-  -> Everything under data/ and logs/ is gitignored, regenerable runtime
-     state. It is safe to delete data/artifacts/, data/models/,
-     data/e2e_ns3_demo/, and logs/ and re-run any of the commands above --
-     they will regenerate everything from scratch.
+  -> Everything under data/ (except data/processed/oai/, which is rebuilt
+     from the real OAI export, not from live state) and logs/ is gitignored,
+     regenerable runtime state. It is safe to delete data/artifacts/,
+     data/models/, data/e2e_oai_smoke/, and logs/ and re-run any of the
+     commands above -- they will regenerate everything from scratch.
 
 --------------------------------------------------------------------------------
- 11. QUICK REFERENCE -- MINIMUM COMMANDS TO GO FROM CLEAN CHECKOUT TO A
+ 10. QUICK REFERENCE -- MINIMUM COMMANDS TO GO FROM CLEAN CHECKOUT TO A
      VALIDATED, RUNNING SYSTEM
 --------------------------------------------------------------------------------
 
@@ -368,16 +405,14 @@ Want a completely clean slate (fresh D1/model/lifecycle state)?
   .venv/bin/python -m pytest tests/unit -q
   .venv/bin/python -m pytest tests/integration -q
 
-  ./scripts/setup_ns3.sh                   # only if you want real NS-3 telemetry
-  python ns3_sim/validate_e2e.py           # only if you built NS-3 above
-
+  python scripts/build_oai_dataset.py      # needs read access to the real OAI export
   python scripts/ingest_rag.py             # optional, improves LLM grounding
 
   python scripts/run_orchestrator_demo.py  # fast, mock-telemetry full cycle
-  python scripts/run_e2e_demo.py           # real NS-3 full cycle (needs setup_ns3.sh)
+  python scripts/run_oai_e2e_smoke.py      # real OAI run-8 replay full cycle
 
   python -m src.main --mode demo           # run forever, mock telemetry
-  python -m src.main --mode live           # run forever, real NS-3 telemetry
+  python -m src.main --mode live           # run forever, real OAI RAN KPI replay
 
 ================================================================================
  END OF MANUAL

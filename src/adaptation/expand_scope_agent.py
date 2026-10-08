@@ -104,7 +104,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _NON_FEATURE_COLUMNS = frozenset(
-    {"ue_id", "cell_id", "timestamp", "source", "quality_missing_fields", "quality_imputed_fields", "quality_out_of_range_fields"}
+    {"run_id", "cell_id", "session_id", "ue_id", "slice_id", "ts_1s", "source", "quality_missing_fields"}
 )
 
 
@@ -159,6 +159,7 @@ class ExpandScopeAgent:
         llm_client: "GoogleClient",
         sandbox_executor: SandboxExecutor,
         fidelity_evaluator: FidelityEvaluator | None = None,
+        static_prefix: str | None = None,
     ) -> None:
         self._settings = settings
         self._d1_store = d1_store
@@ -167,6 +168,13 @@ class ExpandScopeAgent:
         self._llm_client = llm_client
         self._sandbox = sandbox_executor
         self._fidelity_evaluator = fidelity_evaluator
+        # Phase 13 §3.4: both the design-proposal and implementation-generation calls here are
+        # "codegen" role — same reasoning as RegenerationAgent's own entry.
+        self._effort = settings.llm.effort_by_role.codegen
+        # Phase 13 §3.3 — see RegenerationAgent's own entry for the full rationale: `None` for
+        # every non-baseline caller, which keeps this agent's prompt content byte-for-byte
+        # unchanged from before this feature existed.
+        self._static_prefix = static_prefix
 
     @classmethod
     def from_settings(
@@ -176,6 +184,7 @@ class ExpandScopeAgent:
         model_registry: ModelRegistry,
         dt_model_registry: "DTModelRegistry",
         llm_client: "GoogleClient",
+        static_prefix: str | None = None,
     ) -> "ExpandScopeAgent":
         return cls(
             settings,
@@ -185,6 +194,7 @@ class ExpandScopeAgent:
             llm_client,
             sandbox_executor=SandboxExecutor.from_settings(settings),
             fidelity_evaluator=FidelityEvaluator(settings.fidelity),
+            static_prefix=static_prefix,
         )
 
     # --- main entrypoint ---------------------------------------------------------------------
@@ -200,6 +210,7 @@ class ExpandScopeAgent:
         held_out_fraction: float = 0.2,
         expand_scope_context: str | None = None,
         rag_knowledge_base: "RagKnowledgeBase | None" = None,
+        cache_key: str | None = None,
     ) -> ExpandScopeResult:
         """Design, implement, sandbox, and register a genuinely NEW DT component.
 
@@ -235,7 +246,7 @@ class ExpandScopeAgent:
         context = self._build_context(existing_components, example_instance, history, expand_scope_context, rag_knowledge_base)
 
         # 6-9. propose + validate a NEW component design (self-correcting on validation failure)
-        design, design_attempts = self._propose_and_validate_design(context, existing_component_names, window_df)
+        design, design_attempts = self._propose_and_validate_design(context, existing_component_names, window_df, cache_key=cache_key)
 
         try:
             window_df = with_dependency_ground_truth(window_df, design.dependencies, dependency_output_fields)
@@ -253,7 +264,7 @@ class ExpandScopeAgent:
         previous_attempt: dict[str, Any] | None = None
         implementation_attempt = 0
         for implementation_attempt in range(1, max_attempts + 1):
-            generated = self._generate_implementation(design, output_field, context, previous_attempt)
+            generated = self._generate_implementation(design, output_field, context, previous_attempt, cache_key=cache_key)
             sandbox_result = self._sandbox.run_candidate(
                 source_code=generated.source_code,
                 class_name=generated.class_name,
@@ -311,8 +322,8 @@ class ExpandScopeAgent:
         # 14. register the candidate — a component name that has NEVER existed before, proving
         # ModelRegistry's registration is genuinely dynamic (prompt.md §27).
         training_window = {
-            "start": iso(train_df["timestamp"].min()) if len(train_df) else None,
-            "end": iso(train_df["timestamp"].max()) if len(train_df) else None,
+            "start": iso(train_df["ts_1s"].min()) if len(train_df) else None,
+            "end": iso(train_df["ts_1s"].max()) if len(train_df) else None,
             "n_rows": len(train_df),
             "window_hours": resolved_window_hours,
             "provenance": "d1_history",
@@ -320,8 +331,8 @@ class ExpandScopeAgent:
             "cell_id": cell_id,
         }
         evaluation_window = {
-            "start": iso(held_out_df["timestamp"].min()) if len(held_out_df) else None,
-            "end": iso(held_out_df["timestamp"].max()) if len(held_out_df) else None,
+            "start": iso(held_out_df["ts_1s"].min()) if len(held_out_df) else None,
+            "end": iso(held_out_df["ts_1s"].max()) if len(held_out_df) else None,
             "n_rows": len(held_out_df),
             "provenance": "d1_history",
         }
@@ -442,7 +453,12 @@ class ExpandScopeAgent:
     # --- steps 6-9: design proposal + deterministic validation --------------------------------
 
     def _propose_and_validate_design(
-        self, context: dict[str, Any], existing_component_names: set[str], window_df: pd.DataFrame
+        self,
+        context: dict[str, Any],
+        existing_component_names: set[str],
+        window_df: pd.DataFrame,
+        *,
+        cache_key: str | None = None,
     ) -> tuple[_ProposedComponentDesign, int]:
         max_attempts = self._settings.adaptation.expand_scope.max_llm_iterations
         available_columns = set(window_df.columns) - _NON_FEATURE_COLUMNS
@@ -450,7 +466,7 @@ class ExpandScopeAgent:
         last_error: str | None = None
 
         for attempt in range(1, max_attempts + 1):
-            design = self._propose_design(context, existing_component_names, previous_attempt)
+            design = self._propose_design(context, existing_component_names, previous_attempt, cache_key=cache_key)
             error = self._validate_design(design, existing_component_names, available_columns)
             if error is None:
                 return design, attempt
@@ -483,7 +499,12 @@ class ExpandScopeAgent:
         return None
 
     def _propose_design(
-        self, context: dict[str, Any], existing_component_names: set[str], previous_attempt: dict[str, Any] | None
+        self,
+        context: dict[str, Any],
+        existing_component_names: set[str],
+        previous_attempt: dict[str, Any] | None,
+        *,
+        cache_key: str | None = None,
     ) -> _ProposedComponentDesign:
         prompt = (
             "You are proposing a genuinely NEW prediction component for a 5G network digital "
@@ -511,8 +532,9 @@ class ExpandScopeAgent:
                 f"\n\nYour previous proposal ({previous_attempt['design'].component_name!r}) was "
                 f"REJECTED: {previous_attempt['error']}\nPropose a corrected design."
             )
+        sent_prompt = prompt if cache_key is not None else (f"{self._static_prefix}\n\n{prompt}" if self._static_prefix else prompt)
         try:
-            return self._llm_client.complete_structured(prompt, _ProposedComponentDesign)
+            return self._llm_client.complete_structured(sent_prompt, _ProposedComponentDesign, effort=self._effort, cache_key=cache_key)
         except LLMClientError as exc:
             raise ExpandScopeError(f"LLM component-design proposal failed: {exc}") from exc
 
@@ -524,6 +546,8 @@ class ExpandScopeAgent:
         output_field: str,
         context: dict[str, Any],
         previous_attempt: dict[str, Any] | None,
+        *,
+        cache_key: str | None = None,
     ) -> _GeneratedComponentCode:
         interface_contract = (
             "The class MUST subclass `src.dt_models.base.DTComponent` and implement: "
@@ -557,7 +581,8 @@ class ExpandScopeAgent:
                 f"Previous source code:\n```python\n{previous_attempt['source_code']}\n```\n\n"
                 f"Fix the issue and produce a corrected, complete module."
             )
+        sent_prompt = prompt if cache_key is not None else (f"{self._static_prefix}\n\n{prompt}" if self._static_prefix else prompt)
         try:
-            return self._llm_client.complete_structured(prompt, _GeneratedComponentCode)
+            return self._llm_client.complete_structured(sent_prompt, _GeneratedComponentCode, effort=self._effort, cache_key=cache_key)
         except LLMClientError as exc:
             raise ExpandScopeError(f"LLM implementation generation failed: {exc}") from exc

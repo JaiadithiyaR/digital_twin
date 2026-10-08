@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.adaptation.decision_agent import DecisionAgent, DecisionAgentError, DecisionOutput, _build_prompt
+from src.adaptation.decision_agent import _SYSTEM_PROMPT, DecisionAgent, DecisionAgentError, DecisionOutput, _build_prompt
 from src.adaptation.decision_context import DecisionContext, PreviousOutcome
 from src.common.config import load_settings
 from src.fidelity.trigger import AdaptationTrigger
@@ -25,9 +25,9 @@ SETTINGS = load_settings()
 
 def _context(**overrides) -> DecisionContext:
     base = dict(
-        component_fidelity={"throughput": 0.8, "jitter": 0.2},
+        component_fidelity={"dl_throughput": 0.8, "dl_bler": 0.2},
         unified_fidelity_score=0.5,
-        affected_component="jitter",
+        affected_component="dl_bler",
         trigger_type="fidelity_degradation",
         severity=0.6,
         previous_outcome=PreviousOutcome(),
@@ -45,9 +45,11 @@ class _FakeLLMClient:
         self._output = output
         self._raise_on_call = raise_on_call
         self.calls: list[tuple[str, str | None]] = []
+        self.last_cache_key: str | None = None
 
-    def complete_structured(self, prompt, schema, *, system=None, **kwargs):
+    def complete_structured(self, prompt, schema, *, system=None, cache_key=None, **kwargs):
         self.calls.append((prompt, system))
+        self.last_cache_key = cache_key
         if self._raise_on_call is not None:
             raise self._raise_on_call
         assert schema is DecisionOutput
@@ -57,7 +59,7 @@ class _FakeLLMClient:
 def _output(**overrides) -> DecisionOutput:
     base = dict(
         strategy="regenerate",
-        root_cause_analysis="Structural drift detected in jitter predictions.",
+        root_cause_analysis="Structural drift detected in dl_bler predictions.",
         confidence=0.85,
         rationale="Recalibration alone would not fix a structural pipeline mismatch.",
         knowledge_refs=["policies/adaptation_policies.md"],
@@ -76,7 +78,7 @@ def test_prompt_includes_every_required_context_element():
     )
     prompt = _build_prompt(context)
 
-    assert "jitter" in prompt  # affected_component
+    assert "dl_bler" in prompt  # affected_component
     assert "fidelity_degradation" in prompt  # trigger_type
     assert "0.6000" in prompt  # severity
     assert "0.8000" in prompt  # a per-component fidelity value
@@ -95,7 +97,7 @@ def test_prompt_handles_no_previous_attempt_and_no_rag_context_honestly():
 
 
 def test_prompt_never_fabricates_insufficient_history_scores():
-    context = _context(component_fidelity={"throughput": None}, unified_fidelity_score=None)
+    context = _context(component_fidelity={"dl_throughput": None}, unified_fidelity_score=None)
     prompt = _build_prompt(context)
     assert "insufficient_history" in prompt
 
@@ -118,12 +120,12 @@ def test_decide_sends_a_fresh_call_per_trigger_never_caches():
     fake_client = _FakeLLMClient(output=_output())
     agent = DecisionAgent(fake_client, SETTINGS)
 
-    agent.decide(_context(affected_component="throughput"))
-    agent.decide(_context(affected_component="latency"))
+    agent.decide(_context(affected_component="dl_throughput"))
+    agent.decide(_context(affected_component="dl_rlc_delay"))
 
     assert len(fake_client.calls) == 2
-    assert "throughput" in fake_client.calls[0][0]
-    assert "latency" in fake_client.calls[1][0]
+    assert "dl_throughput" in fake_client.calls[0][0]
+    assert "dl_rlc_delay" in fake_client.calls[1][0]
 
 
 def test_decide_raises_on_llm_failure_without_fallback():
@@ -189,3 +191,42 @@ def test_fallback_strategy_is_within_the_fixed_enum():
     # enforced here by construction (DecisionAgentFallbackConfig.default_strategy is itself a
     # Literal["recalibrate","regenerate","expand_scope"] in src/common/config.py).
     assert SETTINGS.decision_agent.fallback.default_strategy in ("recalibrate", "regenerate", "expand_scope")
+
+
+# --- Phase 13 §3.3: shared context-cache prefix support -----------------------------------------
+
+
+def test_static_prefix_none_leaves_prompt_and_system_unchanged():
+    """Default (no static_prefix, no cache_key) path must be byte-for-byte what every existing
+    caller (e.g. src/main.py) already relies on — unchanged by this feature's addition."""
+    fake_client = _FakeLLMClient(output=_output())
+    agent = DecisionAgent(fake_client, SETTINGS)
+    context = _context()
+    agent.decide(context)
+    (sent_prompt, sent_system), = fake_client.calls
+    assert sent_prompt == _build_prompt(context)
+    assert sent_system == _SYSTEM_PROMPT
+    assert fake_client.last_cache_key is None
+
+
+def test_static_prefix_without_cache_key_prepends_prefix_and_drops_system_kwarg():
+    fake_client = _FakeLLMClient(output=_output())
+    agent = DecisionAgent(fake_client, SETTINGS, static_prefix="STATIC PREFIX TEXT")
+    context = _context()
+    agent.decide(context)
+    (sent_prompt, sent_system), = fake_client.calls
+    assert sent_system is None  # never duplicated via the SDK's own system_instruction field
+    assert sent_prompt.startswith("STATIC PREFIX TEXT\n\n")
+    assert _build_prompt(context) in sent_prompt
+
+
+def test_static_prefix_with_active_cache_key_sends_dynamic_part_only():
+    fake_client = _FakeLLMClient(output=_output())
+    agent = DecisionAgent(fake_client, SETTINGS, static_prefix="STATIC PREFIX TEXT")
+    context = _context()
+    agent.decide(context, cache_key="run-1")
+    (sent_prompt, sent_system), = fake_client.calls
+    assert sent_system is None
+    assert "STATIC PREFIX TEXT" not in sent_prompt  # already server-side via the cache
+    assert _build_prompt(context) in sent_prompt
+    assert fake_client.last_cache_key == "run-1"

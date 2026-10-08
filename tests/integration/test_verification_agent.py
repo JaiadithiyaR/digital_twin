@@ -17,7 +17,7 @@ import numpy as np
 from src.adaptation.recalibration_agent import RecalibrationAgent
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import load_settings
-from src.dt_models.throughput import ThroughputModel
+from src.dt_models.dl_bler import DlBlerModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.registry.model_registry import ModelRegistry
 
@@ -43,24 +43,29 @@ class _FakeLLMClient:
 
 def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_implication(bootstrap_history, tmp_path):
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
-    features = list(ThroughputModel.REQUIRED_FEATURES)
+    features = list(DlBlerModel.REQUIRED_FEATURES)
 
     # A deliberately WEAK bootstrap production model — trained on only the earliest 40 rows of
     # real bootstrap history (an intentionally thin/unrepresentative slice) — so that
     # RecalibrationAgent's real retrain on the FULL recent window has real room to genuinely
     # improve on it, mirroring how Module 14's own test already proves recalibration produces a
     # real, better-than-naive candidate.
-    ordered = bootstrap_history.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    # A single session's own early rows (not a global head-cut across all 25 sessions) — the
+    # richer lag(1..5)/rolling(5s,10s) feature set needs several CONSECUTIVE same-session rows
+    # before any lag/rolling column is non-NaN; a cross-session slice can leave zero valid rows.
+    first_session = bootstrap_history["session_id"].iloc[0]
+    one_session = bootstrap_history[bootstrap_history["session_id"] == first_session]
+    ordered = one_session.sort_values("ts_1s", kind="stable").reset_index(drop=True)
     thin_slice = ordered.iloc[:40]
-    weak_production_model = ThroughputModel.from_settings(SETTINGS)
-    weak_production_model.train(thin_slice[features], thin_slice["throughput_mbps"])
+    weak_production_model = DlBlerModel.from_settings(SETTINGS)
+    weak_production_model.train(thin_slice[features], thin_slice["dl_bler"])
     prod_version = registry.register_version(
         component_instance=weak_production_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(thin_slice)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=weak_production_model.evaluate(thin_slice[features], thin_slice["throughput_mbps"]),
+        evaluation_metrics=weak_production_model.evaluate(thin_slice[features], thin_slice["dl_bler"]),
         status="production",
     )
 
@@ -73,7 +78,7 @@ def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_imp
 
     recalibration_agent = RecalibrationAgent(SETTINGS, _FakeD1Store(), registry)
     recalibration_result = recalibration_agent.recalibrate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48, held_out_fraction=0.2
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48, held_out_fraction=0.2
     )
     candidate_version = recalibration_result.version
     assert candidate_version.status == "candidate"
@@ -81,10 +86,10 @@ def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_imp
     # Verification builds its own held-out set (its own evaluation protocol — need not be
     # bit-identical to the agent's internal split; both production and candidate are compared on
     # THIS SAME set, which is exactly what prompt.md §33 requires).
-    ordered_full = bootstrap_history.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    ordered_full = bootstrap_history.sort_values("ts_1s", kind="stable").reset_index(drop=True)
     held_out = ordered_full.iloc[int(len(ordered_full) * 0.8) :]
     eval_features = held_out[features]
-    eval_target = held_out["throughput_mbps"]
+    eval_target = held_out["dl_bler"]
     candidate_preds = recalibration_result.candidate_component.predict(eval_features)
 
     # Pre-warm the normalization reference with the SAME real generative process (genuine
@@ -94,7 +99,7 @@ def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_imp
     rng = np.random.default_rng(999)
     base = eval_target.to_numpy()[:40] if len(eval_target) >= 40 else np.resize(eval_target.to_numpy(), 40)
     for noise_std in (0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0):
-        evaluator.evaluate("throughput", base, base + rng.normal(0.0, noise_std, len(base)), update_window=True)
+        evaluator.evaluate("dl_bler", base, base + rng.normal(0.0, noise_std, len(base)), update_window=True)
 
     llm = _FakeLLMClient()
     verification_agent = VerificationAgent(SETTINGS, registry, evaluator, llm_client=llm)
@@ -103,7 +108,7 @@ def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_imp
         eval_features,
         eval_target,
         candidate_preds,
-        production_component_factory=lambda: ThroughputModel.from_settings(SETTINGS),
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
         drift_context="integration test: real recalibration candidate for 'throughput'",
     )
 
@@ -113,11 +118,11 @@ def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_imp
         expected_accept = result.fidelity_after > result.fidelity_before + SETTINGS.adaptation.verification_delta
         assert (result.decision == "ACCEPT") == expected_accept
     if result.decision == "ACCEPT":
-        assert registry.get_current_version("throughput").version_id == candidate_version.version_id
-        assert registry.get_version("throughput", prod_version.version_id).status == "superseded"
+        assert registry.get_current_version("dl_bler").version_id == candidate_version.version_id
+        assert registry.get_version("dl_bler", prod_version.version_id).status == "superseded"
     else:
-        assert registry.get_current_version("throughput").version_id == prod_version.version_id
-        assert registry.get_version("throughput", candidate_version.version_id).status == "rejected"
+        assert registry.get_current_version("dl_bler").version_id == prod_version.version_id
+        assert registry.get_version("dl_bler", candidate_version.version_id).status == "rejected"
 
     # The LLM's fixed adversarial "REJECT regardless" stance was genuinely used for the
     # explanation text (proving it was consulted)...
@@ -127,4 +132,4 @@ def test_verification_recomputes_real_fidelity_and_matches_the_deterministic_imp
     # ...but never overrode anything: if the real numbers say ACCEPT, the candidate is genuinely
     # production now, in direct contradiction of what the LLM argued for.
     if result.decision == "ACCEPT":
-        assert registry.get_current_version("throughput").version_id == candidate_version.version_id
+        assert registry.get_current_version("dl_bler").version_id == candidate_version.version_id

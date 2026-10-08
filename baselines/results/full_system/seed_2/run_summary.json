@@ -1,0 +1,21 @@
+{
+  "mode":"full_system",
+  "seed":2,
+  "cycles":15,
+  "run_ids":[
+    8
+  ],
+  "n_triggers":15,
+  "n_adaptations":13,
+  "n_accepted":1,
+  "n_rejected":12,
+  "n_decisions":15,
+  "n_fallbacks":0,
+  "fallback_rate":0.0,
+  "invalid":false,
+  "incomplete_reason":null,
+  "mean_unified_fidelity":0.6385617559,
+  "total_duration_seconds":329.351342295,
+  "budget_spent_usd":0.0191014,
+  "out_dir":"\/home\/harie06\/dt_adaptation\/baselines\/results\/full_system\/seed_2"
+}

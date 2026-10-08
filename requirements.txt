@@ -17,9 +17,6 @@ google-genai>=1.0
 # RAG knowledge base
 chromadb>=0.5
 
-# Telemetry transport (Python side; bundles its own libzmq, no system lib required)
-pyzmq>=26.0
-
 # Config / validation / secrets
 pyyaml>=6.0
 pydantic>=2.8

@@ -17,7 +17,7 @@ import time
 from src.adaptation.recalibration_agent import RecalibrationAgent
 from src.common.config import load_settings
 from src.dt_models.d1_model_store import D1Store
-from src.dt_models.throughput import ThroughputModel
+from src.dt_models.dl_bler import DlBlerModel
 from src.registry.model_registry import ModelRegistry
 from src.synchronization.sync import ContinuousSynchronizer
 from src.telemetry.mock_source import MockTelemetrySource
@@ -34,7 +34,7 @@ def _bootstrap(tmp_path):
         history_retention_rows=SETTINGS.storage.history_retention_rows,
     )
     mock_config = SETTINGS.telemetry.mock.model_copy(
-        update={"num_ues": 25, "num_cells": 4, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"num_sessions": 25, "missing_feature_rate": 0.0}
     )
     bootstrap_source = MockTelemetrySource(mock_config, max_records=1200, realtime=False)
     preprocessor = TelemetryPreprocessor(SETTINGS.telemetry.preprocessing)
@@ -44,16 +44,16 @@ def _bootstrap(tmp_path):
 
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     history = store.get_history()
-    features = list(ThroughputModel.REQUIRED_FEATURES)
-    bootstrap_model = ThroughputModel.from_settings(SETTINGS)
-    bootstrap_model.train(history[features], history["throughput_mbps"])
+    features = list(DlBlerModel.REQUIRED_FEATURES)
+    bootstrap_model = DlBlerModel.from_settings(SETTINGS)
+    bootstrap_model.train(history[features], history["dl_bler"])
     registry.register_version(
         component_instance=bootstrap_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(history)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=bootstrap_model.evaluate(history[features], history["throughput_mbps"]),
+        evaluation_metrics=bootstrap_model.evaluate(history[features], history["dl_bler"]),
         status="production",
     )
     return store, registry, preprocessor
@@ -64,13 +64,13 @@ def test_recalibration_produces_a_real_candidate_beating_a_naive_baseline(tmp_pa
     agent = RecalibrationAgent(SETTINGS, store, registry)
 
     result = agent.recalibrate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48, held_out_fraction=0.2
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48, held_out_fraction=0.2
     )
 
-    held_out_target_std = store.get_history()["throughput_mbps"].std()
+    held_out_target_std = store.get_history()["dl_bler"].std()
     assert result.evaluation_metrics["rmse"] < held_out_target_std  # genuinely learned, not noise
     assert result.version.status == "candidate"
-    assert registry.get_current_version("throughput").version_id != result.version.version_id
+    assert registry.get_current_version("dl_bler").version_id != result.version.version_id
 
 
 def test_telemetry_keeps_synchronizing_into_d1_while_recalibration_is_in_progress(tmp_path):
@@ -84,8 +84,7 @@ def test_telemetry_keeps_synchronizing_into_d1_while_recalibration_is_in_progres
     # realtime=True with a short interval so it keeps producing genuinely new records for the
     # entire duration of the test, exactly like the live NS-3/mock feed would in production.
     live_mock_config = SETTINGS.telemetry.mock.model_copy(
-        update={"seed": 999, "num_ues": 10, "num_cells": 2, "emit_interval_seconds": 0.01,
-                "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"seed": 999, "num_sessions": 10, "emit_interval_seconds": 0.01, "missing_feature_rate": 0.0}
     )
     live_source = MockTelemetrySource(live_mock_config, max_records=None, realtime=True)
     live_sync_config = SETTINGS.synchronization.model_copy(update={"batch_size": 10, "batch_timeout_seconds": 0.05})
@@ -99,8 +98,8 @@ def test_telemetry_keeps_synchronizing_into_d1_while_recalibration_is_in_progres
     slow_model_type = "random_forest"
     slow_params = {"n_estimators": 400, "max_depth": 12, "random_state": 42}
 
-    def slow_throughput_factory():
-        model = ThroughputModel.from_settings(SETTINGS)
+    def slow_dl_bler_factory():
+        model = DlBlerModel.from_settings(SETTINGS)
         model._model_type = slow_model_type  # noqa: SLF001 - test-only override, not production code
         from src.dt_models.regressors import build_regressor
 
@@ -121,7 +120,7 @@ def test_telemetry_keeps_synchronizing_into_d1_while_recalibration_is_in_progres
     sampler.start()
 
     recalibration_start = time.monotonic()
-    result = agent.recalibrate(slow_throughput_factory, "throughput_mbps", window_hours=48, held_out_fraction=0.2)
+    result = agent.recalibrate(slow_dl_bler_factory, "dl_bler", window_hours=48, held_out_fraction=0.2)
     recalibration_end = time.monotonic()
 
     stop_sampling.set()

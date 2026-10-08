@@ -87,7 +87,7 @@ def main() -> int:
     print("[demo] building real bootstrap telemetry for the production model (900 records, "
           "15 UEs/2 cells — 'network conditions at initial deployment')...")
     bootstrap_config = settings.telemetry.mock.model_copy(
-        update={"seed": 1, "num_ues": 15, "num_cells": 2, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"seed": 1, "num_sessions": 15, "missing_feature_rate": 0.0}
     )
     bootstrap_store = D1Store(
         current_state_path=DEMO_DIR / "bootstrap_current.parquet",
@@ -124,7 +124,7 @@ def main() -> int:
         history_retention_rows=settings.storage.history_retention_rows,
     )
     live_config = settings.telemetry.mock.model_copy(
-        update={"seed": 2, "num_ues": 35, "num_cells": 5, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"seed": 2, "num_sessions": 35, "missing_feature_rate": 0.0}
     )
     ContinuousSynchronizer(MockTelemetrySource(live_config, max_records=1200, realtime=False), preprocessor,
                             store, sync_config).run()

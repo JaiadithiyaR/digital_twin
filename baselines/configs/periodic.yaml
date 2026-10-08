@@ -1,0 +1,20 @@
+# Baseline mode: periodic_retrain — every component is recalibrated on a trailing window every
+# N prediction+fidelity cycles (one cycle = one replayed second of run 8), regardless of any
+# trigger. No decision agent, no LLM, no sandbox (recalibration never needs one) — see
+# config/settings.yaml's baselines.periodic_retrain for the config-driven interval/component
+# knobs this mode actually reads at runtime (this file only documents/mirrors them for the
+# baselines/ folder's own self-containedness per phase13 §4).
+mode: periodic_retrain
+description: >
+  All 7 components recalibrated every `interval_cycles` cycles on a trailing window of the
+  live-replayed D1 history. External/fidelity triggers are still detected and logged (so
+  comparison.md can report "triggers" uniformly across modes) but never change this mode's own
+  fixed schedule.
+seeds: [1]  # deterministic — no LLM, no randomness beyond the shared drift-event seed
+uses_llm: false
+# Overrides config/settings.yaml's baselines.periodic_retrain.interval_cycles (20) specifically
+# for this demonstration-scale experiment run (baselines.cycles defaults to 15 total) — with the
+# global default, periodic retraining would never fire even once within a 15-cycle run. 5 fires
+# this schedule 3 times (cycles 5/10/15) over a 15-cycle run, enough to show it actually happening.
+interval_cycles: 5
+components: [dl_bler, ul_bler, dl_prb, ul_prb, dl_throughput, ul_throughput, dl_rlc_delay]  # all 7, per phase13 §4

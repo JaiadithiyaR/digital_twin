@@ -12,7 +12,7 @@ import pytest
 
 from src.drift.drift_detector import DriftDetectorInterface
 
-VALID_COMPONENTS = ["throughput", "latency", "packet_loss", "prb_utilization", "jitter"]
+VALID_COMPONENTS = ["dl_bler", "ul_bler", "dl_prb", "ul_prb", "dl_throughput", "ul_throughput", "dl_rlc_delay"]
 SEVERITY_RANGE = (0.0, 1.0)
 
 
@@ -23,7 +23,7 @@ def _detector() -> DriftDetectorInterface:
 def _raw_event(**overrides) -> dict:
     base = dict(
         source="EXTERNAL",
-        component="throughput",
+        component="dl_bler",
         severity=0.7,
         timestamp=1_700_000_000.0,
         metadata={"detector": "partner-x"},
@@ -36,7 +36,7 @@ def test_well_formed_event_is_accepted_and_scope_identified():
     event, quarantined = _detector().process_event(_raw_event())
     assert quarantined is None
     assert event is not None
-    assert event.component == "throughput"
+    assert event.component == "dl_bler"
     assert event.severity == pytest.approx(0.7)
     assert event.source == "EXTERNAL"
 
@@ -167,7 +167,7 @@ def test_process_batch_never_raises_on_a_mixed_batch():
         _raw_event(component="unknown"),
         _raw_event(severity=99.0),
         {"garbage": True},
-        _raw_event(component="latency"),
+        _raw_event(component="ul_prb"),
     ]
     result = _detector().process_batch(raw_events)
     assert result.total_received == 5
@@ -178,9 +178,9 @@ def test_process_batch_never_raises_on_a_mixed_batch():
 def test_process_stream_yields_only_valid_events_and_never_raises():
     class _FlakySource:
         def events(self):
-            yield _raw_event(component="throughput")
+            yield _raw_event(component="dl_bler")
             yield {"garbage": True}
-            yield _raw_event(component="jitter")
+            yield _raw_event(component="dl_throughput")
 
     events = list(_detector().process_stream(_FlakySource()))
-    assert [e.component for e in events] == ["throughput", "jitter"]
+    assert [e.component for e in events] == ["dl_bler", "dl_throughput"]

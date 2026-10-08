@@ -27,7 +27,8 @@ import pandas as pd
 from src.adaptation.decision_agent import DecisionOutput
 from src.adaptation.regeneration_agent import _GeneratedComponentCode
 from src.common.config import load_secrets, load_settings
-from src.dt_models.throughput import ThroughputModel
+from src.data.oai_dataset import ALL_FEATURES
+from src.dt_models.dl_bler import DlBlerModel
 from src.fidelity.trigger import AdaptationTrigger
 from src.llm.google_client import LLMClientError
 from src.main import ContinuousOrchestrator
@@ -37,16 +38,16 @@ SECRETS = load_secrets()
 MIN_HISTORY_ROWS = 220
 ACCUMULATION_TIMEOUT_SECONDS = 60.0
 
-_REBUILT_THROUGHPUT_SOURCE = """
+_REBUILT_DL_BLER_SOURCE = """
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from src.dt_models.base import DTComponent
 
-class RebuiltThroughput(DTComponent):
-    COMPONENT_NAME = "throughput"
+class RebuiltDlBler(DTComponent):
+    COMPONENT_NAME = "dl_bler"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "sinr_db", "rsrp_dbm", "rsrq_db", "ue_count", "ue_speed_mps")
-    OUTPUT_FIELD = "throughput_mbps_pred"
+    REQUIRED_FEATURES = ("pusch_snr_avg_lag1", "wb_cqi_avg_lag1", "dl_curr_tbs_avg_lag1", "bsr_avg_lag1")
+    OUTPUT_FIELD = "dl_bler_pred"
 
     def __init__(self):
         self._model = RandomForestRegressor(n_estimators=150, max_depth=10, random_state=42)
@@ -92,7 +93,7 @@ class _FakeLLMClient:
                 rationale="deterministic test scenario", knowledge_refs=[],
             )
         if schema is _GeneratedComponentCode:
-            return schema(class_name="RebuiltThroughput", source_code=_REBUILT_THROUGHPUT_SOURCE, reasoning="test candidate")
+            return schema(class_name="RebuiltDlBler", source_code=_REBUILT_DL_BLER_SOURCE, reasoning="test candidate")
         raise LLMClientError(f"fake client asked for an unsupported schema: {schema}")
 
     def complete_structured_safe(self, prompt, schema, **kwargs):
@@ -117,7 +118,7 @@ def _fast_orchestrator(tmp_path) -> ContinuousOrchestrator:
             }
         ),
         "telemetry": SETTINGS.telemetry.model_copy(
-            update={"mock": SETTINGS.telemetry.mock.model_copy(update={"emit_interval_seconds": 0.05, "num_ues": 10, "num_cells": 2})}
+            update={"mock": SETTINGS.telemetry.mock.model_copy(update={"emit_interval_seconds": 0.05, "num_sessions": 10, })}
         ),
         "drift": SETTINGS.drift.model_copy(update={"mock": SETTINGS.drift.mock.model_copy(update={"emit_interval_seconds": 5.0})}),
         "lifecycle": SETTINGS.lifecycle.model_copy(
@@ -131,7 +132,7 @@ def _fast_orchestrator(tmp_path) -> ContinuousOrchestrator:
     return orchestrator
 
 
-def _weaken_production_throughput_baseline(orchestrator: ContinuousOrchestrator) -> None:
+def _weaken_production_dl_bler_baseline(orchestrator: ContinuousOrchestrator) -> None:
     """Trains and promotes a deliberately terrible throughput model — 2 degenerate rows, an
     absurd constant target — as the CURRENT production version, both in the versioned
     ModelRegistry and in live serving. This is the same real, established technique CLAUDE.md
@@ -140,14 +141,9 @@ def _weaken_production_throughput_baseline(orchestrator: ContinuousOrchestrator)
     ever scripting the actual accept/reject decision itself — a properly-trained regenerated
     candidate trained on real accumulated live telemetry has genuine, real room to legitimately
     beat this baseline."""
-    weak = ThroughputModel.from_settings(orchestrator._settings)  # noqa: SLF001 - test-only access
-    degenerate = pd.DataFrame(
-        {
-            "offered_load_mbps": [1.0, 1.0], "prb_utilization_pct": [1.0, 1.0], "sinr_db": [0.0, 0.0],
-            "rsrp_dbm": [-100.0, -100.0], "rsrq_db": [-10.0, -10.0], "ue_count": [1, 1], "ue_speed_mps": [0.0, 0.0],
-        }
-    )
-    weak.train(degenerate, pd.Series([500.0, 500.0]))  # nowhere near real throughput values
+    weak = DlBlerModel.from_settings(orchestrator._settings)  # noqa: SLF001 - test-only access
+    degenerate = pd.DataFrame({col: [1.0, 1.0] for col in ALL_FEATURES})
+    weak.train(degenerate, pd.Series([500.0, 500.0]))  # nowhere near real dl_bler values (a 0-1 ratio)
     orchestrator.model_registry.register_version(
         component_instance=weak, adaptation_type="bootstrap", parent_version_id=None,
         training_window={"n_rows": 2}, evaluation_window={"n_rows": 0}, evaluation_metrics={}, status="production",
@@ -157,7 +153,7 @@ def _weaken_production_throughput_baseline(orchestrator: ContinuousOrchestrator)
 
 def test_accepted_regenerate_candidate_hot_swaps_into_live_serving(tmp_path):
     orchestrator = _fast_orchestrator(tmp_path)
-    _weaken_production_throughput_baseline(orchestrator)
+    _weaken_production_dl_bler_baseline(orchestrator)
     orchestrator.llm_client = _FakeLLMClient()  # type: ignore[assignment]
     orchestrator.decision_agent._llm_client = orchestrator.llm_client  # noqa: SLF001 - test wiring
     orchestrator.lifecycle_agent._llm_client = orchestrator.llm_client  # noqa: SLF001 - captured at initialize() time, else it'd keep the real one
@@ -178,7 +174,7 @@ def test_accepted_regenerate_candidate_hot_swaps_into_live_serving(tmp_path):
             orchestrator.run_prediction_and_fidelity_cycle()
             time.sleep(0.05)
 
-        trigger = AdaptationTrigger(component="throughput", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="external_drift")
+        trigger = AdaptationTrigger(component="dl_bler", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="external_drift")
         orchestrator._run_adaptation_cycle(trigger)  # noqa: SLF001 - directly exercising the real cycle
     finally:
         orchestrator.stop()
@@ -194,22 +190,22 @@ def test_accepted_regenerate_candidate_hot_swaps_into_live_serving(tmp_path):
 
     # The real deliverable: live serving now uses the REGENERATED class, not the original one,
     # and NOT via a process restart — this same orchestrator instance, still running.
-    live = orchestrator.dt_model_registry.get("throughput")
-    assert type(live).__name__ == "RebuiltThroughput"
-    assert orchestrator._dynamic_component_classes["throughput"].__name__ == "RebuiltThroughput"  # noqa: SLF001
+    live = orchestrator.dt_model_registry.get("dl_bler")
+    assert type(live).__name__ == "RebuiltDlBler"
+    assert orchestrator._dynamic_component_classes["dl_bler"].__name__ == "RebuiltDlBler"  # noqa: SLF001
 
     # And it genuinely serves predictions through the real orchestrator wiring, not just sitting
     # registered — run_predictions() (what run_prediction_and_fidelity_cycle() itself calls) goes
     # through the swapped-in class.
     features = orchestrator.d1_store.get_history().tail(5)
-    preds = orchestrator.dt_orchestrator.run_predictions(features)["throughput"]
+    preds = orchestrator.dt_orchestrator.run_predictions(features)["dl_bler"]
     assert len(preds) == 5
 
     # A later restart of a FRESH orchestrator process pointed at the SAME storage must resume the
     # regenerated class too — "permanent," not merely alive for this process's lifetime.
     resumed = ContinuousOrchestrator(orchestrator._settings, SECRETS)  # noqa: SLF001
     resumed.initialize()
-    assert type(resumed.dt_model_registry.get("throughput")).__name__ == "RebuiltThroughput"
+    assert type(resumed.dt_model_registry.get("dl_bler")).__name__ == "RebuiltDlBler"
 
 
 def test_rejected_candidate_never_hot_swaps(tmp_path):
@@ -229,7 +225,7 @@ def test_rejected_candidate_never_hot_swaps(tmp_path):
             assert time.monotonic() - wait_start < ACCUMULATION_TIMEOUT_SECONDS, "live D1 history never accumulated enough rows"
             time.sleep(0.1)
 
-        trigger = AdaptationTrigger(component="throughput", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="external_drift")
+        trigger = AdaptationTrigger(component="dl_bler", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="external_drift")
         orchestrator._run_adaptation_cycle(trigger)  # noqa: SLF001
     finally:
         orchestrator.stop()
@@ -239,5 +235,5 @@ def test_rejected_candidate_never_hot_swaps(tmp_path):
     assert records[0].verification_result == "REJECT"
     assert records[0].final_status == "rejected"
 
-    assert type(orchestrator.dt_model_registry.get("throughput")) is ThroughputModel
-    assert "throughput" not in orchestrator._dynamic_component_classes  # noqa: SLF001
+    assert type(orchestrator.dt_model_registry.get("dl_bler")) is DlBlerModel
+    assert "dl_bler" not in orchestrator._dynamic_component_classes  # noqa: SLF001

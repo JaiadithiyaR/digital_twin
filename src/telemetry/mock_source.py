@@ -1,168 +1,166 @@
-"""Mock telemetry source — development/testing only (prompt.md §0.3, §48, §49).
+"""Mock telemetry source — unit tests only (prompt2.md: "The mock source stays for unit tests
+only, tagged SOURCE=MOCK"). Never wired into `--mode live`/replay runs.
 
-Generates telemetry matching the exact raw wire schema a real NS-3/5G-LENA exporter would emit
-(same field names, same units), with plausible physical correlations (better SINR -> higher
-throughput/lower loss, higher offered load -> higher latency, etc.) so it exercises the same
-preprocessing/DT/fidelity pipeline a live run would (prompt.md §48 — demo mode must not be a
-separate fake architecture). Every record is unconditionally stamped `source="MOCK"` — this
-class must NEVER be wired to anything that reports itself as `NS3_5G_LENA`.
-
-Deliberately injects a small, configurable rate of missing fields and out-of-range values so the
-preprocessing pipeline's imputation/flagging logic is exercised even without a live network.
+Generates OAI-schema-shaped records (the same identity/feature/target field names
+`src/data/oai_dataset.py`'s real processed tables produce) with plausible physical correlations
+(better radio quality -> higher throughput/lower BLER/lower delay, higher load -> more PRBs used)
+so unit tests exercise the same preprocessing/DT/fidelity pipeline a real replay run would
+(prompt.md §48's "demo mode must not be a separate fake architecture" principle, carried over).
+Every record is unconditionally stamped `source="MOCK"` — this class must NEVER be wired to
+anything that reports itself as `OAI_RAN_REPLAY`.
 """
 
 from __future__ import annotations
 
-import math
 import time
+from collections import deque
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
 
 from src.common.config import MockTelemetryConfig
+from src.data.oai_dataset import LAGS, MAC_FEATURE_BASES, ROLLING_WINDOWS_SECONDS, TARGET_COLUMNS
 from src.telemetry.base import TelemetrySource
+
+_MOCK_RUN_ID = 0
+_MOCK_CELL_ID = 1
+_MOCK_SLICE_IDS = (1, 5)
+_HISTORY_MAXLEN = max(max(LAGS), max(ROLLING_WINDOWS_SECONDS))
 
 
 class MockTelemetrySource(TelemetrySource):
     SOURCE_LABEL = "MOCK"
 
-    def __init__(
-        self,
-        config: MockTelemetryConfig,
-        max_records: int | None = None,
-        realtime: bool = True,
-    ) -> None:
-        """
-        Args:
-            config: mock.* section of settings.yaml.
-            max_records: stop after this many records; None = stream forever.
-            realtime: sleep `emit_interval_seconds` between ticks (True for live demo mode);
-                set False for fast, sleep-free generation (bootstrap data, tests).
-        """
+    def __init__(self, config: MockTelemetryConfig, max_records: int | None = None, realtime: bool = True) -> None:
         self._config = config
         self._max_records = max_records
         self._realtime = realtime
         self._rng = np.random.default_rng(config.seed)
 
-        self._ue_ids = [f"ue-{i}" for i in range(config.num_ues)]
-        self._cell_ids = [f"cell-{c}" for c in range(config.num_cells)]
-        # Fixed round-robin UE -> cell assignment (handover modeling is out of scope here).
-        self._ue_cell = {
-            ue_id: self._cell_ids[i % config.num_cells] for i, ue_id in enumerate(self._ue_ids)
-        }
-        self._cell_ue_count = {
-            cell_id: sum(1 for c in self._ue_cell.values() if c == cell_id)
-            for cell_id in self._cell_ids
-        }
-
-        # Per-UE persistent mobility state for smooth trajectories across ticks.
-        self._position: dict[str, tuple[float, float]] = {
-            ue_id: (self._rng.uniform(-500, 500), self._rng.uniform(-500, 500))
-            for ue_id in self._ue_ids
-        }
-        self._heading: dict[str, float] = {
-            ue_id: self._rng.uniform(0, 2 * math.pi) for ue_id in self._ue_ids
-        }
-        self._speed: dict[str, float] = {
-            ue_id: self._rng.uniform(0.5, 25.0) for ue_id in self._ue_ids
+        self._session_ids = list(range(1, config.num_sessions + 1))
+        self._slice_of = {sid: _MOCK_SLICE_IDS[i % len(_MOCK_SLICE_IDS)] for i, sid in enumerate(self._session_ids)}
+        # Persistent per-session radio-quality state for smooth, autocorrelated trajectories.
+        self._quality: dict[int, float] = {sid: self._rng.uniform(0.3, 0.9) for sid in self._session_ids}
+        # Persistent per-session, per-raw-series history (the 20 MAC avg/std series + 7 target
+        # series) so this generator's own `_lag{1..5}`/`_roll_{mean,std}_{5,10}s` features are
+        # genuinely computed from past ticks — the same real past-only quantities
+        # `src/data/oai_dataset.py`'s `_multi_lag_features`/`_rolling_window_features` compute
+        # from a real replay, not independent per-tick noise (prompt.md §48: "demo mode must not
+        # be a separate fake architecture").
+        rich_series_names = [f"{b}_{stat}" for b in MAC_FEATURE_BASES for stat in ("avg", "std")] + list(TARGET_COLUMNS)
+        self._history: dict[int, dict[str, deque]] = {
+            sid: {name: deque(maxlen=_HISTORY_MAXLEN) for name in rich_series_names} for sid in self._session_ids
         }
         self._closed = False
+        self._tick = 0
 
-    def _next_position(self, ue_id: str, dt: float) -> tuple[float, float]:
-        x, y = self._position[ue_id]
-        heading = self._heading[ue_id] + self._rng.normal(0, 0.15)  # gentle random walk
-        speed = self._speed[ue_id]
-        x += speed * math.cos(heading) * dt
-        y += speed * math.sin(heading) * dt
-        self._heading[ue_id] = heading
-        self._position[ue_id] = (x, y)
-        return x, y
+    @staticmethod
+    def _lag_and_rolling_features(history: deque, raw_value: float, name: str) -> dict[str, float]:
+        """Computes `{name}_lag{1..5}`/`{name}_roll_{mean,std}_{5,10}s` from `history` (this
+        series' past values, oldest first, NOT yet including `raw_value`) — mirrors
+        `src/data/oai_dataset.py`'s own past-only lag/rolling helpers exactly, just computed
+        incrementally per tick instead of over a batch DataFrame. `raw_value` is appended to
+        `history` AFTER this call, by the caller."""
+        past = list(history)  # oldest..newest, strictly BEFORE this tick — never includes raw_value
+        out: dict[str, float] = {}
+        for k in LAGS:
+            out[f"{name}_lag{k}"] = past[-k] if len(past) >= k else float("nan")
+        for w in ROLLING_WINDOWS_SECONDS:
+            window = past[-w:]
+            out[f"{name}_roll_mean_{w}s"] = float(np.mean(window)) if window else float("nan")
+            out[f"{name}_roll_std_{w}s"] = float(np.std(window, ddof=1)) if len(window) >= 2 else float("nan")
+        return out
 
-    def _generate_record(self, ue_id: str, tick_timestamp: float) -> dict[str, Any]:
-        cell_id = self._ue_cell[ue_id]
+    def _next_quality(self, session_id: int) -> float:
+        q = self._quality[session_id] + self._rng.normal(0, 0.03)
+        q = float(np.clip(q, 0.05, 0.98))
+        self._quality[session_id] = q
+        return q
+
+    def _generate_record(self, session_id: int, ts_1s: datetime) -> dict[str, Any]:
         rng = self._rng
+        quality = self._next_quality(session_id)  # 0-1, higher = better radio conditions
 
-        sinr_db = float(np.clip(rng.normal(15.0, 8.0), -10.0, 35.0))
-        rsrp_dbm = float(np.clip(rng.normal(-95.0, 15.0), -140.0, -44.0))
-        rsrq_db = float(np.clip(rng.normal(-10.0, 4.0), -20.0, -3.0))
+        wb_cqi = float(np.clip(quality * 15 + rng.normal(0, 1), 1, 15))
+        pusch_snr = float(np.clip(quality * 30 - 5 + rng.normal(0, 2), -10, 30))
+        pucch_snr = pusch_snr + float(rng.normal(0, 1))
+        dl_mcs1 = float(np.clip(quality * 27 + rng.normal(0, 1.5), 0, 27))
+        ul_mcs1 = dl_mcs1 + float(rng.normal(0, 1))
+        phr = float(np.clip((1.0 - quality) * 20 + rng.normal(0, 2), -23, 40))
+        bsr = float(max(0.0, rng.normal(5000, 3000)))
+        dl_sched_rb = float(np.clip(20 + 40 * (1.0 - quality) + rng.normal(0, 3), 0, 106))
+        dl_curr_tbs = float(max(0.0, quality * 8000 + rng.normal(0, 500)))
 
-        # Channel quality (0-1) drives capacity, loss, and latency correlations below.
-        channel_quality = float(np.clip((sinr_db + 10.0) / 45.0, 0.0, 1.0))
+        dl_bler = float(np.clip((1.0 - quality) * 0.3 + rng.normal(0, 0.01), 0.0, 1.0))
+        ul_bler = float(np.clip((1.0 - quality) * 0.2 + rng.normal(0, 0.01), 0.0, 1.0))
+        dl_prb = float(max(0.0, 15 + 30 * (1.0 - quality) + rng.normal(0, 3)))
+        ul_prb = float(max(0.0, 2 + 5 * (1.0 - quality) + rng.normal(0, 1)))
+        dl_throughput = float(max(0.0, quality * 50 * (1.0 - dl_bler) + rng.normal(0, 2)))
+        ul_throughput = float(max(0.0, quality * 10 * (1.0 - ul_bler) + rng.normal(0, 0.5)))
+        dl_rlc_delay = float(max(0.01, (1.0 - quality) * 15 + rng.normal(0, 1)))
 
-        offered_load_bps = float(max(0.0, rng.normal(30e6, 15e6)))
-        # PRB utilization is driven by cell-wide demand — more offered traffic and more UEs
-        # sharing the cell's fixed pool of resource blocks push utilization up. Previously drawn
-        # as pure independent noise (Beta(2,3), uncorrelated with any demand signal) even though
-        # it was already used to influence throughput/loss/latency below — that made it
-        # structurally unlearnable from offered_load/UE-count/throughput (Module 9's actual
-        # inputs), discovered when PrbUtilizationModel's held-out RMSE failed to beat the naive
-        # mean baseline. Grounding it in demand is the physically correct fix, not curve-fitting.
-        demand_pressure = (offered_load_bps / 40e6) + 0.02 * self._cell_ue_count[cell_id]
-        prb_utilization_ratio = float(np.clip(0.15 + 0.5 * demand_pressure + rng.normal(0, 0.08), 0.0, 1.0))
-        capacity_bps = offered_load_bps * (0.4 + 0.6 * channel_quality) * (1.1 - 0.3 * prb_utilization_ratio)
-        throughput_bps = float(np.clip(min(offered_load_bps, capacity_bps) + rng.normal(0, 1e6), 0.0, None))
+        session_history = self._history[session_id]
+        targets_this_tick = {
+            "dl_throughput": dl_throughput, "ul_throughput": ul_throughput, "dl_rlc_delay": dl_rlc_delay,
+            "dl_prb": dl_prb, "ul_prb": ul_prb, "dl_bler": dl_bler, "ul_bler": ul_bler,
+        }
 
-        packet_loss_ratio = float(
-            np.clip(0.05 * (1.0 - channel_quality) + 0.03 * prb_utilization_ratio + rng.normal(0, 0.003), 0.0, 1.0)
-        )
-        latency_s = float(
-            max(0.001, 0.005 + 0.02 * prb_utilization_ratio + 0.01 * (1.0 - channel_quality) + rng.normal(0, 0.002))
-        )
-        jitter_s = float(max(0.0001, latency_s * rng.uniform(0.05, 0.25)))
-
-        ue_speed_mps = self._speed[ue_id]
-        x, y = self._next_position(ue_id, self._config.emit_interval_seconds)
+        features: dict[str, float] = {}
+        for base in MAC_FEATURE_BASES:
+            avg_value = {
+                "dl_curr_tbs": dl_curr_tbs, "dl_sched_rb": dl_sched_rb, "pusch_snr": pusch_snr,
+                "pucch_snr": pucch_snr, "wb_cqi": wb_cqi, "dl_mcs1": dl_mcs1, "ul_mcs1": ul_mcs1,
+                "phr": phr, "dl_bler": dl_bler, "ul_bler": ul_bler,
+            }[base]
+            std_value = float(abs(rng.normal(0, 0.1 * (abs(avg_value) + 1e-6))))
+            for raw_name, raw_value in ((f"{base}_avg", avg_value), (f"{base}_std", std_value)):
+                features.update(self._lag_and_rolling_features(session_history[raw_name], raw_value, raw_name))
+                session_history[raw_name].append(raw_value)
+        features["bsr_avg_lag1"] = bsr
+        features["n_samples_lag1"] = 1.0
+        features["ue_count_cell_lag1"] = float(len(self._session_ids))
+        features["ue_count_slice_lag1"] = float(sum(1 for s in self._slice_of.values() if s == self._slice_of[session_id]))
+        features["requested_prb_ratio_lag1"] = float(np.clip(50.0 + rng.normal(0, 5), 0, 100))
+        features["has_controller_lag1"] = 1.0
+        for name, raw_value in targets_this_tick.items():
+            features.update(self._lag_and_rolling_features(session_history[name], raw_value, name))
+            session_history[name].append(raw_value)
 
         record: dict[str, Any] = {
             "source": self.SOURCE_LABEL,
-            "timestamp": tick_timestamp,
-            "ue_id": ue_id,
-            "cell_id": cell_id,
-            "throughput_bps": throughput_bps,
-            "offered_load_bps": offered_load_bps,
-            "latency_s": latency_s,
-            "jitter_s": jitter_s,
-            "packet_loss_ratio": packet_loss_ratio,
-            "prb_utilization_ratio": prb_utilization_ratio,
-            "sinr_db": sinr_db,
-            "rsrp_dbm": rsrp_dbm,
-            "rsrq_db": rsrq_db,
-            "ue_count": self._cell_ue_count[cell_id],
-            "ue_speed_mps": ue_speed_mps,
-            "ue_position_x": x,
-            "ue_position_y": y,
+            "run_id": _MOCK_RUN_ID,
+            "cell_id": _MOCK_CELL_ID,
+            "session_id": session_id,
+            "ue_id": session_id,
+            "slice_id": self._slice_of[session_id],
+            "ts_1s": ts_1s,
+            "dl_throughput": dl_throughput,
+            "ul_throughput": ul_throughput,
+            "dl_rlc_delay": dl_rlc_delay,
+            "dl_prb": dl_prb,
+            "ul_prb": ul_prb,
+            "dl_bler": dl_bler,
+            "ul_bler": ul_bler,
+            **features,
         }
 
-        # Inject realistic imperfections so the preprocessing pipeline's missing-value and
-        # out-of-range handling paths are genuinely exercised in demo mode (prompt.md §48).
-        non_identity_fields = [k for k in record if k not in ("source", "timestamp", "ue_id", "cell_id")]
-        if rng.random() < self._config.missing_field_rate:
-            del record[rng.choice(non_identity_fields)]
-        if rng.random() < self._config.out_of_range_rate:
-            numeric_fields = [
-                k
-                for k in record
-                if k in non_identity_fields and isinstance(record.get(k), (int, float))
-            ]
-            if numeric_fields:
-                field_name = rng.choice(numeric_fields)
-                record[field_name] = float(record[field_name]) * rng.choice([-1.0, 50.0])
+        feature_keys = list(features.keys())
+        if rng.random() < self._config.missing_feature_rate and feature_keys:
+            del record[rng.choice(feature_keys)]
 
         return record
 
     def records(self) -> Iterator[dict[str, Any]]:
-        """Yields until `max_records` is reached, or indefinitely (`max_records=None`) until
-        `close()` is called — matching `ZmqTelemetrySource`'s stop semantics so a consumer (e.g.
-        Module 3's `ContinuousSynchronizer`) can drive either source identically."""
         emitted = 0
         while not self._closed and (self._max_records is None or emitted < self._max_records):
-            tick_timestamp = datetime.now(UTC).timestamp()
-            for ue_id in self._ue_ids:
+            ts_1s = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=self._tick)
+            self._tick += 1
+            for session_id in self._session_ids:
                 if self._closed or (self._max_records is not None and emitted >= self._max_records):
                     return
-                yield self._generate_record(ue_id, tick_timestamp)
+                yield self._generate_record(session_id, ts_1s)
                 emitted += 1
             if self._realtime:
                 time.sleep(self._config.emit_interval_seconds)

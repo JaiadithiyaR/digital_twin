@@ -2,7 +2,9 @@
 
 Step-by-step instructions for setting up and running this project from a clean checkout. See
 `CLAUDE.md` for architecture/design and `IMPLEMENTATION_STATUS.md` for current build status —
-this file is only "how do I actually run things."
+this file is only "how do I actually run things." **OAI migration note**: this project no longer
+uses NS-3/5G-LENA — telemetry is a replay of real exported OAI RAN KPI CSVs (see
+`docs/oai_twin.md` and `archive/ns3_sim/README.md` for what changed and why).
 
 ---
 
@@ -31,7 +33,9 @@ cp .env.example .env
 python scripts/setup.py
 ```
 
-All tunable parameters live in `config/settings.yaml` — nothing to edit there for a normal run.
+All tunable parameters live in `config/settings.yaml` — nothing to edit there for a normal run,
+except `data.oai_root` (the read-only OAI export path, outside this repo) if yours differs from
+the checked-in default.
 
 ---
 
@@ -40,10 +44,10 @@ All tunable parameters live in `config/settings.yaml` — nothing to edit there 
 ```bash
 .venv/bin/python -m pytest tests/unit -v          # fast, isolated
 .venv/bin/python -m pytest tests/integration -v   # slower — real pipelines, real (small) model training
-.venv/bin/python -m pytest tests -q               # everything (currently 487 tests; on a small/
-                                                   # memory-constrained machine, run tests/unit and
-                                                   # tests/integration as two separate invocations
-                                                   # if a single combined run gets OOM-killed)
+.venv/bin/python -m pytest tests -q               # everything (on a small/memory-constrained
+                                                   # machine, run tests/unit and tests/integration
+                                                   # as two separate invocations if a single
+                                                   # combined run gets OOM-killed)
 ```
 
 No test hits a real network/API — the Google AI (Gemini) client's transport is mocked in every
@@ -52,34 +56,30 @@ auto-skips unless a real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured.
 
 ---
 
-## 3. (Optional) Build the real NS-3 / 5G-LENA simulator
+## 3. Build the real OAI dataset (one-time, before first bootstrap)
 
-Only needed for `--mode live` / the real-NS-3 end-to-end demo (step 6). Everything else
-(`--mode demo`, all tests, RAG ingestion) uses mock telemetry and does not need this.
-
-```bash
-./scripts/setup_ns3.sh   # idempotent: clones ns-3.48 + 5G-LENA (nr v5.1) into ns3_sim/ns-3-dev,
-                          # configures, and builds (2000+ targets — takes a while the first time)
-```
-
-Some of the `nr` module's own and our telemetry exporter's C++ dependencies
-(`sqlite3 libsqlite3-dev libeigen3-dev libzmq3-dev libzmq5 cppzmq-dev`) need `sudo apt-get
-install` — see `ns3_sim/README.md` for the exact command if `setup_ns3.sh` warns they're missing.
-
-Sanity-check the build + the real telemetry producer in isolation (no orchestrator involved):
+Reads the read-only OAI export at `config.data.oai_root` (default
+`/home/harie06/oai_db/data/rankpi_kpi/`) and writes the model-ready, config-driven
+train/val/test splits (`config.data.splits` — never hardcoded run ids) this system trains and
+replays from. Never copies the raw CSVs into this repo.
 
 ```bash
-python ns3_sim/validate_e2e.py
+python scripts/build_oai_dataset.py
 ```
+
+Produces `data/processed/oai/{train,val,test}.parquet`, `feature_schema.json`, and
+`data_report.md` (NaN/reset/gap counts, rows per split, and an honest note on any excluded
+incomplete run). `--mode demo`/`--mode live` and every demo script below read these files —
+run this once before the first real bootstrap/replay.
 
 ---
 
 ## 4. (Optional) Prerequisite for a full adaptation cycle
 
-There is no training step anymore (design pivot — see CLAUDE.md §12): the Decision & Root-Cause
-Analysis Agent (Module 13) makes a genuine LLM call on every trigger instead of using a
-pre-trained policy, so the only real one-time prerequisite is the RAG knowledge base, whose output
-is saved to disk and reused automatically after the first run (`rag_data/chroma/`).
+There is no training step for the Decision & Root-Cause Analysis Agent (Module 13) — it makes a
+genuine LLM call on every trigger instead of using a pre-trained policy — so the only real
+one-time prerequisite is the RAG knowledge base, whose output is saved to disk and reused
+automatically after the first run (`rag_data/chroma/`).
 
 ```bash
 # Ingest the RAG knowledge base corpus into ChromaDB (idempotent)
@@ -96,44 +96,49 @@ If skipped, the system still runs: with no RAG store it proceeds with "not avail
 ## 5. Run the full system
 
 ```bash
-python -m src.main --mode demo                        # mock telemetry, runs forever (Ctrl-C to stop)
-python -m src.main --mode live                         # real NS-3 telemetry over ZeroMQ (needs step 3
-                                                         # AND a separately-running NS-3 process — see
-                                                         # scripts/run_e2e_demo.py for how it's launched)
-python -m src.main --mode demo --max-drift-events 1     # bounded run — stop after one adaptation cycle
+python -m src.main --mode demo                        # OAI-schema-shaped mock telemetry (SOURCE=MOCK),
+                                                        # runs forever (Ctrl-C to stop) — no OAI
+                                                        # export needed, used for unit-test-style iteration
+python -m src.main --mode live                         # real OAI RAN KPI replay (SOURCE=OAI_RAN_REPLAY),
+                                                        # streamed from data/processed/oai/ (step 3) in
+                                                        # timestamp order at config.telemetry.replay.speed
+python -m src.main --mode demo --max-drift-events 1    # bounded run — stop after one adaptation cycle
 ```
 
 This is the real continuous loop (`ContinuousOrchestrator`): telemetry -> preprocessing ->
-continuous D1 synchronization -> dependency-aware DT prediction -> fidelity evaluation -> drift
-event/fidelity-based trigger -> Decision & Root-Cause Analysis Agent -> recalibrate/regenerate/expand_scope -> verification -> lifecycle record
--> repeat, forever, without stopping — exactly prompt.md §39. It writes to this repo's REAL
-configured storage paths (`data/artifacts/d1_*.parquet`, `data/models/`,
+continuous D1 synchronization -> dependency-aware DT prediction (the 7 OAI KPI components) ->
+fidelity evaluation -> drift event/fidelity-based trigger -> Decision & Root-Cause Analysis
+Agent -> recalibrate/regenerate/expand_scope -> verification -> lifecycle record -> repeat,
+forever, without stopping — exactly prompt.md §39. It writes to this repo's REAL configured
+storage paths (`data/artifacts/d1_*.parquet`, `data/models/`,
 `data/artifacts/lifecycle_records.jsonl`, `data/artifacts/maintenance_reports/`) and logs to
 `logs/digital_twin.log` (structured JSON) as well as stdout.
 
 ---
 
-## 6. Run the two permanent, repo-tracked demo/validation scripts
+## 6. Run the permanent, repo-tracked demo/validation scripts
 
-Both are unattended, single-adaptation-cycle runs that print their own real observed results and
-exit non-zero if anything didn't actually happen as claimed (no fabricated success).
+Each is an unattended, single-adaptation-cycle run that prints its own real observed results and
+exits non-zero if anything didn't actually happen as claimed (no fabricated success).
 
 ```bash
-# Mock telemetry — fast (~1-2 minutes), good for iterating
+# Mock telemetry — fast (~1-2 minutes), good for iterating, no OAI export needed
 python scripts/run_orchestrator_demo.py
 
-# REAL NS-3 telemetry — launches the compiled binary from step 3 as a subprocess, connects the
-# orchestrator to it over real ZeroMQ, and runs one full real cycle (~1-3 minutes). Writes to its
-# OWN dedicated storage path (data/e2e_ns3_demo/), never the shared --mode demo/live paths, so a
-# leftover mock-telemetry run can never be confused with real NS-3 telemetry.
-python scripts/run_e2e_demo.py 2>&1 | tee logs/e2e_demo_output.log
+# REAL OAI run-8 (TEST split) replay at speed=0, with a forced adaptation trigger for
+# determinism (prompt2.md Step 7's required smoke test) — writes to its OWN dedicated storage
+# path (data/e2e_oai_smoke/), never the shared --mode demo/live paths
+python scripts/run_oai_e2e_smoke.py
+
+# All four baseline experiment modes (static / periodic_retrain / rule_based / full) over the
+# same real OAI TEST-split replay/seed/fidelity settings, for comparison
+python scripts/run_baselines.py --mode full
 ```
 
 Each prints: whether an LLM/RAG were available, live telemetry row accumulation progress, the
-real fidelity values it warmed up with, a concrete before/after `records_synced` proof that
-telemetry never stopped during the adaptation cycle, the full lifecycle record (trigger, decision
-agent strategy, candidate version, fidelity before/after, ACCEPT/REJECT decision), and the path to
-the generated maintenance report.
+real fidelity values it warmed up with, the full lifecycle record (trigger, decision agent
+strategy, candidate version, fidelity before/after, ACCEPT/REJECT decision), and (for the
+OAI-replay scripts) the telemetry source/replayed run ids/replay speed actually used.
 
 ---
 
@@ -144,17 +149,20 @@ has already genuinely produced — it never runs the pipeline itself, only reads
 any time after step 5 or 6 above has produced some real data:
 
 ```bash
-# production storage (config/settings.yaml's own paths — what `python -m src.main` writes)
+# config/settings.yaml's own production storage paths (what `python -m src.main` writes)
 python scripts/visualize_metrics.py
 
-# the dedicated real-NS-3 end-to-end demo's own storage subtree
-python scripts/visualize_metrics.py --preset e2e_ns3_demo --output-dir data/e2e_ns3_demo/plots
+# an explicit alternate storage path (e.g. a demo script's own dedicated subtree)
+python scripts/visualize_metrics.py --history-path data/e2e_oai_smoke/d1_history.parquet \
+    --models-dir data/e2e_oai_smoke/models --lifecycle-path data/e2e_oai_smoke/lifecycle_records.jsonl
 ```
 
 Produces, under `--output-dir` (default `data/artifacts/plots/`):
 
-- `telemetry_core_metrics.png` — throughput/latency/jitter/packet-loss/PRB-utilization over time
-- `telemetry_radio_conditions.png` — SINR/RSRP/RSRQ/UE-speed over time
+- `telemetry_core_metrics.png` — the 7 OAI KPI targets over time (dl/ul throughput, dl_rlc_delay,
+  dl/ul_prb, dl/ul_bler)
+- `telemetry_radio_conditions.png` — lagged RAN-condition/control features over time (PUSCH SNR,
+  wideband CQI, DL current TBS, requested PRB ratio)
 - `fidelity_over_time.png` — composite FidelityScore and raw RMSE per component, **recomputed by
   replaying the real D1 history through each component's real current production model via the
   same Module 12 `FidelityEvaluator` the live system uses** (not a re-implementation or estimate)
@@ -165,27 +173,30 @@ Produces, under `--output-dir` (default `data/artifacts/plots/`):
 
 `--window`/`--stride` control how many rows go into each fidelity-recompute window (default 20,
 non-overlapping); `--history-path`/`--models-dir`/`--lifecycle-path` override individual paths
-directly if your data doesn't fit either `--preset`. Nothing here writes to D1, the model
-registry, or the lifecycle log.
+directly if your data doesn't live under the production paths. Nothing here writes to D1, the
+model registry, or the lifecycle log.
 
 ---
 
 ## 7. Where things end up
 
 ```
-data/artifacts/d1_current_state.parquet     live DT current state (Module 4/D1)
-data/artifacts/d1_history.parquet           live DT history
-data/artifacts/d1_quarantine.parquet        rejected telemetry records (never silently dropped)
-data/models/<component>/<version>.joblib    versioned DT model artifacts (Modules 6-10 + adapted)
-data/models/registry_index.json            versioned model registry (Concept C)
-data/artifacts/lifecycle_records.jsonl      every adaptation event ever recorded (Module 19)
-data/artifacts/maintenance_reports/*.md     human-readable report per adaptation event
-rag_data/chroma/                            RAG vector store (D2)
-logs/digital_twin.log                       structured JSON log of every run
-logs/ns3_e2e_demo_stdout.log                real NS-3 simulator's own console output (step 6, real-NS-3 run)
-data/e2e_ns3_demo/                          the real-NS-3 demo script's OWN dedicated D1/registry/
-                                             lifecycle state (step 6) — separate from the paths above
-                                             so it's never confused with a mock-telemetry run's data
+data/processed/oai/{train,val,test}.parquet   model-ready OAI splits (step 3) — regenerable, never committed
+data/artifacts/d1_current_state.parquet       live DT current state (Module 4/D1)
+data/artifacts/d1_history.parquet             live DT history
+data/artifacts/d1_quarantine.parquet          rejected telemetry records (never silently dropped)
+data/models/<component>/<version>.joblib      versioned DT model artifacts (the 7 OAI components + adapted)
+data/models/registry_index.json               versioned model registry (Concept C)
+data/artifacts/lifecycle_records.jsonl        every adaptation event ever recorded (Module 19)
+data/artifacts/maintenance_reports/*.md       human-readable report per adaptation event
+rag_data/chroma/                              RAG vector store (D2)
+logs/digital_twin.log                         structured JSON log of every run
+data/e2e_oai_smoke/                           scripts/run_oai_e2e_smoke.py's OWN dedicated D1/
+                                               registry/lifecycle state — separate from the paths
+                                               above so it's never confused with a production run
+archive/ns3_sim/                              retired NS-3/5G-LENA code + pre-migration runtime
+                                               state — historical reference only, never run
 ```
 
-All of the above are gitignored — they're real, regenerable runtime state, not source.
+All of the above (except `archive/ns3_sim/`, which is tracked source + gitignored vendored
+build output) are gitignored — they're real, regenerable runtime state, not source.

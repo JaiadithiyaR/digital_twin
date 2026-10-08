@@ -1,0 +1,17 @@
+# Baseline mode: full_system — the real knowledge-based LLM+RAG Decision & Root-Cause Analysis
+# Agent (Module 13) decides the strategy for every trigger; genuinely dispatched to Modules
+# 14/15/16, verified by Module 17, hot-swapped on ACCEPT. Run once per seed (phase13 §4: "run
+# full_system 3 times (seeds from config), report mean +/- std") — seeds vary which synthetic
+# external drift events are generated (src.drift.mock_drift_source.MockDriftSource's own RNG
+# seed); the real replay/bootstrap/fidelity config are identical across seeds and across modes.
+mode: full_system
+description: >
+  Trigger -> real DecisionAgent.decide_safe() (genuine LLM call, RAG-grounded) -> the real
+  Modules 14/15/16 agents -> the real Module 17 verification gate -> hot swap on ACCEPT.
+seeds: [1, 2, 3]
+uses_llm: true  # decision + codegen + verification-explanation roles
+# Pre-flight (phase13 §3.8) runs once before this mode starts, against run 7 (never run 8).
+preflight_run: 7
+budget_usd: 20.0
+service_tier: standard
+fallback_rate_invalid_threshold: 0.1  # >10% decisions from the deterministic fallback -> flag run invalid

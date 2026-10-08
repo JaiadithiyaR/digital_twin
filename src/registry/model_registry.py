@@ -390,6 +390,26 @@ class ModelRegistry:
             return None
         return self._models_dir / version.source_path
 
+    def load_dynamic_class(self, version: ModelVersionMetadata) -> type:
+        """Imports a regenerate/expand_scope candidate's LLM-generated class from its saved
+        source file — the one point in this whole system where LLM-generated code is imported
+        into a trusted, long-running process rather than only ever run inside the sandbox
+        subprocess (`src/sandbox/executor.py`). Every caller only ever does so for a version that
+        has ALREADY passed the sandbox's syntax/import/conformance/train/evaluate pipeline AND
+        Module 17's deterministic fidelity gate — never on a rejected or still-pending candidate.
+        Shared by `ContinuousOrchestrator._load_dynamic_class` (`src/main.py`) and
+        `baselines/_lib.py`'s own adaptation dispatch — one implementation, not two copies."""
+        import importlib.util
+
+        source_path = self.source_path(version)
+        if source_path is None:
+            raise RuntimeError(f"version {version.version_id!r} of {version.component!r} has no saved source to load")
+        spec = importlib.util.spec_from_file_location(f"_dt_dynamic_{version.component}_{version.version_id}", source_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return getattr(module, version.model_class)
+
     def list_component_names(self) -> list[str]:
         """Every component name this registry has EVER tracked at least one version for —
         including one produced by expand_scope, whose name did not exist when this process first

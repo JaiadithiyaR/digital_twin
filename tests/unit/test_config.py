@@ -8,11 +8,14 @@ from src.common.config import load_settings
 def test_settings_load_and_validate():
     settings = load_settings()
     assert settings.environment in ("demo", "live")
-    assert settings.telemetry.source in ("mock", "zmq")
+    assert settings.telemetry.source in ("mock", "oai_replay")
     assert settings.decision_agent.action_mapping == {0: "recalibrate", 1: "regenerate", 2: "expand_scope"}
     assert settings.fidelity.epsilon > 0
     assert settings.fidelity.rolling_window_length > 0
-    assert isinstance(settings.dt_models.enable_prb_model, bool)
+    assert isinstance(settings.dt_models.bootstrap_min_rows, int)
+    assert settings.data.oai_root
+    assert settings.data.splits.train and settings.data.splits.test
+    assert settings.data.splits.smoke_test_run in settings.data.splits.train
 
 
 def test_settings_is_frozen():

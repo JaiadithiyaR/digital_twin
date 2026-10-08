@@ -19,7 +19,7 @@ import time
 from src.adaptation.regeneration_agent import RegenerationAgent
 from src.common.config import load_settings
 from src.dt_models.d1_model_store import D1Store
-from src.dt_models.throughput import ThroughputModel
+from src.dt_models.dl_bler import DlBlerModel
 from src.registry.model_registry import ModelRegistry
 from src.sandbox.executor import SandboxExecutor
 from src.synchronization.sync import ContinuousSynchronizer
@@ -34,11 +34,11 @@ import joblib
 from sklearn.ensemble import RandomForestRegressor
 from src.dt_models.base import DTComponent
 
-class RebuiltThroughput(DTComponent):
-    COMPONENT_NAME = "throughput"
+class RebuiltDlBler(DTComponent):
+    COMPONENT_NAME = "dl_bler"
     DEPENDENCIES = ()
-    REQUIRED_FEATURES = ("offered_load_mbps", "prb_utilization_pct", "sinr_db", "rsrp_dbm")
-    OUTPUT_FIELD = "throughput_mbps_pred"
+    REQUIRED_FEATURES = ("pusch_snr_avg_lag1", "wb_cqi_avg_lag1", "dl_curr_tbs_avg_lag1", "bsr_avg_lag1")
+    OUTPUT_FIELD = "dl_bler_pred"
 
     def __init__(self):
         self._model = RandomForestRegressor(n_estimators=150, max_depth=10, random_state=42)
@@ -77,7 +77,7 @@ class _FakeLLMClient:
         self._source = source
 
     def complete_structured(self, prompt, schema, **kwargs):
-        return schema(class_name="RebuiltThroughput", source_code=self._source, reasoning="integration test")
+        return schema(class_name="RebuiltDlBler", source_code=self._source, reasoning="integration test")
 
 
 def _bootstrap(tmp_path):
@@ -88,7 +88,7 @@ def _bootstrap(tmp_path):
         history_retention_rows=SETTINGS.storage.history_retention_rows,
     )
     mock_config = SETTINGS.telemetry.mock.model_copy(
-        update={"num_ues": 25, "num_cells": 4, "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"num_sessions": 25, "missing_feature_rate": 0.0}
     )
     bootstrap_source = MockTelemetrySource(mock_config, max_records=1200, realtime=False)
     preprocessor = TelemetryPreprocessor(SETTINGS.telemetry.preprocessing)
@@ -98,16 +98,16 @@ def _bootstrap(tmp_path):
 
     registry = ModelRegistry(models_dir=tmp_path / "models", index_path=tmp_path / "models" / "index.json")
     history = store.get_history()
-    features = list(ThroughputModel.REQUIRED_FEATURES)
-    bootstrap_model = ThroughputModel.from_settings(SETTINGS)
-    bootstrap_model.train(history[features], history["throughput_mbps"])
+    features = list(DlBlerModel.REQUIRED_FEATURES)
+    bootstrap_model = DlBlerModel.from_settings(SETTINGS)
+    bootstrap_model.train(history[features], history["dl_bler"])
     registry.register_version(
         component_instance=bootstrap_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(history)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=bootstrap_model.evaluate(history[features], history["throughput_mbps"]),
+        evaluation_metrics=bootstrap_model.evaluate(history[features], history["dl_bler"]),
         status="production",
     )
     return store, registry, preprocessor
@@ -127,14 +127,14 @@ def test_regeneration_produces_a_real_sandboxed_candidate(tmp_path):
     agent = _agent(tmp_path, store, registry)
 
     result = agent.regenerate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48, held_out_fraction=0.2
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48, held_out_fraction=0.2
     )
 
     assert result.version.status == "candidate"
-    assert result.version.model_class == "RebuiltThroughput"
+    assert result.version.model_class == "RebuiltDlBler"
     assert result.sandbox_result.accepted
     assert "rmse" in result.version.evaluation_metrics and result.evaluation_window["n_rows"] > 0
-    assert registry.get_current_version("throughput").adaptation_type == "bootstrap"  # untouched
+    assert registry.get_current_version("dl_bler").adaptation_type == "bootstrap"  # untouched
 
 
 def test_telemetry_keeps_synchronizing_into_d1_while_regeneration_is_in_progress(tmp_path):
@@ -144,8 +144,7 @@ def test_telemetry_keeps_synchronizing_into_d1_while_regeneration_is_in_progress
     store, registry, preprocessor = _bootstrap(tmp_path)
 
     live_mock_config = SETTINGS.telemetry.mock.model_copy(
-        update={"seed": 999, "num_ues": 10, "num_cells": 2, "emit_interval_seconds": 0.01,
-                "missing_field_rate": 0.0, "out_of_range_rate": 0.0}
+        update={"seed": 999, "num_sessions": 10, "emit_interval_seconds": 0.01, "missing_feature_rate": 0.0}
     )
     live_source = MockTelemetrySource(live_mock_config, max_records=None, realtime=True)
     live_sync_config = SETTINGS.synchronization.model_copy(update={"batch_size": 10, "batch_timeout_seconds": 0.05})
@@ -169,7 +168,7 @@ def test_telemetry_keeps_synchronizing_into_d1_while_regeneration_is_in_progress
 
     regeneration_start = time.monotonic()
     result = agent.regenerate(
-        lambda: ThroughputModel.from_settings(SETTINGS), "throughput_mbps", window_hours=48, held_out_fraction=0.2
+        lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=48, held_out_fraction=0.2
     )
     regeneration_end = time.monotonic()
 

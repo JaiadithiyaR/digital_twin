@@ -1,0 +1,25 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0 -- /home/harie06/dt_adaptation/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/harie06/dt_adaptation
+configfile: pyproject.toml
+plugins: cov-7.1.0, anyio-4.15.1
+collecting ... collected 34 items
+
+tests/integration/test_continuous_sync.py::test_synchronizer_runs_continuously_against_mock_source_with_no_manual_trigger PASSED [  2%]
+tests/integration/test_continuous_sync.py::test_synchronizer_runs_continuously_over_real_oai_replay_with_no_manual_trigger PASSED [  5%]
+tests/integration/test_d1_synchronization.py::test_synchronizer_updates_d1_current_state_and_appends_history_via_real_d1store PASSED [  8%]
+tests/integration/test_d1_synchronization.py::test_synchronizer_continuously_updates_real_d1store_with_no_manual_trigger PASSED [ 11%]
+tests/integration/test_drift_pipeline.py::test_mock_drift_source_through_full_interface_using_real_config PASSED [ 14%]
+tests/integration/test_drift_pipeline.py::test_process_stream_consumes_mock_source_continuously_without_raising PASSED [ 17%]
+tests/integration/test_drift_pipeline.py::test_zero_invalid_rate_config_override_yields_zero_quarantine PASSED [ 20%]
+tests/integration/test_expand_scope_agent.py::test_expand_scope_produces_a_real_sandboxed_new_component FAILED [ 23%]
+tests/integration/test_expand_scope_agent.py::test_telemetry_keeps_synchronizing_into_d1_while_expand_scope_is_in_progress FAILED [ 26%]
+tests/integration/test_expand_scope_agent.py::test_dt_model_registry_dynamically_accepts_a_brand_new_component_alongside_existing_ones FAILED [ 29%]
+tests/integration/test_fidelity_evaluation.py::test_fidelity_evaluator_reaches_real_composite_scores_for_all_seven_components PASSED [ 32%]
+tests/integration/test_fidelity_evaluation.py::test_fidelity_evaluation_is_deterministic_across_repeated_runs PASSED [ 35%]
+tests/integration/test_hot_swap.py::test_accepted_regenerate_candidate_hot_swaps_into_live_serving PASSED [ 38%]
+tests/integration/test_hot_swap.py::test_rejected_candidate_never_hot_swaps PASSED [ 41%]
+tests/integration/test_lifecycle_agent.py::test_full_adaptation_lifecycle_cycle_produces_a_complete_record FAILED [ 44%]
+tests/integration/test_main_orchestrator.py::test_full_orchestrator_cycle_never_stops_telemetry_synchronization PASSED [ 47%]
+tests/integration/test_main_orchestrator.py::test_start_and_stop_five_times_is_deterministic_and_error_free 
