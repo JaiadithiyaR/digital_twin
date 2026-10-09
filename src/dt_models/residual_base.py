@@ -1,21 +1,16 @@
-"""Shared base for all 7 OAI KPI components (claude_code_prompt_phase13.md §1.2): each learns
-the one-second RESIDUAL `Δy = y_t − y_{t−1}` rather than the raw level `y_t`, and `predict()`
-reconstructs `ŷ_t = y_{t−1} + Δŷ` before returning it — the PUBLIC interface is unchanged
-(`predict()` still returns `ŷ_t`, exactly like before this change); only what the underlying
-regressor is actually fit against differs. `y_{t−1}` is read from the component's own
-`"{COMPONENT_NAME}_lag1"` feature column — already a genuine measured past value present in
-every component's `REQUIRED_FEATURES` (`src/data/oai_dataset.ALL_FEATURES`), never re-derived,
-estimated, or looked up from anywhere else.
+"""Shared base for all 7 OAI KPI components: each learns the one-second residual
 
-Rationale (phase13 §1.2, read alongside CLAUDE.md's Phase 12 entry): a residual/delta model only
-has to explain the CHANGE from one second to the next, not the raw level — and its worst-case
-failure mode degrades gracefully toward "predict Δ=0", i.e. exactly the persistence baseline,
-rather than doing worse than it. Phase 12's own honest bootstrap finding (only 2 of 7 components
-beat persistence when trained directly on `y_t`) is the concrete motivation for this change.
+    Δy = y_t − y_{t−1}
 
-Extracted once here, rather than duplicated across the 7 original per-component files (which
-were otherwise byte-for-byte identical in this logic), so this exact fix is applied uniformly —
-no component can silently fall out of sync with the other six.
+rather than the raw level, and `predict()` reconstructs
+
+    ŷ_t = y_{t−1} + Δŷ
+
+before returning — the public interface is unchanged. `y_{t−1}` is read from the component's own
+`"{COMPONENT_NAME}_lag1"` feature column (already in `REQUIRED_FEATURES`), never re-derived.
+
+Rationale: a residual model only explains the change, not the raw level — its worst case degrades
+toward Δ=0, i.e. the persistence baseline, rather than doing worse than it.
 """
 
 from __future__ import annotations
@@ -101,13 +96,9 @@ class ResidualDTComponent(DTComponent):
             raise RuntimeError(f"{type(self).__name__}.predict called before train()/load()")
         X = self._select_features(features)
         residual_pred = self._model.predict(X)
-        # Public interface: always reconstruct and return ŷ_t = y_{t-1} + Δŷ, never the raw
-        # residual. Honestly NaN (never fabricated) wherever y_{t-1} itself is unknown — e.g. the
-        # first row of a session, where there genuinely is no prior second to anchor the
-        # reconstruction to. XGBoost's own missing-value handling lets `self._model.predict(X)`
-        # still return a real residual even when SOME OTHER input feature is NaN, which is why
-        # this NaN-propagation has to be applied explicitly here, one level up, rather than
-        # relying on the regressor to surface it on its own.
+        # Reconstruct ŷ_t = y_{t-1} + Δŷ; honestly NaN where y_{t-1} is unknown (first row of a
+        # session) — XGBoost itself would still predict a residual despite the NaN, so this must
+        # be applied explicitly here rather than left to the regressor.
         y_prev = X[self._lag1_column].to_numpy()
         y_pred = y_prev + residual_pred
         return pd.Series(y_pred, index=features.index, name=self.OUTPUT_FIELD)
@@ -115,11 +106,7 @@ class ResidualDTComponent(DTComponent):
     def evaluate(self, features: pd.DataFrame, targets: pd.Series) -> dict[str, float]:
         preds = self.predict(features)
         aligned_targets = targets.loc[preds.index]
-        # A NaN reconstructed prediction (see predict()'s own docstring note) can never
-        # contribute to a metric — mask it out rather than letting it NaN-poison the whole
-        # RMSE/MAE computation, mirroring how every other metric computation in this project
-        # (e.g. Module 12's own `_validate_inputs`) never silently manufactures a score from
-        # invalid data, and never silently crashes on it either.
+        # Mask NaN predictions (first row of each session) rather than let them poison RMSE/MAE.
         mask = aligned_targets.notna() & preds.notna()
         if not mask.any():
             return {"rmse": float("nan"), "mae": float("nan")}

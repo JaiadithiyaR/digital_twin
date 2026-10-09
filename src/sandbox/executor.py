@@ -1,54 +1,25 @@
-"""Sandbox execution layer (prompt.md §45) — shared infrastructure for Modules 15/16, whose
-LLM-generated code must never be trusted or executed directly in the production process
-(CLAUDE.md §7: "LLM output is always untrusted"; prompt.md §70 rule 10: "LLM-generated code is
-never production code until sandboxed and verified").
+"""Sandbox execution layer — shared infrastructure for Regeneration/Expand-Scope, whose
+LLM-generated code must never run directly in the production process.
 
-**What "practical isolation available on the host OS" means here, stated plainly (prompt.md §45
-explicitly asks for this security-assumptions documentation, not a false guarantee of perfect
-isolation):**
+Isolation model, stated honestly, not as a false guarantee of perfection:
+- Candidate code runs as a separate OS process (`subprocess.run`, never `exec()`/`importlib` in
+  the parent) — a candidate that raises, hangs, or exits at import time only affects its own
+  subprocess.
+- Minimal environment (`PATH` + a repo-only `PYTHONPATH`), never `os.environ.copy()` — secrets in
+  the parent's environment are never inherited.
+- Time-bounded (`timeout_seconds`) and output-bounded (`max_output_bytes`).
+- What this does NOT prevent: the subprocess runs as the same OS user with the same filesystem
+  permissions — nothing stops an adversarial script using an absolute path to read/write outside
+  its workspace or make network calls. True filesystem/network sandboxing needs OS-level
+  primitives (containers, seccomp, namespaces) this environment can't assume. Candidates are also
+  subject to a deterministic conformance check (`_sandbox_driver.py`) before training ever runs.
+- Deliberate omission: no POSIX `resource.setrlimit` via `preexec_fn` — unsafe in this
+  multi-threaded process (the fork-deadlock risk outweighs the resource-limit gap, given
+  `timeout_seconds` already bounds wall-clock).
 
-- Candidate code runs as a genuinely SEPARATE OS PROCESS (`subprocess.run`, never `exec()`/
-  `importlib` in the parent process). This is real, load-bearing isolation: the candidate cannot
-  touch the parent's Python objects, imported modules, in-memory state, or crash the parent
-  process — a candidate that raises, hangs, or does something exotic like `sys.exit()` at import
-  time only ever affects its own subprocess, never this one.
-- The subprocess is given a MINIMAL environment (`PATH` + a `PYTHONPATH` pointing only at this
-  repo) — NOT `os.environ.copy()`. Concretely and testably: `GOOGLE_API_KEY` and any other
-  secret present in the parent's environment is NEVER inherited by the sandboxed subprocess
-  (prompt.md §16 "never hardcode API keys" extended here — a candidate must not even be *able* to
-  read one via `os.environ`, whether that candidate is malicious or just careless).
-- Execution is time-bounded (`config.sandbox.timeout_seconds`, enforced by `subprocess.run(...,
-  timeout=...)`) and output-bounded (`config.sandbox.max_output_bytes`, truncated after capture)
-  — the two concrete defenses against a runaway or output-flooding candidate.
-- **What this does NOT prevent, stated honestly rather than silently assumed away**: the
-  subprocess runs as the SAME OS user as the parent, with the SAME filesystem permissions. Nothing
-  here stops a deliberately adversarial script from using an absolute path to read or write
-  outside its workspace, or from making network calls. True filesystem/network sandboxing would
-  need OS-level primitives (containers, seccomp, a chroot/namespace jail) that this environment
-  cannot assume are available, and building/maintaining that infrastructure is out of scope for
-  this project's current phase (prompt.md §10: "do not introduce unnecessary infrastructure"
-  cuts both ways — a fake, if the host can't back it, would be worse than documenting the gap).
-  In practice, candidates are LLM-generated `DTComponent` implementations with no reason to touch
-  paths outside their own `cwd` (relative-path I/O, as any reasonable generated code produces),
-  and are also subject to a deterministic conformance check (see `_sandbox_driver.py`) before any
-  training code runs at all.
-- **A deliberate, documented omission**: this executor does NOT set POSIX resource limits
-  (`resource.setrlimit` via `subprocess`'s `preexec_fn`) for CPU/memory. Python's own
-  `subprocess` documentation warns `preexec_fn` is unsafe in a multi-threaded process (this
-  system runs `ContinuousSynchronizer` on a background thread continuously) — the fork-related
-  deadlock risk that warning describes was judged worse than the resource-limit gap it would
-  close, given `timeout_seconds` already bounds wall-clock (and therefore practically bounds
-  runaway CPU use) and `max_output_bytes` already bounds an output-flooding vector.
-
-**Data hand-off is entirely file-based and one-directional into the sandbox, in-memory back out**:
-the parent writes a `candidate.py` + `manifest.json` + parquet snapshots of the training/
-evaluation data into a fresh, per-call workspace; `_sandbox_driver.py` (a FIXED, project-authored
-file — never LLM-generated, never modified by a candidate) is what actually imports and runs the
-candidate, reporting `result.json`. `SandboxExecutor.run_candidate()` reads the outcome — trained
-artifact bytes, evaluation predictions, metrics — straight into memory and ALWAYS deletes the
-workspace directory before returning (prompt.md §45 "clean up temporary workspaces safely"),
-regardless of success, failure, or an unexpected exception — so a caller never needs to remember
-to clean up, and no workspace can leak past one `run_candidate()` call.
+Data hand-off: file-based into the sandbox (candidate source + manifest + parquet snapshots),
+in-memory back out (artifact bytes, predictions, metrics) via a fixed, never-LLM-generated
+driver. The workspace is always deleted before returning, regardless of outcome.
 """
 
 from __future__ import annotations

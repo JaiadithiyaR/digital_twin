@@ -1,43 +1,19 @@
-"""Module 14 — Recalibration Agent (prompt.md §23).
+"""Recalibration Agent (Agent 2) — retrains an EXISTING, already-production component on a recent
+window when its learned parameters (not architecture) have gone stale. Does not decide whether to
+recalibrate — the Decision Agent already did — and never runs on a schedule.
 
-Recalibration is used when "the existing model structure/pipeline is still appropriate, but its
-learned parameters/behaviour have become stale" — i.e. PPO (Module 13) selected action 0 for an
-already-production component. This agent does NOT decide whether to recalibrate (that's PPO's
-job, prompt.md §70 rule 4); it only executes the recalibration strategy once told to. It also
-never runs on a schedule or a heuristic trigger — "recalibration happens because PPO selected it,"
-never blind periodic recalibration.
+Flow: inspect current model (`ModelRegistry.get_current_version()`) -> snapshot D1 history ->
+pick a training window (`_resolve_training_window()`) -> select + time-split data
+(`data_selection`) -> `DTComponent.train()` -> register as a new candidate
+(`ModelRegistry.register_version()`) -> evaluate (component-local metrics + real fidelity) ->
+return `RecalibrationResult` — never self-promotes.
 
-Per prompt.md §23, this agent:
-    1. receives the affected component               -> `component_factory` param
-    2. inspects current model metadata                -> `ModelRegistry.get_current_version()`
-    3. inspects recent DT/telemetry history            -> `D1Store.get_history()` (a snapshot)
-    4. determines an appropriate recent training window -> `_resolve_training_window()`
-    5. selects the relevant training data              -> `data_selection.select_recent_window()` + `.time_split()`
-    6. calls the existing generic `train()` interface  -> `DTComponent.train()` (Module 5)
-    7. produces a new candidate model version           -> `ModelRegistry.register_version()`
-    8. evaluates it                                     -> `DTComponent.evaluate()` + Module 12 fidelity
-    9. passes it to verification                        -> returns `RecalibrationResult`; Module 17
-       (Agentic Verification) isn't built yet, so this agent's job ends at producing a versioned,
-       evaluated candidate for a future caller to hand to it — it never self-promotes.
+Continuous operation: `D1Store.get_history()` returns a deep-copy snapshot under a lock held only
+for the copy; this agent never holds D1's lock while training and never writes to D1.
 
-**Continuous operation during adaptation (prompt.md §0.6/§0.8), enforced structurally, not just
-by convention**: this agent only ever calls `D1Store.get_history()`, which returns a `.copy(deep=
-True)` snapshot under a lock held only for the duration of that one copy — it never holds D1's
-lock while training, and it never calls any D1 write method. The live `ContinuousSynchronizer`
-(Module 3) can therefore keep ingesting and writing telemetry into D1 for the entire duration of
-a recalibration run, completely unblocked. `tests/integration/test_recalibration_agent.py` proves
-this concretely: a real background synchronizer thread's `records_synced` count is sampled
-repeatedly WHILE a real (foreground) recalibration call is in progress and shown to keep growing.
-
-**LLM reasoning is optional and off by default** (prompt.md §23: "the agent MAY use LLM
-reasoning... if beneficial", CLAUDE.md §7). When an `GoogleClient` is supplied and
-`use_llm_window_reasoning=True`, this agent asks it to suggest a training-window length given a
-short summary of recent history — but the suggestion is always clamped to a bounded, sane range
-around the deterministic config default before use, and any LLM failure degrades gracefully
-(`complete_structured_safe`) straight back to the deterministic default. The actual metric
-calculations and model training are ALWAYS deterministic code, exactly as prompt.md §23 requires
-— the LLM, when used at all, only ever influences how much history is selected, never how the
-model is trained or evaluated.
+LLM reasoning is optional, off by default: when enabled, it may only suggest a training-window
+length (clamped to a bounded range around the config default); any failure degrades to that
+default. Training and evaluation are always deterministic code regardless.
 """
 
 from __future__ import annotations

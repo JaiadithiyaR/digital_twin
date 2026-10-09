@@ -1,16 +1,12 @@
-"""Telemetry preprocessing pipeline (Module 2) — OAI migration (prompt2.md).
+"""Telemetry preprocessing pipeline (Module 2). Turns raw wire-format dicts (one row of the OAI
+replay/mock source's already unit-converted, already-lagged output — see
+`src/data/oai_dataset.py`) into DT-ready `CleanTelemetryRecord`s.
 
-Turns raw wire-format dicts (one row of the OAI replay/mock source's already unit-converted,
-already-lagged output — see `src/data/oai_dataset.py`) into DT-ready `CleanTelemetryRecord`s.
-
-Considerably simpler than the retired NS-3-era preprocessor: Step 3 (`oai_dataset.py`) already did
-every unit conversion, delta/reset/gap computation, and feature lag — this stage's job is just
-validation, the identity/feature/target split, and honest quality tracking. A NaN feature or
-target is a LEGITIMATE, expected value here (a session's first tick has no `t-1` to lag from; a
-genuine sensor gap leaves a target briefly unmeasured) — never silently fabricated, never a reason
-to quarantine the whole record (prompt2.md: "never invent metrics", "the replay never invents
-rows"). Only a structurally broken record (bad identity, unparseable timestamp, wrong source
-label) is quarantined.
+Job here is just validation, the identity/feature/target split, and quality tracking — unit
+conversion/lagging already happened upstream. A NaN feature/target is legitimate here (a
+session's first tick has no t-1; a sensor gap), never fabricated, never a reason to quarantine
+the record. Only a structurally broken record (bad identity, bad timestamp, wrong source label)
+is quarantined.
 """
 
 from __future__ import annotations

@@ -1,70 +1,24 @@
-"""Module 16 — Expand-Scope Agent (prompt.md §27).
+"""Expand-Scope Agent (Agent 4) — builds a genuinely NEW DT component, used when network behavior
+reveals a phenomenon no existing component models at all (unlike Recalibrate/Regenerate, which
+both act on an already-existing one). Does not decide whether to expand scope — the Decision
+Agent already did; `expand_scope_context` explains what triggered it.
 
-Expand Scope is used when "network behaviour reveals a phenomenon/capability that the current DT
-does not represent" — i.e. PPO (Module 13) selected action 2 for a phenomenon NO existing
-component models at all, as opposed to Recalibrate/Regenerate (Modules 14/15), which both act on
-an ALREADY-EXISTING component. This agent does not decide *whether* to expand scope — PPO already
-decided; the caller-supplied `expand_scope_context` explains what triggered it, exactly like
-Module 15's `drift_context`.
+Two-stage LLM process:
+1. **Design** (`_propose_design()`): a structured `_ProposedComponentDesign` (component_name,
+   target_column, dependencies, required_features, purpose). Validated deterministically before
+   any code is generated — name must be genuinely new, target_column a real telemetry column,
+   dependencies existing components. `output_field` is never LLM-proposed — always derived as
+   `f"{target_column}_pred"`.
+2. **Implementation**: `_generate_implementation()` + `SandboxExecutor.run_candidate()` — the
+   exact same sandbox Regeneration uses, unmodified; the driver has no idea which agent called it.
 
-**Sixteen-step mapping (prompt.md §27), mirroring Modules 14/15's docstring convention**:
-    1-5. inspect the component registry / interface / existing components / telemetry+features /
-         RAG context -> `_build_context()` (identical spirit to Module 15's `_build_context`,
-         reusing `DTModelRegistry` — Module 5 — this time, not just `ModelRegistry`; RAG context is
-         now genuinely retrieved via `_retrieve_rag_context()` when a knowledge base is supplied,
-         same pattern as Module 15)
-    6-9. determine a suitable new component, derive its inputs/output, define feature-extraction
-         requirements -> `_propose_design()`, a DESIGN LLM call producing a structured
-         `_ProposedComponentDesign` (component_name, target_column, dependencies,
-         required_features, purpose, feature_extraction_notes) — validated deterministically
-         (`_validate_design`) before any code is generated: the proposed name must be genuinely
-         NEW (no existing version), the target column must be real D1 telemetry, dependencies
-         must be existing registered components. `output_field` is NOT LLM-proposed — it is
-         DERIVED deterministically as `f"{target_column}_pred"`, the same convention every
-         existing component already follows, removing one whole class of possible LLM mistakes.
-    10-12. generate the implementation + "unit tests" (the sandbox's deterministic conformance
-         check, exactly like Module 15 — not LLM-authored tests) + training logic (the generic
-         `DTComponent.train()` interface, unchanged) -> `_generate_implementation()` +
-         `SandboxExecutor.run_candidate()` — THE SAME sandbox Module 15 uses, unmodified.
-    13. train the candidate -> inside the sandbox, exactly like Module 15.
-    14. register the candidate -> `ModelRegistry.register_version_from_artifact()` (Module 14's
-        registry, unmodified) with a component name NEVER SEEN BEFORE — this genuinely proves
-        "the new component must be added dynamically through the registry" (prompt.md §27): no
-        code anywhere in `ModelRegistry` enumerates or limits which component names may exist.
-    15. evaluate it -> component-local metrics (from the sandbox) + real Module 12
-        `fidelity_after` (there is deliberately no `fidelity_before` — a genuinely new capability
-        has no prior version to compare against; `None` here is correct, not a bug, mirroring
-        Module 12's own "never fabricate a score" principle applied to a case that structurally
-        cannot have one).
-    16. "submit it to verification" -> Module 17 doesn't exist yet; this agent's contract ends at
-        returning a versioned, evaluated `ExpandScopeResult`, exactly like Modules 14/15.
+Registers via `ModelRegistry.register_version_from_artifact()` with a name never seen before —
+proving the registry has no hardcoded component-count/name limit. `fidelity_before` is always
+`None` here (a new capability has nothing to compare against — not a bug).
 
-**"Run any generated pipeline through the same sandbox as Module 15"**: `SandboxExecutor` and
-`_sandbox_driver.py` are imported and used completely UNCHANGED from `src/sandbox/executor.py` —
-this file adds zero sandbox code. The driver's conformance check (COMPONENT_NAME/OUTPUT_FIELD
-must exactly match what's "expected") works identically whether "expected" came from an EXISTING
-production version (Module 15) or a freshly-validated, not-yet-used design proposal (this
-module) — the driver has no idea which agent called it, by design.
-
-**Why this agent itself does NOT wire its candidate into the live `DTModelRegistry`/
-`DTOrchestrator` (Module 5), even though prompt.md §27 says "register the candidate" as one of
-its own steps — a deliberate, documented safety boundary, not an oversight**: doing so would
-require this process to actually IMPORT (or `joblib.load()` the pickled artifact of) the
-LLM-generated class, which is exactly what prompt.md §28/§70 rule 10 forbid before verification.
-"Register... dynamically through the registry" is satisfied by `ModelRegistry` (Concept C,
-Module 14's versioned artifact store — genuinely dynamic, no hardcoded component list, proven
-directly by this module registering a component name that has never existed before). Wiring a
-verified candidate into the LIVE orchestrator so it actually SERVES predictions now DOES happen —
-`ContinuousOrchestrator._hot_swap_candidate` (`src/main.py`), called ONLY after a real ACCEPT,
-dynamically loads and registers it into `self.dt_model_registry` — but that live-registry wiring
-still deliberately lives entirely OUTSIDE this agent, in the one place (the orchestrator, strictly
-after Module 17's decision) that has the standing to grant that trust; this module's own
-`expand_scope()` still only ever returns an evaluated candidate, exactly as before.
-`tests/integration/test_expand_scope_agent.py` separately proves `DTModelRegistry`/
-`DTOrchestrator`'s OWN registration mechanism has no hardcoded component-count/name limit (using
-a trusted, test-authored component — mirroring Module 5's own original test pattern — never the
-raw LLM/sandbox output), so the CAPABILITY this module's output would eventually be promoted into
-is itself demonstrated to be genuinely dynamic.
+Deliberately does NOT wire the candidate into the live `DTModelRegistry`/orchestrator itself —
+that would require importing untrusted LLM code before verification grants trust. Live wiring
+happens only in `ContinuousOrchestrator._hot_swap_candidate`, strictly after a real ACCEPT.
 """
 
 from __future__ import annotations

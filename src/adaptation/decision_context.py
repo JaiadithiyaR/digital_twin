@@ -1,21 +1,9 @@
-"""Module 13 — Decision & Root-Cause Analysis Agent: decision context (prompt.md §18, CLAUDE.md
-§6). Design-pivot replacement for the deleted `rl_env.py` — same structural role ("what informs
-the decision," kept separate from "what the decision is," in `decision_agent.py`) but a
-completely different shape: there is no training environment, no observation vector, no reward.
-This module only ASSEMBLES a bounded, structured snapshot of the current adaptation situation for
-the LLM to reason over.
-
-Per prompt.md §18, the context must include, at minimum:
-    per-component fidelity vector + the unified fidelity score (Module 12, §16a)
-    affected-component indicator
-    trigger type (external drift vs. fidelity-based) and its severity
-    previous action taken for this component/incident and its outcome, where available
-    relevant knowledge retrieved read-only from the RAG knowledge base (Module 18)
-    relevant network state, kept well-defined and bounded (never unbounded raw telemetry)
-
-This module builds that snapshot from already-computed inputs (fidelity results, an
-`AdaptationTrigger`, a RAG knowledge base, recent D1 history) — it never computes fidelity itself,
-never queries D1/RAG beyond what's asked of it here, and never makes the actual decision.
+"""Decision Agent's context assembly — "what informs the decision", kept separate from "what the
+decision is" (`decision_agent.py`). Builds a bounded, structured snapshot for the LLM: per-
+component fidelity + unified score, affected component, trigger type/severity, previous
+action+outcome for this component, read-only RAG retrieval, and a bounded network-state summary
+(never unbounded raw telemetry). Builds this from already-computed inputs only — never computes
+fidelity itself, never queries D1/RAG beyond what's asked here, never decides anything.
 """
 
 from __future__ import annotations
@@ -34,13 +22,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Bounded, fixed set of real D1 columns summarized into the network-state context (mirrors the
-# fixed, well-dimensioned feature list the old rl_env.py used for the same purpose, prompt.md
-# §18's "kept well-dimensioned" — but summarized as plain human-readable numbers for an LLM
-# prompt here, not a normalized ML observation vector, since there is no fixed-size input space
-# to fill anymore). OAI migration (prompt2.md): the 7 raw KPI targets themselves — radio-level
-# BLER (not end-to-end packet loss), RAN queueing delay (not end-to-end latency), per-second PRB
-# usage, per-second throughput — plus the controller's requested PRB ratio and UE/slice load.
+# Bounded, fixed set of real D1 columns summarized into the network-state context for the LLM
+# prompt — the 7 raw KPI targets plus the controller's requested PRB ratio and UE/slice load.
 NETWORK_STATE_FEATURES: tuple[str, ...] = (
     "dl_throughput",
     "ul_throughput",

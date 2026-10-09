@@ -1,55 +1,29 @@
-"""Module 12 — Fidelity Evaluation Module (prompt.md §16, §0.10, §17).
+"""Fidelity Evaluation Module — deterministic, per-component composite fidelity scoring:
 
-Deterministic, per-DT-component composite fidelity scoring:
-
-    D_m = metric_m ** 2                                          (square every raw metric)
-    D~_m = (D_m - min(D_m)) / (max(D_m) - min(D_m) + eps)         (rolling min-max normalize)
+    D_m = metric_m ** 2                                     (square every raw metric)
+    D~_m = (D_m - min(D_m)) / (max(D_m) - min(D_m) + eps)    (rolling min-max normalize)
     S_raw,c = D~_RMSE + D~_MAE + D~_W1 + D~_MMD
     FidelityScore_c = 1 - (S_raw,c / 4)
 
-`epsilon` and the rolling-window length are read from `config.fidelity` — never hardcoded
-(prompt.md §16). The LLM must never compute or modify this formula (prompt.md §0.10, §43); this
-module is the sole deterministic authority for it — nothing here calls out to `src/llm/`.
+`epsilon` and the rolling-window length come from `config.fidelity` — never hardcoded. The LLM
+never computes or touches this formula; this module is the sole deterministic authority.
 
-**Normalization reference and "historical" (prompt.md §0.10, §17)**: each component maintains a
-rolling window, per metric, of past squared-metric values. A call to `evaluate()` normalizes the
-CURRENT point against the window's contents from BEFORE this call (genuinely historical — a
-single evaluation can never trivially normalize to a self-referential 0), then — if
-`update_window=True` (the default) — appends the current point into the window for future calls.
-Production evaluations use the default; comparing a candidate against production during
-verification (a later module) should call `evaluate(..., update_window=False)` using the SAME
-evaluator/window instance production evaluations already grew, so both share one identical
-normalization reference and remain genuinely comparable, exactly as §0.10 requires ("BOTH MUST
-USE THE SAME NORMALIZATION REFERENCE").
+Normalization reference: each component keeps a rolling window of past squared-metric values.
+`evaluate()` normalizes the current point against the window's contents from BEFORE this call
+(never self-referential), then appends if `update_window=True` (default). Comparing a candidate
+against production must call `evaluate(..., update_window=False)` on the SAME evaluator instance
+production already grew, so both share one normalization reference.
 
-**Never silently manufacture a score** (prompt.md §0.10): if fewer than
-`config.fidelity.min_history_for_normalization` prior points exist for a component, `evaluate()`
-returns `status="insufficient_history"` and `fidelity_score=None` — the raw/squared metrics are
-still computed and returned (they're always well-defined), only the composite score is withheld.
+Never fabricates a score: fewer than `min_history_for_normalization` prior points ->
+`status="insufficient_history"`, `fidelity_score=None` (raw/squared metrics still returned).
 
-**Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a)**: in addition to the
-per-component formula above, this module aggregates every component's current `FidelityScore_c`
-into a single system-wide `UnifiedFidelityScore` (`compute_unified_score()`) and derives a
-deterministic adaptation trigger from it (`check_fidelity_trigger()`) — never via the LLM, never
-via a trained policy (there is no RL agent anymore; see CLAUDE.md §12's design-pivot notice). This
-is a SEPARATE signal from the per-component acceptance gate (module 17's
-`FidelityScore_new > FidelityScore_old + delta`) — it never replaces or influences that check.
-
-The trigger is debounced: it only fires after `config.fidelity.trigger_min_consecutive_evaluations`
-CONSECUTIVE cycles with `UnifiedFidelityScore < config.fidelity.trigger_threshold`, tracked as
-persistent state on the evaluator instance (`_consecutive_below_threshold`) — a single bad cycle
-(ordinary sampling noise) can never fire a spurious adaptation. The counter resets to 0 on any
-cycle that is at-or-above threshold, AND immediately after firing (so a still-degraded system
-must accumulate a fresh run of bad cycles before firing again, rather than firing on every single
-cycle once past threshold). `check_fidelity_trigger()` therefore has to be called once per
-genuine evaluation cycle (not per-component, per-metric, or speculatively) — `src/main.py`'s own
-`run_prediction_and_fidelity_cycle()` is the one real caller.
-
-The resulting trigger is normalized into the exact same canonical shape
-(`src.fidelity.trigger.AdaptationTrigger`) that an external `DriftEvent` is normalized into via
-`trigger_from_drift_event()` — `trigger_type="fidelity_degradation"` here vs.
-`"external_drift"` there — so Module 13 (the Decision & Root-Cause Analysis Agent) consumes
-either source uniformly.
+Unified Fidelity Score + internal trigger: aggregates every component's `FidelityScore_c` into
+one system-wide `UnifiedFidelityScore` (`compute_unified_score()`) and derives a deterministic
+trigger (`check_fidelity_trigger()`) — a separate signal from Verification's own acceptance gate,
+never replacing it. Debounced: fires only after `trigger_min_consecutive_evaluations` consecutive
+cycles below `trigger_threshold`; the counter resets on any at-or-above cycle and immediately
+after firing. Normalized into the same `AdaptationTrigger` shape an external `DriftEvent` uses
+(`trigger_type="fidelity_degradation"` vs `"external_drift"`).
 """
 
 from __future__ import annotations
@@ -192,16 +166,12 @@ class FidelityEvaluator:
     # --- Unified Fidelity Score + fidelity-based trigger (prompt.md §16a) ----------------------
 
     def compute_unified_score(self, component_scores: dict[str, float | None]) -> UnifiedFidelityResult:
-        """Aggregates every component's current `FidelityScore_c` into one system-wide number:
+        """Aggregates every component's current FidelityScore_c into one system-wide number:
 
             UnifiedFidelityScore = Σ_c (w_c * FidelityScore_c) / Σ_c w_c
 
-        computed only over components whose score is currently well-defined (not `None` —
-        `evaluate()` returns `None` for `insufficient_history`, never a fabricated placeholder).
-        `component_scores` is the caller's full per-component map (e.g. `{"throughput": 0.82,
-        "jitter": None, ...}`) — components with `None` are excluded from both the sum and the
-        weight normalization, never treated as 0.
-        """
+        over components whose score is currently defined (not `None`) — undefined components are
+        excluded from both sum and weight normalization, never treated as 0."""
         defined = {c: s for c, s in component_scores.items() if s is not None}
 
         if len(defined) < self._unified_min_components:

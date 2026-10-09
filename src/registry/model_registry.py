@@ -1,34 +1,16 @@
-"""Versioned model/component registry (prompt.md §46, §29) — Concept C from CLAUDE.md §4.
+"""Versioned model/component registry — tracks model VERSIONS per component (every artifact ever
+produced, which one is production, full rollback history). Three registries exist in this
+codebase, do not confuse them: `dt_models/component_registry.py` catalogs D1's state tables;
+`dt_models/model_registry.py`'s `DTModelRegistry` catalogs live in-memory prediction components
+for the orchestrator (no versioning); this file tracks versions, independent of D1 — promoting a
+version here never touches D1 and vice versa.
 
-This is the third, distinct "registry" in this codebase — do not confuse it with the other two:
+Every adaptation agent registers a new artifact here via `register_version()`.
+`promote()`/`reject()` are called only by the Verification Agent — nothing here auto-invokes
+them, so a registered version is never implicitly trusted.
 
-1. `src/dt_models/component_registry.py`'s `ComponentRegistry` (Module 4/D1) — catalogs D1's own
-   state TABLES (current/history/quarantine). Nothing to do with prediction models.
-2. `src/dt_models/model_registry.py`'s `DTModelRegistry` (Module 5) — catalogs which prediction
-   COMPONENTS exist and their dependency graph, purely in-memory, no versioning, so the
-   orchestrator can compute an execution order. A component registered there is a single live
-   instance the orchestrator runs predictions through.
-3. **`ModelRegistry` (this file)** — tracks MODEL **VERSIONS** per component: every trained
-   artifact ever produced (bootstrap, recalibrated, regenerated, expand-scope), which one is
-   currently in production, and the full history needed for rollback. This is Concept C
-   (CLAUDE.md §4): "independently versioned learned prediction implementations," deliberately
-   separate from Concept B (D1's continuously-updated dynamic state) — promoting a model version
-   here never touches D1, and D1 being updated never touches this registry (prompt.md §0.5).
-
-Needed by Module 14 (Recalibration, this turn) and, unchanged, by Modules 15 (Regeneration) and
-16 (Expand-Scope) later — every adaptation agent that produces a new artifact registers it here
-the same way, via `register_version()`. Promotion/rejection (deciding whether a candidate
-version's status becomes `"production"` or `"rejected"`) is Module 17 (Agentic Verification)'s
-job, not built yet — `promote()`/`reject()` exist here as registry primitives Module 17 will call,
-but nothing in this codebase invokes them automatically; a version this registry creates is never
-implicitly trusted (prompt.md §46: "must never allow an invalid candidate to become active").
-
-Persistence: one JSON index file (`<models_dir>/registry_index.json`, atomic write-temp-then-
-rename, mirroring `D1Store`'s `_atomic_write_parquet` pattern) holding every `ModelVersionMetadata`
-record ever created, plus one artifact file per version
-(`<models_dir>/<component>/<version_id>.joblib`, written via the component's own already-tested
-`DTComponent.save()`). JSON (not Parquet) is the right fit here — a registry index is a modest
-number of richly-structured, human-inspectable records, not a large row-oriented telemetry table.
+Persistence: one JSON index (`<models_dir>/registry_index.json`, atomic write) + one artifact
+file per version (`<models_dir>/<component>/<version_id>.joblib`).
 """
 
 from __future__ import annotations
@@ -57,14 +39,9 @@ class ModelRegistryError(Exception):
 
 
 class ModelVersionMetadata(BaseModel):
-    """Everything prompt.md §29 requires to identify one candidate/production artifact.
-
-    Immutable once created (`model_config = frozen`) — the ONLY field that ever changes after
-    creation is `status`, and that happens by replacing the record wholesale (`model_copy`) via
-    `promote()`/`reject()`/`supersede`, never by mutating a stored instance in place. This keeps
-    every version's history genuinely auditable: a `"production"` record retained after being
-    superseded is bit-for-bit what was actually promoted at the time.
-    """
+    """Identifies one candidate/production artifact. Immutable (`frozen`) — `status` changes
+    only by replacing the record wholesale (`model_copy`) via `promote()`/`reject()`, never by
+    in-place mutation, so a superseded record stays bit-for-bit what was actually promoted."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -148,11 +125,9 @@ class ModelRegistry:
         status: Literal["candidate", "production", "rejected", "superseded"] = "candidate",
         llm_metadata: dict[str, Any] | None = None,
     ) -> ModelVersionMetadata:
-        """Persist `component_instance`'s trained state as a new immutable version and record its
-        metadata. Never mutates any existing version, and never itself decides `status` beyond
-        what the caller explicitly passes — a candidate is `"candidate"` unless the caller (e.g.
-        a bootstrap-training step registering the very first version) explicitly says otherwise;
-        this registry never promotes anything on its own (prompt.md §46)."""
+        """Persist `component_instance`'s trained state as a new immutable version. Never mutates
+        an existing version; `status` is always whatever the caller passes — this registry never
+        promotes anything on its own."""
         component = component_instance.COMPONENT_NAME
         with self._lock:
             existing = self._versions.get(component, [])
@@ -215,25 +190,12 @@ class ModelRegistry:
         status: Literal["candidate", "production", "rejected", "superseded"] = "candidate",
         llm_metadata: dict[str, Any] | None = None,
     ) -> ModelVersionMetadata:
-        """`register_version()`'s counterpart for candidates produced OUTSIDE this process
-        (Modules 15/16's LLM-generated, sandboxed code — `src/sandbox/executor.py`). The trained
-        artifact already exists as a file the sandbox subprocess wrote; this process never
-        imports the untrusted class to call `.save()` on it the way `register_version()` does for
-        an already-trusted `DTComponent` instance — that would defeat the sandbox boundary
-        entirely. Instead this just COPIES the already-produced artifact (and, if given, the
-        candidate's source for audit — prompt.md §29) into this registry's managed storage.
-
-        Because the candidate's class was never imported HERE, this registry cannot itself
-        reconstruct a live instance of it either (`load_artifact_into` needs an
-        already-constructed instance of the matching class) — this registry deliberately stays
-        agnostic to how or whether one ever gets constructed. `source_path()` (below) is the read
-        -only hook a caller with its OWN vetted loading path uses to do so: `ContinuousOrchestrator`
-        (`src/main.py`)'s hot-swap mechanism dynamically imports the saved source ONLY after a real
-        ACCEPT (prompt.md §28/§70 rule 10 — never before), the one point in this whole system
-        LLM-generated code is imported into the trusted, long-running process rather than only
-        ever run inside the sandbox subprocess. This method only ever creates
-        `"candidate"`-or-explicitly-stated-status records.
-        """
+        """`register_version()`'s counterpart for sandboxed, LLM-generated candidates: the trained
+        artifact already exists as a file the sandbox wrote, so this only COPIES it (+ source, for
+        audit) in — it never imports the untrusted class. Because the class was never imported
+        here, this registry can't reconstruct a live instance either; `source_path()` is the
+        read-only hook a caller with its own vetted loading path (the hot-swap mechanism, only
+        after a real ACCEPT) uses to do so."""
         with self._lock:
             existing = self._versions.get(component, [])
             version_id = f"{component}-v{len(existing) + 1}"
@@ -314,8 +276,8 @@ class ModelRegistry:
         return target
 
     def reject(self, component: str, version_id: str) -> ModelVersionMetadata:
-        """Marks a candidate as `"rejected"` — retained for audit (prompt.md §8's "never silently
-        discard" principle, extended here), never deleted, never affects production."""
+        """Marks a candidate `"rejected"` — retained for audit, never deleted, never affects
+        production."""
         with self._lock:
             versions = self._versions.get(component, [])
             updated = []
@@ -337,9 +299,8 @@ class ModelRegistry:
         return target
 
     def rollback(self, component: str) -> ModelVersionMetadata:
-        """Reverts to the most recently superseded version, promoting it back to `"production"`
-        and demoting the current production version to `"superseded"` — the rollback safety
-        prompt.md §0.21 requires. Raises if there is nothing to roll back to."""
+        """Reverts to the most recently superseded version. Raises if there's nothing to roll
+        back to."""
         with self._lock:
             versions = self._versions.get(component, [])
             superseded = [v for v in versions if v.status == "superseded"]
@@ -366,39 +327,26 @@ class ModelRegistry:
         return list(self._versions.get(component, []))
 
     def load_artifact_into(self, component_instance: "DTComponent", version: ModelVersionMetadata) -> None:
-        """Restore `version`'s trained artifact into `component_instance` (already constructed,
-        of the matching class — see module docstring: this registry doesn't reconstruct
-        instances itself, only tracks/persists what a caller already built and trained)."""
+        """Restore `version`'s trained artifact into an already-constructed instance of the
+        matching class — this registry never constructs instances itself."""
         component_instance.load(self._models_dir / version.artifact_path)
 
     def artifact_path(self, version: ModelVersionMetadata) -> Path:
-        """Resolve `version`'s artifact to an absolute filesystem path — read-only path
-        resolution, no deserialization. Used by Module 17 (Agentic Verification) to confirm a
-        candidate's artifact genuinely exists on disk (prompt.md §32 "candidate successfully
-        loads") without importing or unpickling it — this registry never trusts an artifact's
-        bytes as executable in this process (see `register_version_from_artifact`'s docstring)."""
+        """Resolve `version`'s artifact to an absolute path — read-only, no deserialization.
+        Used by Verification to confirm the artifact exists on disk without unpickling it."""
         return self._models_dir / version.artifact_path
 
     def source_path(self, version: ModelVersionMetadata) -> Path | None:
-        """Resolve `version`'s saved LLM-generated source file (regenerate/expand_scope only —
-        `None` for a recalibration/bootstrap version, which reuses an already-imported class and
-        was never given its own source file) to an absolute path — same read-only resolution as
-        `artifact_path`, still never imports or executes anything itself. Used by
-        `ContinuousOrchestrator`'s hot-swap path (`src/main.py`) to dynamically load an ACCEPTed
-        candidate's class into live serving for the first time."""
+        """Resolve `version`'s saved LLM-generated source file to an absolute path (`None` for a
+        recalibration/bootstrap version — no source file of its own). Read-only; never imports."""
         if version.source_path is None:
             return None
         return self._models_dir / version.source_path
 
     def load_dynamic_class(self, version: ModelVersionMetadata) -> type:
         """Imports a regenerate/expand_scope candidate's LLM-generated class from its saved
-        source file — the one point in this whole system where LLM-generated code is imported
-        into a trusted, long-running process rather than only ever run inside the sandbox
-        subprocess (`src/sandbox/executor.py`). Every caller only ever does so for a version that
-        has ALREADY passed the sandbox's syntax/import/conformance/train/evaluate pipeline AND
-        Module 17's deterministic fidelity gate — never on a rejected or still-pending candidate.
-        Shared by `ContinuousOrchestrator._load_dynamic_class` (`src/main.py`) and
-        `baselines/_lib.py`'s own adaptation dispatch — one implementation, not two copies."""
+        source — the one point this trusted process imports LLM code, only ever for a version
+        already passed by the sandbox and verification."""
         import importlib.util
 
         source_path = self.source_path(version)
@@ -411,8 +359,6 @@ class ModelRegistry:
         return getattr(module, version.model_class)
 
     def list_component_names(self) -> list[str]:
-        """Every component name this registry has EVER tracked at least one version for —
-        including one produced by expand_scope, whose name did not exist when this process first
-        started. Used at boot to restore any such component (see `ContinuousOrchestrator.
-        _bootstrap_dt_models`) alongside the five originally-known ones."""
+        """Every component name this registry has ever tracked a version for, including one
+        produced by expand_scope. Used at boot to restore such components."""
         return list(self._versions.keys())

@@ -145,6 +145,7 @@ not a regression to chase.
 | `README.md` | Short top-level project readme. |
 | `manual.md` | **This file.** |
 | `PHASE13_FINAL_REPORT.md` | The §9 final report for this phase — model-fix results, lock, LLM cost/caching, baseline comparison table, graphs list, outputs list, docs status, Phase-12 open-issues resolution, and test pass counts. |
+| `AGENTS.md` | The 6 agentic AI agents (Decision & Root-Cause, Recalibration, Regeneration, Expand-Scope, Verification, Lifecycle) — what each does, how it does it, and exactly what tools/resources (LLM, RAG, sandbox, registries, D1) each one can access. |
 | `manual.txt` | Superseded by this file — kept for history, documents the pre-Phase-13 state. |
 | `config/settings.yaml` | Every tunable parameter in the system. Nothing is hardcoded in `src/` that should live here. |
 | `.env` / `.env.example` | Secrets (`GOOGLE_API_KEY`/`GEMINI_API_KEY`). `.env` is never committed; `.env.example` documents the required keys with placeholder values. |

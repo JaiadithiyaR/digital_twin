@@ -1,15 +1,11 @@
-"""Module 5 — DT Functional Model: dependency-aware orchestrator (prompt.md §11, §13, §0.17).
+"""DT Functional Model: dependency-aware orchestrator. Computes a topological execution order
+from `DTModelRegistry`'s declared dependencies (via networkx, never hardcoded) and runs each
+enabled component's `predict()` in that order — dependency inputs come from predictions already
+computed earlier in the same run; raw-feature inputs from the caller-supplied DataFrame.
 
-Computes a valid topological execution order from `DTModelRegistry`'s declared dependencies —
-via networkx, never a hardcoded call sequence — and runs each ENABLED component's `predict()` in
-that order, wiring each component's upstream-dependency inputs from predictions already computed
-earlier in the same run, and its raw-feature inputs directly from a caller-supplied features
-DataFrame (typically `D1Store.get_current_state()` or `.get_history()`).
-
-The dependency graph is executable metadata, not documentation (prompt.md §0.17): a component
-depending on an unregistered or disabled component, or a cyclic graph, fails loudly at
-plan-construction time. This orchestrator never silently produces a prediction from
-missing/incomplete inputs, and never predicts through a component that isn't trained.
+The dependency graph is executable metadata: a component depending on an unregistered/disabled
+component, or a cyclic graph, fails loudly at plan-construction time — never a silent prediction
+from incomplete inputs.
 """
 
 from __future__ import annotations

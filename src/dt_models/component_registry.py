@@ -1,16 +1,10 @@
-"""D1's modular component registry (Module 4 / D1, fig-dataflow.png: "... with a modular
-component registry").
+"""D1's modular component registry — a self-describing catalog of the state tables D1 tracks:
+name, kind (current-state / history / audit), schema, and Parquet path. New state categories
+register here instead of being hardcoded into `D1Store`, so any module can introspect what D1
+holds without hardcoding paths.
 
-A lightweight, self-describing catalog of the state "components" (tables) D1 tracks: what each
-is called, what kind of table it is (a keyed current-state snapshot, an append-only history log,
-or an audit trail), its schema, and where its Parquet file lives. This is what keeps D1 modular:
-new state categories that later modules produce — DT predictions (Module 5+), adaptation events,
-evaluation windows — register themselves here instead of being hardcoded into `D1Store`, and any
-downstream module can introspect what D1 currently holds without hardcoding file paths of its own.
-
-Registering a component only records the catalog entry — it never creates or touches a file.
-`D1Store` (`d1_model_store.py`) owns actually reading/writing the Parquet file at each registered
-path.
+Registering only records the catalog entry — never creates or touches a file; `D1Store` owns
+actually reading/writing each registered path.
 """
 
 from __future__ import annotations

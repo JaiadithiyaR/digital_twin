@@ -1,27 +1,13 @@
-"""Module 13 — Decision & Root-Cause Analysis Agent (prompt.md §18-21, §42-43, CLAUDE.md §6).
-Design-pivot replacement for the deleted Stable-Baselines3 PPO policy (`rl_agent.py`) — see
-CLAUDE.md §12's design-pivot notice for the full rationale.
+"""Decision & Root-Cause Analysis Agent (Agent 1) — on every trigger: (1) root-cause analysis of
+WHY it fired, grounded in supplied context + RAG, and (2) selects WHAT strategy to apply from the
+closed enum `{recalibrate, regenerate, expand_scope}` (never a 4th/5th option).
 
-This agent is responsible for two things on every adaptation trigger: (1) a root-cause analysis
-of WHY the trigger fired, grounded in the supplied context and RAG-retrieved knowledge, and (2)
-selecting WHAT adaptation strategy to apply, from the fixed, closed enum
-`{"recalibrate", "regenerate", "expand_scope"}` (prompt.md §19 — never a 4th/5th strategy).
+A direct LLM call every time — never a disguised rule-based heuristic, never cached/reused across
+triggers. Structured output (`DecisionOutput`), never free-form prose parsed via regex — this is
+what the agents receive as context and what Lifecycle records.
 
-**No training phase, unlike the PPO policy it replaces** (prompt.md §21): this is a direct call
-to the centralized `GoogleClient`, grounded in read-only retrieval from the RAG knowledge base
-(Module 18/D2) — "knowledge-based," not just "LLM-based." A hardcoded `if severity > X:
-regenerate()` (or any other disguised heuristic used as the normal operating path) is exactly
-what this module must NOT be — the same "must not be a disguised rule-based system" discipline
-that previously governed the PPO policy now governs this genuine LLM call instead. Every trigger
-gets its own genuine call — this never caches/reuses a decision across triggers.
-
-Structured output (prompt.md §20), never free-form prose parsed via regex — `DecisionOutput` is
-what Modules 14/15/16 receive as their triggering context, and what Module 19 records for the
-auditable lifecycle history and the human-readable maintenance report.
-
-The root-cause analysis is explanatory only. It can never override Module 17's deterministic
-acceptance gate (CLAUDE.md §6/§8) — this agent's output never reaches that gate at all; it only
-selects which of Modules 14/15/16 executes next.
+Explanatory only: this agent's output never touches the Verification Agent's deterministic
+acceptance gate; it only selects which agent executes next.
 """
 
 from __future__ import annotations

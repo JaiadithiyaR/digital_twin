@@ -1,22 +1,12 @@
-"""D1 — DT Basic Model: current + historical network state store (Module 4, fig-dataflow.png).
+"""D1 — DT Basic Model: current + historical network state store.
 
-Persistent (Parquet-backed), tabular/time-series representation of the Digital Twin's dynamic
-state. Implements Module 3's `D1StateSink` write contract for real (see
-`src/synchronization/d1_interface.py`) so `ContinuousSynchronizer` can be pointed at a genuine D1
-instead of the in-memory stub used to build/test Module 3 — nothing in `sync.py` needed to
-change to make this work.
+Persistent (Parquet-backed) tabular/time-series representation of the Digital Twin's dynamic
+state. Implements `D1StateSink` so `ContinuousSynchronizer` can be pointed at a real store
+instead of an in-memory stub.
 
-Scope (prompt.md §0.5 — strict separation of live network state / DT state / versioned models):
-this store holds ONLY telemetry-derived Digital Twin state (current + historical) — concept B in
-CLAUDE.md §4 ("dynamic DT state"), continuously updated by live telemetry (concept A, "live
-network state"). It does NOT hold DT prediction model versions/artifacts (concept C — that is
-Module 5's future model registry, `src/registry/model_registry.py`, unrelated to this file) and
-it does not fabricate a "network configuration" table: nothing in this system currently produces
-network-configuration data (no such module exists yet), so inventing one here would be exactly
-the kind of fake/placeholder component prompt.md prohibits. UE state and cell state are exposed
-as filtered views over the same current-state table (`get_ue_state`/`get_cell_state`) rather than
-separate physical stores, since telemetry already carries `ue_id`/`cell_id`/mobility fields —
-adding parallel tables for the same data would be unnecessary infrastructure (prompt.md §10).
+Scope: holds ONLY telemetry-derived DT state (current + historical) — never model
+versions/artifacts (that's `src/registry/model_registry.py`). UE/cell state are filtered views
+over the same current-state table, not separate physical stores.
 """
 
 from __future__ import annotations
@@ -39,11 +29,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Identity columns always present, regardless of which features a given record's source happened
-# to include (OAI migration: the feature SET is dynamic — declared by feature_schema.json, not a
-# fixed list — so unlike the retired NS-3-era schema, D1's own column list is assembled at
-# construction time from whatever feature keys are actually present in the first batch of
-# records it ever sees, not hardcoded here).
+# Identity columns always present; the feature set itself is dynamic (declared by
+# feature_schema.json), so D1's column list is assembled from the first batch of records seen.
 IDENTITY_COLUMNS: tuple[str, ...] = ("run_id", "cell_id", "session_id", "ue_id", "slice_id", "ts_1s")
 NON_FEATURE_COLUMNS: tuple[str, ...] = (
     *IDENTITY_COLUMNS, *TARGET_COLUMNS, "source", "quality_missing_fields",
@@ -53,13 +40,10 @@ QUARANTINE_COLUMNS: tuple[str, ...] = ("raw_json", "reason", "source", "received
 
 
 def _record_to_row(record: CleanTelemetryRecord) -> dict[str, Any]:
-    """`None` (a missing target/feature — e.g. `requested_prb_ratio_lag1` before any controller
-    deployment exists) is coerced to `float("nan")`, never left as Python `None`: a batch where
-    EVERY row happens to have `None` for some column makes `pd.DataFrame([...])` infer `object`
-    dtype for that column (no numeric value anywhere to infer from), and that corruption persists
-    forever afterward once concatenated — the exact same dtype-corruption bug class CLAUDE.md
-    documents for D1's very first write (Module 6). `float("nan")` always infers as `float64`
-    regardless of how many rows in the batch share it."""
+    """`None` is coerced to `float("nan")`, never left as Python `None`: a batch where every row
+    has `None` for some column makes `pd.DataFrame([...])` infer `object` dtype for it (no
+    numeric value to infer from), corrupting that column permanently once concatenated.
+    `float("nan")` always infers as `float64` regardless of row count."""
     row: dict[str, Any] = {
         "run_id": record.run_id,
         "cell_id": record.cell_id,
@@ -91,18 +75,11 @@ def _load_or_empty(path: Path, columns: tuple[str, ...]) -> pd.DataFrame:
 
 
 def _concat_preserving_dtypes(existing: pd.DataFrame, new_rows: pd.DataFrame) -> pd.DataFrame:
-    """`pd.concat` silently downcasts every column to `object` dtype when one side is the
-    columns-only, no-rows placeholder `_load_or_empty` returns for a not-yet-created store (an
-    empty DataFrame has no data to infer a dtype from, so pandas defaults every column to
-    `object`, and that "object wins" rule applies even though the other side is fully typed) —
-    a real, reproduced bug (prompt.md §0.26 "invalid numerical states"): every D1Store started
-    silently corrupting its own dtypes on its very first write, which stayed corrupted forever
-    after (every later concat inherits the already-`object` accumulated frame), invisibly
-    breaking anything dtype-sensitive downstream — e.g. XGBoost refuses to fit on `object`
-    columns. Skipping the concat entirely when `existing` has no rows sidesteps this: `new_rows`
-    keeps its own correctly-inferred dtypes, and every later concat is well-typed-to-well-typed,
-    which pandas does NOT corrupt.
-    """
+    """`pd.concat` downcasts every column to `object` dtype when one side is the empty,
+    columns-only placeholder `_load_or_empty` returns for a not-yet-created store — and that
+    corruption persists forever after (every later concat inherits the `object` frame), breaking
+    anything dtype-sensitive downstream (e.g. XGBoost refuses `object` columns). Skipping the
+    concat when `existing` has no rows sidesteps this entirely."""
     if existing.empty:
         return new_rows
     return pd.concat([existing, new_rows], ignore_index=True)

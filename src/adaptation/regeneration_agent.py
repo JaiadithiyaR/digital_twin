@@ -1,56 +1,23 @@
-"""Module 15 — Regeneration Agent (prompt.md §24-26).
+"""Regeneration Agent (Agent 3) — rebuilds an EXISTING production component's whole pipeline via
+LLM-generated code, used when the architecture itself (not just learned parameters) needs to
+change. Does not decide whether to regenerate — the Decision Agent already did.
 
-Regeneration is used when "the current model architecture/pipeline is no longer capable of
-representing the changed behaviour" — i.e. PPO (Module 13) selected action 1 for an
-already-production component whose STRUCTURE, not just its learned parameters, needs to change.
-This is the primary LLM code-generation component (prompt.md §24). Like Module 14, this agent
-does not decide *whether* to regenerate — PPO already decided that; it only executes the strategy.
+Flow: inspect current model + source (`inspect.getsource()`) -> gather context (metadata, recent
+feature stats, error-pattern residuals on a held-out window, fidelity, drift context, RAG) ->
+`_generate_candidate()` via the centralized LLM client -> `SandboxExecutor.run_candidate()`
+(syntax/import/conformance/train/evaluate, all deterministic) -> self-correct on rejection (up to
+`max_llm_iterations`, feeding the sandbox's error back to the LLM) -> register the accepted
+candidate via `ModelRegistry.register_version_from_artifact()` -> real fidelity before/after
+computed here from data, never from the candidate's own numbers.
 
-**Nine-step mapping, mirroring Module 14's docstring convention**:
-    1. receive the affected component          -> `component_factory` param
-    2. inspect current model + its source code -> `ModelRegistry.get_current_version()` +
-       `inspect.getsource()` on the currently-registered production class (prompt.md §25)
-    3. gather regeneration context              -> `_build_context()`: current metadata, recent
-       feature statistics, error patterns (residuals of the CURRENT production model on a held-out
-       window), fidelity metrics, drift context (caller-supplied), RAG context (Module 18, now
-       wired — genuinely retrieved via `_retrieve_rag_context()` when a knowledge base is
-       supplied, honestly reported as unavailable/empty otherwise, never faked)
-    4. generate candidate source via the LLM     -> `_generate_candidate()`, using the centralized
-       `GoogleClient` built for this project ("Use the direct Google AI (Gemini) API" per
-       prompt.md §24 — the centralized client where LLM-assisted pipeline generation is needed)
-    5. sandbox the candidate                     -> `SandboxExecutor.run_candidate()`
-       (`src/sandbox/executor.py`) — syntax/import/conformance/train/evaluate, prompt.md §26's
-       exact pipeline, ALL deterministic, non-LLM code judging LLM-generated code
-    6. self-correct on rejection                 -> up to `config.adaptation.regeneration.
-       max_llm_iterations` attempts, feeding the sandbox's rejection stage/error back to the LLM
-    7. register the accepted candidate as a new version -> `ModelRegistry.
-       register_version_from_artifact()` (Module 14's registry, extended for sandboxed candidates
-       whose class this process never imports)
-    8. evaluate it (already done inside the sandbox, plus real Module 12 fidelity before/after
-       computed here in the parent from data, never from untrusted code)
-    9. "pass it to verification" — Module 17 doesn't exist yet; this agent's contract ends at
-       returning a versioned, evaluated `RegenerationResult`, exactly like Module 14.
+LLM-generated code is never imported or executed in this process — `SandboxExecutor` is the only
+thing that ever runs it, as a separate OS process. This agent only ever receives back plain data:
+accept/reject + reason, metrics, prediction values, and the trained artifact's raw bytes (handed
+straight to the registry, never deserialized here). A rejected candidate never reaches the
+registry — production is untouched by construction.
 
-**Rule 10 (prompt.md §70): "LLM-generated code is never production code until sandboxed and
-verified."** Enforced structurally, not by convention: this process NEVER imports, `exec()`s, or
-otherwise executes the LLM's generated source directly. `SandboxExecutor.run_candidate()` is the
-ONLY thing that ever runs it, as a separate OS process with a minimal environment (see
-`src/sandbox/executor.py`'s module docstring for the full isolation model and its honestly-
-documented limits). This agent only ever receives back: acceptance/rejection + a structured
-reason, component-local metrics, the candidate's OWN declared dependencies/features, raw
-prediction VALUES on the held-out set (data, not code — safe to read into this process), and the
-trained artifact's raw BYTES (also just data — this process reconstructs nothing executable from
-it; it hands the bytes straight to the registry, which writes them to a file). A rejected
-candidate never reaches `ModelRegistry` at all — production is provably untouched by definition,
-not merely by discipline.
-
-**Continuous operation during adaptation (prompt.md §0.6/§0.8) — the same structural guarantee as
-Module 14, now proven under a heavier real workload**: this agent takes exactly one `D1Store.
-get_history()` snapshot per `regenerate()` call and never calls a D1 write method; every LLM call
-and every sandboxed subprocess run operates entirely on that already-isolated in-memory/file
-snapshot. `tests/integration/test_regeneration_agent.py` proves telemetry keeps synchronizing
-into D1 for the ENTIRE duration of a real `regenerate()` call — LLM call(s) plus real sandboxed
-subprocess training — not just during a quick in-memory retrain as Module 14's proof covered.
+Continuous operation: one `D1Store.get_history()` snapshot per call, zero D1 writes — telemetry
+keeps flowing through the LLM call(s) and the sandboxed subprocess train.
 """
 
 from __future__ import annotations

@@ -1,65 +1,24 @@
-"""`src/main.py` — Phase 11: the top-level continuous orchestration loop (prompt.md §39,
-CLAUDE.md §2/§10). This is the final piece of the 19-module architecture: it wires every
-already-built module together into one real, continuously-running system.
+"""Top-level continuous orchestration loop — wires every module into one running system.
 
-**OAI migration (prompt2.md)**: Module 1 is no longer NS-3/5G-LENA over ZeroMQ — it is a replay
-of real exported OAI RAN KPI CSVs (`src/telemetry/oai_replay_source.py`, `SOURCE=OAI_RAN_REPLAY`)
-or, for unit tests only, an OAI-schema-shaped mock (`SOURCE=MOCK`). The 5 NS-3-era DT prediction
-components (throughput/latency/packet_loss/prb_utilization/jitter) are replaced entirely by 7 OAI
-KPI components (dl_bler/ul_bler/dl_prb/ul_prb/dl_throughput/ul_throughput/dl_rlc_delay) — see
-`CLAUDE.md` and `docs/oai_twin.md`.
+Canonical loop: OAI replay/mock telemetry -> preprocess -> continuous sync -> D1 -> 7-component
+DT prediction -> fidelity (+ unified score/trigger) -> drift -> Decision & Root-Cause Analysis
+Agent -> recalibrate/regenerate/expand_scope -> verification -> lifecycle record -> continue.
 
-**This file is integration only** — it constructs already-tested components (D1Store,
-DTModelRegistry/DTOrchestrator, FidelityEvaluator, ContinuousSynchronizer, DriftDetectorInterface,
-the Decision & Root-Cause Analysis Agent, Modules 14/15/16's agents, VerificationAgent,
-LifecycleAgent, RagKnowledgeBase, GoogleClient) and calls their already-tested public methods in
-exactly the order prompt.md §39 specifies. No new model, fidelity, verification, or agent logic is
-written here.
+Integration only: constructs already-tested components and calls their public methods in order;
+no model/fidelity/verification/agent logic lives here.
 
-Canonical loop (CLAUDE.md §2):
-    OAI replay/mock telemetry -> Module 2 (preprocess) -> Module 3 (continuous sync) -> D1 (Module 4)
-    -> Modules 5-10 (dependency-aware DT prediction) -> Module 12 (fidelity + unified score/trigger)
-    -> Module 11 (drift) -> Module 13 (Decision & Root-Cause Analysis Agent) -> Module 14/15/16
-    (execution) -> Module 17 (verification) -> Module 19 (lifecycle record) -> continue.
+Non-negotiable: telemetry ingestion must never stop or block for an adaptation cycle (LLM call +
+possible sandboxed subprocess train). `ContinuousSynchronizer` runs on its own background thread
+started once at `start()`; the trigger->decision->agent->verification->lifecycle cycle runs on the
+orchestrator's own foreground loop — a slow adaptation cycle only ever delays the next trigger,
+never a telemetry sync. See `scripts/run_orchestrator_demo.py` for a live proof.
 
-**The one hard non-negotiable this file exists to prove** (prompt.md §0.6/§0.8, CLAUDE.md §8
-"continuous operation"): telemetry ingestion/D1 synchronization must NEVER stop or block while an
-adaptation cycle (which can include an LLM call and/or a sandboxed subprocess training run) is in
-progress. This is a STRUCTURAL guarantee, not a sequencing accident: `ContinuousSynchronizer` runs
-on its own background daemon thread (started once at `start()`, exactly as Module 3 already
-guarantees — nothing in this file's own loop ever calls into it again), and the trigger ->
-decision agent -> agent -> verification -> lifecycle cycle runs entirely in the orchestrator's own
-foreground loop thread, so a slow adaptation cycle can only ever delay the NEXT trigger/prediction cycle,
-never a telemetry batch sync. `scripts/run_orchestrator_demo.py` is the permanent, repo-tracked
-validation script that proves this concretely with a real sampler thread — see that script and
-CLAUDE.md's own Phase 11 entry for the actual observed numbers from a real run.
-
-**Design pivot** (see CLAUDE.md §12's design-pivot notice): Module 13 is no longer a locally-run,
-pre-trained PPO policy — it is the knowledge-based Decision & Root-Cause Analysis Agent
-(`src.adaptation.decision_agent.DecisionAgent`), making a genuine LLM call on every single
-trigger. There is no observation vector or trained policy artifact anymore; `_build_decision_
-context()` (thin glue around `src.adaptation.decision_context.build_decision_context`) assembles
-a bounded, structured snapshot instead — real per-component `FidelityEvaluator` scores, the real
-Unified Fidelity Score (Module 12, §16a), the real trigger's component/severity/type, this
-orchestrator's own tracked previous outcome PER COMPONENT (from the last REAL verified fidelity
-delta for that component), real RAG-retrieved context, and a real D1-history-derived network-state
-summary.
-
-**Two trigger sources, normalized uniformly** (prompt.md §16a): an external `DriftEvent` (Module
-11) and this orchestrator's own periodic fidelity-based trigger check (`FidelityEvaluator.
-check_fidelity_trigger()`, Module 12) both funnel into the SAME `AdaptationTrigger` queue and the
-SAME dispatch path — the Decision & Root-Cause Analysis Agent never needs to know which one fired.
-
-**LLM availability**: no real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured in this development
-environment. This orchestrator constructs a real `GoogleClient` when a key IS configured (even a
-placeholder counts as "configured" from this code's perspective — the actual live call is what
-fails, gracefully, not construction). Unlike the old PPO design, the DECISION itself now requires
-a genuine LLM call every time — `DecisionAgent.decide_safe()` degrades to the configured
-deterministic fallback strategy on any LLM infrastructure failure (never a silent substitute,
-never a fabricated response), logged at WARNING every time it happens. If the resulting strategy
-is `regenerate`/`expand_scope` and no LLM client is available to actually EXECUTE it, that cycle
-is separately skipped with its own clear WARNING — telemetry ingestion and the next trigger are
-entirely unaffected either way. `recalibrate` never needs an LLM to execute.
+Two trigger sources (external `DriftEvent` and the internal fidelity-based trigger) are
+normalized into one `AdaptationTrigger` shape and share one queue/dispatch path. The Decision
+Agent makes a genuine LLM call per trigger; `decide_safe()` falls back to the configured
+deterministic strategy (logged WARNING) on any LLM failure. If `regenerate`/`expand_scope` is
+selected with no LLM client available to execute it, that cycle is skipped (WARNING) without
+affecting telemetry or the next trigger. `recalibrate` never needs an LLM to execute.
 """
 
 from __future__ import annotations
@@ -114,10 +73,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The 7 OAI KPI prediction components (Modules 6-10 replacement, prompt2.md Step 5) — the only
-# ones a drift event can legitimately name (config.drift.valid_components already enforces this
-# at the Module 11 layer; these two dicts are this file's own generic dispatch table, never
-# hardcoded per-branch logic).
+# The 7 OAI KPI components — the only names a drift event may legitimately carry.
 _DT_COMPONENT_CLASSES: dict[str, type[DTComponent]] = {
     "dl_bler": DlBlerModel,
     "ul_bler": UlBlerModel,
@@ -127,14 +83,11 @@ _DT_COMPONENT_CLASSES: dict[str, type[DTComponent]] = {
     "ul_throughput": UlThroughputModel,
     "dl_rlc_delay": DlRlcDelayModel,
 }
-# Each OAI component's own ground-truth column happens to share its exact name (unlike the
-# retired NS-3-era components, where e.g. "throughput" predicted "throughput_mbps") — still kept
-# as an explicit dict, never assumed equal in code, so a future component whose name and target
-# column genuinely differ needs no structural change here.
+# Target column == component name here; kept as an explicit dict (never assumed) so a future
+# component whose name and target column differ needs no structural change.
 _TARGET_COLUMNS: dict[str, str] = {name: name for name in _OAI_TARGETS}
-# Fixed topological order (matches DTOrchestrator.build_execution_order()'s own result) so
-# dependency-having components can be bootstrap-trained with their dependency's ground-truth
-# column already available.
+# Topological order so dependency-having components can be bootstrap-trained with their
+# dependency's ground-truth column already available.
 _BOOTSTRAP_ORDER: tuple[str, ...] = ("dl_bler", "ul_bler", "dl_prb", "ul_prb", "dl_throughput", "ul_throughput", "dl_rlc_delay")
 _OUTPUT_FIELDS: dict[str, str] = {name: cls.OUTPUT_FIELD for name, cls in _DT_COMPONENT_CLASSES.items()}
 
@@ -151,49 +104,30 @@ class ContinuousOrchestrator:
     ) -> None:
         self._settings = settings
         self._secrets = secrets
-        # ONLY affects what severities the (mock) drift source GENERATES — never what
-        # DriftDetectorInterface accepts as valid, which always stays at the full configured
-        # range. Used by the validation run to bias toward low-severity (recalibrate-eligible)
-        # incidents so a full, genuinely non-fabricated cycle completes without needing a real
-        # LLM client in an environment where none is configured — see this module's own
-        # docstring and CLAUDE.md's Phase 11 entry for why this is honest, not scripted.
+        # Only biases what severities the mock drift source GENERATES (demo/validation runs) —
+        # never what DriftDetectorInterface accepts.
         self._drift_severity_range_override = drift_severity_range_override
 
         self._stop_event = threading.Event()
-        # Set by start(); stop() guards on these being non-None so calling stop() without a
-        # prior start() (or twice in a row) is a harmless no-op rather than an AttributeError.
+        # None until start(); lets stop() without a prior start() be a harmless no-op.
         self.sync_thread: threading.Thread | None = None
         self.drift_thread: threading.Thread | None = None
-        # Both canonical trigger sources (external DriftEvent, normalized; and the internal
-        # fidelity-based trigger) funnel into this ONE pending-trigger structure as
-        # AdaptationTrigger instances (prompt.md §16a) — the dispatch path in run() never needs
-        # to know which one fired. Phase 13 §2 (adaptation lock, `config.adaptation.lock_policy
-        # == "coalesce"`): at most one PENDING trigger per component is ever held here — a
-        # second trigger for a component that already has one pending (whether still queued or
-        # currently being processed under `_locked_component`) is merged into it, keeping
-        # whichever has the higher severity, and is picked up in the NEXT cycle after the lock on
-        # that component is released, rather than becoming a second, separate adaptation cycle.
-        # See `_enqueue_trigger`/`_pop_next_trigger`/`_handle_trigger`.
+        # Both trigger sources funnel into one pending-trigger structure, coalesce policy: at
+        # most one pending trigger per component, merged by max severity, picked up once that
+        # component's lock releases. See _enqueue_trigger/_pop_next_trigger/_handle_trigger.
         self._pending_lock = threading.Lock()
         self._pending_by_component: dict[str, AdaptationTrigger] = {}
         self._pending_order: list[str] = []  # component names, FIFO by first-pending arrival
-        self._locked_component: str | None = None  # the component currently mid-adaptation-cycle, else None
+        self._locked_component: str | None = None  # component currently mid-cycle, else None
         self._latest_fidelity: dict[str, float | None] = {}
-        # Per-component previous-outcome tracking for the Decision & Root-Cause Analysis Agent's
-        # context (prompt.md §18 "previous action taken for this component/incident and its
-        # outcome, where available") — replaces the old PPO design's single scalar
-        # previous-action-index/previous-reward, since there is no fixed-size observation vector
-        # to populate anymore, and outcomes are naturally per-component, not global.
+        # Per-component previous-outcome tracking for the Decision Agent's context.
         self._previous_outcome_by_component: dict[str, PreviousOutcome] = {}
 
-        # Set by _handle_drift_event around the adaptation cycle's own wall-clock window — the
-        # public hook the validation script reads to bracket its telemetry-growth sampler,
-        # mirroring Modules 14/15/16's own concurrency-proof test pattern exactly.
+        # Brackets the current adaptation cycle's wall-clock window; read by validation scripts.
         self.last_adaptation_started_at: float | None = None
         self.last_adaptation_finished_at: float | None = None
 
-    # --- initialization (prompt.md §39: config -> storage -> RAG -> registry -> bootstrap models
-    # -> telemetry source), each step delegated to an already-built module -----------------------
+    # --- initialization: config -> storage -> RAG -> registry -> bootstrap models -> telemetry --
 
     def initialize(self) -> None:
         settings = self._settings
@@ -215,32 +149,18 @@ class ContinuousOrchestrator:
                 "execution is unaffected",
                 extra={"component": "main", "error": str(exc)},
             )
-        # No training phase, unlike the PPO policy this replaces (prompt.md §21) — the decision
-        # agent is a direct LLM call, always constructed the same way regardless of whether a real
-        # key is configured (DecisionAgent accepts llm_client=None and degrades via decide_safe()
-        # exactly as if a configured client's call had failed).
         self.decision_agent = DecisionAgent.from_settings(settings, self.llm_client)
-        # Real bug found and fixed while validating against a genuine live key: this MUST be
-        # constructed AFTER self.llm_client above and passed it explicitly — LifecycleAgent's own
-        # optional LLM-enhanced maintenance-report prose (prompt.md §38) is unreachable without it,
-        # silently falling back to the deterministic template every time regardless of whether a
-        # working client exists, with no warning ever logged (generate_maintenance_report() only
-        # warns on an LLM call that was actually attempted and failed, never on one that was never
-        # attempted at all).
+        # Must be constructed AFTER self.llm_client and passed it explicitly, or its optional
+        # LLM-enhanced report prose is unreachable with no warning ever logged.
         self.lifecycle_agent = LifecycleAgent.from_settings(settings, llm_client=self.llm_client)
 
-        # Per-component dispatch bookkeeping, seeded from the five statically-known DT components
-        # but GROWABLE at runtime — an expand_scope candidate that gets ACCEPTed introduces a
-        # genuinely new component name neither dict originally knew about (see
-        # `_hot_swap_candidate`); `_bootstrap_dt_models` below restores both for any such
-        # component that already existed in a PRIOR process's ModelRegistry, so it survives a
-        # restart exactly like the five original components already did.
+        # Per-component dispatch bookkeeping, seeded from the 7 known components but growable at
+        # runtime — an ACCEPTed expand_scope candidate adds a new name (see _hot_swap_candidate);
+        # _bootstrap_dt_models restores these for any such component from a prior process.
         self._target_columns: dict[str, str] = dict(_TARGET_COLUMNS)
         self._output_fields: dict[str, str] = dict(_OUTPUT_FIELDS)
-        # Classes dynamically loaded from a regenerate/expand_scope candidate's saved LLM-
-        # generated source (never the five originals, which stay statically imported) — populated
-        # by both `_bootstrap_dt_models` (resuming one from a prior process) and
-        # `_hot_swap_candidate` (promoting one for the first time, live).
+        # Classes dynamically loaded from a regenerate/expand_scope candidate's saved source
+        # (never the 7 originals, which stay statically imported).
         self._dynamic_component_classes: dict[str, type[DTComponent]] = {}
 
         self._bootstrap_dt_models()
@@ -290,16 +210,10 @@ class ContinuousOrchestrator:
         return MockTelemetrySource(settings.telemetry.mock, max_records=None, realtime=True)
 
     def _bootstrap_dt_models(self) -> None:
-        """"Load/train bootstrap DT models" (prompt.md §39), extended for hot-swap "permanence"
-        across a restart: for each of the five original components, LOAD the current production
-        artifact if one is already registered (a resumed process), else TRAIN a fresh one on a
-        real bootstrap telemetry batch and register it as the very first production version — the
-        original prompt.md §39 behavior, unchanged. PLUS, for any OTHER component name the
-        ModelRegistry has EVER tracked a version for (`list_component_names()`) — i.e. one an
-        expand_scope candidate created in a prior process's lifetime and this one never heard of
-        until now — LOAD it too, dynamically (see `_load_dynamic_class`): it can only exist here
-        because a real ACCEPT already happened for it, so there is never a bootstrap-train-fresh
-        case for one of these — only load what was already produced."""
+        """Load each of the 7 components' current production artifact if one exists (resumed
+        process), else train fresh on bootstrap telemetry and register as the first production
+        version. Also loads any extra component an expand_scope ACCEPT created in a prior
+        process's lifetime (`list_component_names()`) — always a load, never a fresh train."""
         settings = self._settings
         self._dt_components: dict[str, DTComponent] = {}
         extra_names = [n for n in self.model_registry.list_component_names() if n not in _BOOTSTRAP_ORDER]
@@ -312,11 +226,8 @@ class ContinuousOrchestrator:
         for name in _BOOTSTRAP_ORDER:
             current_version = self.model_registry.get_current_version(name)
             if current_version is not None and current_version.source_path is not None:
-                # A regenerate candidate was ACCEPTed for this component at some point — its
-                # production artifact belongs to an LLM-generated class, never the original
-                # statically-imported one, so loading it into a freshly-constructed static
-                # instance here would silently mix an unrelated class's weights into the wrong
-                # implementation. Load the ACTUAL trained class instead, same as a fresh hot swap.
+                # Regenerated: production artifact belongs to an LLM-generated class, not the
+                # static import — load the actual class, same as a fresh hot swap.
                 instance = self._load_and_restore(name, current_version)
             else:
                 instance = _DT_COMPONENT_CLASSES[name].from_settings(settings)
@@ -338,11 +249,9 @@ class ContinuousOrchestrator:
             self._dt_components[name] = self._load_and_restore(name, version)
 
     def _load_and_restore(self, name: str, version: ModelVersionMetadata) -> DTComponent:
-        """Dynamically loads `version`'s LLM-generated class and its trained artifact, and
-        restores this orchestrator's own target-column/output-field bookkeeping for it (needed
-        for a genuinely new expand_scope component the first time it's resumed — a no-op
-        overwrite for a regenerated EXISTING component, whose target column is already the
-        correct one from `_TARGET_COLUMNS`)."""
+        """Dynamically loads `version`'s LLM-generated class + trained artifact, and restores its
+        target-column/output-field bookkeeping (needed the first time an expand_scope component
+        is resumed; a no-op for a regenerated existing one)."""
         cls = self._load_dynamic_class(version)
         instance = cls()
         self.model_registry.load_artifact_into(instance, version)
@@ -365,35 +274,20 @@ class ContinuousOrchestrator:
         return instance
 
     def _load_dynamic_class(self, version: ModelVersionMetadata) -> type[DTComponent]:
-        """Imports a regenerate/expand_scope candidate's LLM-generated class from its saved
-        source file — the one point in this whole system where LLM-generated code is imported
-        into the trusted, long-running process rather than only ever run inside the sandbox
-        subprocess (`src/sandbox/executor.py`). Every caller of this method only ever does so for
-        a version that has ALREADY passed the sandbox's syntax/import/conformance/train/evaluate
-        pipeline AND Module 17's deterministic fidelity gate — either just now (`_hot_swap_
-        candidate`, called only on a real ACCEPT) or in a past process's lifetime (`_bootstrap_
-        dt_models`/`_load_and_restore`, which can only ever find a production version here in the
-        first place because some past ACCEPT already promoted it) — never on a rejected or
-        still-pending candidate. Delegates to `ModelRegistry.load_dynamic_class` — the shared
-        implementation `baselines/_lib.py` also uses, so there is only one copy of this logic."""
+        """Imports a regenerate/expand_scope candidate's LLM-generated class from its saved source
+        — the one point this trusted process imports LLM code, and only ever for a version that
+        already passed sandbox + verification (never a rejected/pending candidate)."""
         return self.model_registry.load_dynamic_class(version)
 
     def _component_class_for(self, name: str) -> "type[DTComponent] | None":
-        """The class currently backing live serving for `name` — one of the five originals, or
-        whichever class a hot swap or a restart-restore most recently loaded for it (see
-        `_dynamic_component_classes`). `None` if `name` isn't a real, currently-known component at
-        all (never guessed at — the caller must treat this as "not a valid adaptation target")."""
-        # Dynamic MUST be checked first: a class object is always truthy, so
-        # `_DT_COMPONENT_CLASSES.get(name) or ...` would silently keep returning the ORIGINAL
-        # static class for one of the five originals even after a real regenerate hot swap
-        # replaced it — caught by a real test, not by inspection (see tests/unit/test_main.py).
+        """The class currently backing live serving for `name`, or `None` if unknown."""
+        # Dynamic checked first — a class is always truthy, so `A.get(name) or B.get(name)` would
+        # silently keep returning the static class even after a hot swap replaced it.
         return self._dynamic_component_classes.get(name) or _DT_COMPONENT_CLASSES.get(name)
 
     def _generate_bootstrap_history(self) -> pd.DataFrame:
-        """The real OAI TRAIN split (prompt2.md Step 5: "Bootstrap: train each component on
-        TRAIN") — `data/processed/oai/train.parquet`, built by `scripts/build_oai_dataset.py`.
-        Never the live D1Store (bootstrap data is a distinct provenance category from live
-        telemetry, per CLAUDE.md's Module 3 entry's scope boundary), and never VAL/TEST."""
+        """The real OAI TRAIN split (`data/processed/oai/train.parquet`) — never the live
+        D1Store (bootstrap data is a separate provenance from live telemetry) and never VAL/TEST."""
         settings = self._settings
         train_path = settings.resolve_path("data/processed/oai/train.parquet")
         if not train_path.exists():
@@ -436,15 +330,9 @@ class ContinuousOrchestrator:
         logger.info("orchestrator started — telemetry sync and drift consumption running in the background", extra={"component": "main"})
 
     def stop(self) -> None:
-        """Phase 13 §8.4: deterministic shutdown — signals both background threads to exit, then
-        BLOCKS (bounded by `config.synchronization.shutdown_join_timeout_seconds`) until each
-        actually has, rather than returning immediately while they're still mid-flight (the
-        original race: a caller could treat the orchestrator as fully stopped, e.g. tear down
-        logging or delete its storage directory, while `dt-continuous-sync`/`dt-drift-consumer`
-        were still running and could still log or write). All logging happens BEFORE this method
-        returns, never from either background thread after this call believes shutdown is
-        complete — a thread that doesn't exit within the timeout is reported here, in the caller's
-        own thread, not from the stale background thread itself."""
+        """Deterministic shutdown: signal both background threads, then block (bounded by
+        `shutdown_join_timeout_seconds`) until each actually exits — avoids a caller treating the
+        orchestrator as stopped while a thread is still running/logging."""
         self._stop_event.set()
         self.synchronizer.stop()
         self.drift_source.close()
@@ -475,11 +363,8 @@ class ContinuousOrchestrator:
             self._enqueue_trigger(trigger_from_drift_event(event))
 
     def _enqueue_trigger(self, trigger: AdaptationTrigger) -> None:
-        """Phase 13 §2: at most one pending trigger per component is ever held — a second
-        trigger for a component that already has one pending (queued OR currently being
-        processed, since `_pop_next_trigger` only removes an entry once it's actually handed to
-        `_handle_trigger`) is coalesced into the existing one, keeping the higher severity, never
-        creating a second separate adaptation cycle for the same component."""
+        """Coalesce policy: at most one pending trigger per component. A second trigger for a
+        component with one already pending merges in, keeping the higher severity."""
         with self._pending_lock:
             existing = self._pending_by_component.get(trigger.component)
             if existing is None or trigger.severity > existing.severity:
@@ -488,12 +373,8 @@ class ContinuousOrchestrator:
                 self._pending_order.append(trigger.component)
 
     def _pop_next_trigger(self) -> "AdaptationTrigger | None":
-        """FIFO by first-pending arrival. Removing `component` from `_pending_order`/
-        `_pending_by_component` here — only once it's actually about to be dispatched — is what
-        lets a trigger that coalesces in WHILE this component is locked (mid-cycle) start a fresh
-        `_pending_order` entry of its own, correctly processed in the NEXT cycle after the lock
-        releases, rather than being lost or merged into a cycle that's already past the point of
-        reading it."""
+        """FIFO by first-pending arrival. Only removed here (just before dispatch), so a trigger
+        that coalesces in while this component is locked starts a fresh entry for the next cycle."""
         with self._pending_lock:
             if not self._pending_order:
                 return None
@@ -503,21 +384,11 @@ class ContinuousOrchestrator:
     # --- the continuous loop itself (prompt.md §39) ---------------------------------------------
 
     def run(self, max_drift_events: int | None = None, prediction_interval_seconds: float = 5.0) -> None:
-        """The foreground orchestration loop: periodically run DT prediction + fidelity
-        evaluation (which may itself enqueue a fidelity-based trigger), and dispatch every
-        pending trigger — external drift or fidelity-based, both already normalized to the same
-        `AdaptationTrigger` shape — through the full Decision & Root-Cause Analysis Agent -> agent
-        -> verification -> lifecycle cycle, one component-scoped adaptation at a time (phase13
-        §2's `lock_policy == "coalesce"`; `config.adaptation.allow_concurrent_components` is
-        structurally forbidden from being anything but `false` — see `Settings._forbid_
-        unsupported_concurrent_components` — so this single-threaded dispatch loop IS the
-        "different components adapt concurrently only if config allows it (default: no)" policy,
-        not merely an approximation of it). Runs until `stop()` is called, or (for demo/
-        validation runs only) until `max_drift_events` adaptation cycles have completed —
-        production/live usage passes `max_drift_events=None` and never stops on its own
-        (prompt.md §39: "must not stop after one adaptation event"). Telemetry ingestion
-        (started separately, in `start()`) is completely unaffected by anything this loop does —
-        see this module's own docstring."""
+        """Periodically runs prediction+fidelity (may enqueue a fidelity trigger), then dispatches
+        every pending trigger — external drift or fidelity-based, one shape — through decision ->
+        agent -> verification -> lifecycle, one component-scoped adaptation at a time. Runs until
+        `stop()`, or (demo/validation only) until `max_drift_events` cycles complete; production
+        passes `max_drift_events=None` and never stops on its own. Telemetry sync is unaffected."""
         handled = 0
         last_prediction = 0.0
         while not self._stop_event.is_set():
@@ -540,15 +411,11 @@ class ContinuousOrchestrator:
                 return
 
     def run_prediction_and_fidelity_cycle(self) -> dict[str, float | None]:
-        """Modules 5-10 (dependency-aware prediction) -> Module 12 (fidelity), against the real,
-        live-growing D1 state — the SAME `DTOrchestrator`/`FidelityEvaluator` used throughout this
-        orchestrator's lifetime, so fidelity windows genuinely accumulate real history over time.
-        Also checks Module 12's internal fidelity-based trigger (prompt.md §16a) after every
-        update and enqueues it exactly like an external drift event if it fires — the SECOND of
-        the two canonical trigger sources. Public (not `_`-prefixed): `run()` calls this
-        periodically on its own, but a caller (e.g. a validation/demo script) may also call it
-        directly to let real fidelity history accumulate past
-        `config.fidelity.min_history_for_normalization` before triggering an adaptation cycle."""
+        """Dependency-aware DT prediction -> fidelity, against live-growing D1 state, using the
+        same `DTOrchestrator`/`FidelityEvaluator` for this orchestrator's whole lifetime so
+        fidelity windows accumulate real history. Also checks the internal fidelity-based trigger
+        and enqueues it like an external drift event if it fires. Public so a demo/validation
+        script can call it directly to warm fidelity history before triggering an adaptation."""
         history = self.d1_store.get_history()
         if len(history) < self._settings.dt_models.bootstrap_min_rows:
             return {}
@@ -562,20 +429,11 @@ class ContinuousOrchestrator:
         for name, preds in predictions.items():
             target_column = self._target_columns.get(name)
             if target_column is None:
-                # Only reachable for a hot-swapped-in (or restart-restored) expand_scope
-                # component whose target_column couldn't be recorded/recovered — predictions
-                # still serve correctly (see above); only fidelity tracking for THIS component
-                # is skipped until that's fixed, never the whole cycle (see _load_and_restore).
+                # An expand_scope component whose target_column wasn't recovered — predictions
+                # still serve; only fidelity tracking for it is skipped.
                 continue
-            # A residual-based component (src/dt_models/residual_base.py) honestly returns NaN
-            # for the first row of each (run_id, session_id) group, where no y_{t-1} anchor
-            # exists to reconstruct y_t from — a real, structural consequence of the residual
-            # design, not a bug. Module 12's fidelity formula itself must never silently
-            # manufacture a score from such rows (CLAUDE.md §5/§12: "handle ... missing samples
-            # explicitly ... never silently compute a metric from bad data") — so the caller
-            # (here) is responsible for explicitly excluding them before evaluate() ever sees
-            # them, exactly like ResidualDTComponent.evaluate()'s own NaN mask already does for
-            # its component-local RMSE/MAE.
+            # Residual components legitimately return NaN for each session's first row (no
+            # y_t-1 anchor). The fidelity formula must never silently score NaN rows, so mask here.
             target_values = np.asarray(recent[target_column], dtype=float)
             pred_values = np.asarray(preds, dtype=float)
             valid_mask = np.isfinite(target_values) & np.isfinite(pred_values)
@@ -604,11 +462,8 @@ class ContinuousOrchestrator:
     # -> lifecycle -------------------------------------------------------------------------------
 
     def _handle_trigger(self, trigger: AdaptationTrigger) -> None:
-        """Acquires this trigger's component's adaptation lock (phase13 §2: "at most one
-        adaptation per component at a time") for the duration of the cycle, and ALWAYS releases
-        it in `finally` — on ACCEPT, REJECT, or an unexpected exception from
-        `_run_adaptation_cycle` (e.g. a sandbox failure) alike, so a failure can never leave this
-        component permanently locked ("no deadlock when the sandbox fails")."""
+        """Holds this component's adaptation lock for the cycle; always released in `finally`
+        (ACCEPT, REJECT, or an unexpected exception) so a failure can never deadlock it."""
         self._locked_component = trigger.component
         self.last_adaptation_started_at = time.monotonic()
         try:
@@ -621,21 +476,16 @@ class ContinuousOrchestrator:
         return self._previous_outcome_by_component.get(component, PreviousOutcome())
 
     def _hot_swap_candidate(self, action_name: str, component: str, agent_result: Any) -> None:
-        """Called only on a real ACCEPT (see the one caller, `_run_adaptation_cycle`) — makes the
-        candidate `VerificationAgent.verify()` already promoted in the versioned `ModelRegistry`
-        take over LIVE prediction serving in THIS process right now, via `self.dt_model_registry`
-        (Module 5's in-memory, orchestrator-facing registry — deliberately distinct from Module
-        14's versioned artifact store, see `src/dt_models/model_registry.py`'s own docstring)."""
+        """Called only on a real ACCEPT — makes the candidate already promoted in `ModelRegistry`
+        take over live prediction serving right now, via `dt_model_registry` (the in-memory,
+        orchestrator-facing registry, distinct from `ModelRegistry`'s versioned artifact store)."""
         version = agent_result.version
         if action_name == "recalibrate":
-            # Already a live, trained instance of an already-imported, trusted class (the SAME
-            # class already backing production) — no dynamic code loading involved at all.
+            # Already a live instance of an already-trusted class — no dynamic loading.
             instance: DTComponent = agent_result.candidate_component
         else:
-            # regenerate/expand_scope: until this exact moment, this candidate's class has only
-            # ever existed as saved source on disk plus a sandboxed, fidelity-gate-ACCEPTed
-            # artifact — load both now, for the first time in this trusted process (prompt.md
-            # §28/§70 rule 10: only after verification has granted that trust, never before).
+            # regenerate/expand_scope: import the class for the first time now that verification
+            # has granted trust — never before.
             cls = self._load_dynamic_class(version)
             instance = cls()
             self.model_registry.load_artifact_into(instance, version)
@@ -644,9 +494,7 @@ class ContinuousOrchestrator:
         if component in self.dt_model_registry:
             self.dt_model_registry.replace(instance)
         else:
-            # A genuinely new expand_scope component, served live for the very first time —
-            # `_validate_design` already guarantees this name was not already registered, so
-            # `agent_result.design` is only ever reached for the strategy that actually has one.
+            # A genuinely new expand_scope component, served live for the first time.
             self.dt_model_registry.register(instance)
             self._target_columns[component] = agent_result.design.target_column
             logger.info(
@@ -690,11 +538,8 @@ class ContinuousOrchestrator:
         )
 
         target_column = self._target_columns[component]
-        # A dynamically-loaded class (a hot-swapped regenerate/expand_scope candidate) only ever
-        # guarantees a no-arg constructor — the sandbox's own conformance contract for LLM-
-        # generated code (src/sandbox/_sandbox_driver.py) — never a `from_settings(settings)`
-        # classmethod the way the five hand-authored originals provide. component_factory must
-        # therefore construct it the same way the sandbox itself always has.
+        # A dynamically-loaded (hot-swapped) class only guarantees a no-arg constructor — never
+        # a from_settings() classmethod.
         if component in self._dynamic_component_classes:
             component_factory: Callable[[], DTComponent] = lambda cls=component_cls: cls()  # noqa: E731
         else:
@@ -742,35 +587,17 @@ class ContinuousOrchestrator:
 
         candidate_version = agent_result.version
 
-        # Module 17: verify on the same held-out protocol the agent itself used. If the target
-        # component itself has dependencies (e.g. latency/prb_utilization/jitter), populate their
-        # ground-truth columns the same "train/verify on ground truth, serve on live predictions"
-        # way every agent already does (data_selection.with_dependency_ground_truth) — needed both
-        # for a recalibration candidate's own .predict() call below AND for the production
-        # baseline's .predict() call VerificationAgent makes internally, since both are instances
-        # of the SAME dependency-having class.
+        # Verify on the same held-out protocol the agent used; populate dependency ground-truth
+        # columns if the target component has dependencies.
         if action_name == "recalibrate":
-            # candidate_predictions is computed FRESH below, against WHATEVER held_out_df this
-            # builds — a freshly re-derived "most recent window" slice is fine here; there is no
-            # staleness to guard against, unlike the sandboxed-candidate case below.
             window_df = select_recent_window(self.d1_store.get_history(), window_hours)
             _, held_out_df = time_split(window_df, 0.2)
             if component_cls.DEPENDENCIES:
                 held_out_df = with_dependency_ground_truth(held_out_df, component_cls.DEPENDENCIES, self._output_fields)
         else:
-            # regenerate/expand_scope: candidate_predictions (below) is a FIXED array the sandbox
-            # already computed against the agent's OWN internal held-out slice, selected BEFORE
-            # its (potentially long: LLM call(s) + real sandboxed subprocess training) run. Real
-            # telemetry keeps flowing for that entire duration by design (prompt.md §0.6/§0.8), so
-            # independently re-deriving "most recent window, then last 20%" a second time here,
-            # AFTER that call returns, can select a DIFFERENT-SIZED slice than the fixed-size
-            # predictions array — verification would then REJECT on a length mismatch that has
-            # nothing to do with the candidate's real quality (a genuine bug found and fixed while
-            # validating the hot-swap path against fast-flowing live telemetry: even reconstructing
-            # by the agent's own recorded evaluation_window timestamp range isn't exact, since a
-            # single tick can span several UEs and the agent's ROW-count-based split can legally
-            # cut a tick's rows between train and held-out). Reuse the agent's own held_out_df
-            # directly instead — it already has dependency ground-truth columns populated too.
+            # regenerate/expand_scope: reuse the agent's own held_out_df — re-deriving "last 20%"
+            # here, after a possibly long LLM+sandbox call, could select a different-sized slice
+            # than the sandbox's fixed eval_predictions array (live telemetry keeps flowing).
             held_out_df = agent_result.held_out_df
         eval_target_column = target_column if action_name != "expand_scope" else agent_result.design.target_column
         eval_target = held_out_df[eval_target_column]
@@ -795,25 +622,20 @@ class ContinuousOrchestrator:
             logger.warning("verification failed unexpectedly — treating as REJECT-equivalent, no promotion occurred", extra={"component": "main", "error": str(exc)})
             return
 
-        # Hot swap: make an ACCEPT take over LIVE prediction serving immediately, not just the
-        # versioned ModelRegistry on disk (which VerificationAgent.verify() itself already
-        # promoted into a moment ago) — no process restart required. Never on REJECT: production
-        # is left exactly as verification decided it should be.
+        # Hot swap: an ACCEPT takes over live serving immediately, no restart required. Never on
+        # REJECT — production is left exactly as verification decided.
         if verification_result.decision == "ACCEPT":
             try:
                 self._hot_swap_candidate(action_name, component, agent_result)
-            except Exception as exc:  # a hot-swap failure must never hide an already-recorded
-                # ACCEPT or crash the loop — the promoted version is still correctly picked up
-                # the next time this process restarts, via _bootstrap_dt_models/_load_and_restore.
+            except Exception as exc:  # must never hide an already-recorded ACCEPT or crash the
+                # loop — picked up correctly on the next restart via _bootstrap_dt_models.
                 logger.warning(
-                    "candidate was ACCEPTed and promoted in the versioned registry, but hot-"
-                    "swapping it into live serving failed — it will still be picked up on the "
-                    "next process restart",
+                    "candidate was ACCEPTed and promoted, but hot-swapping into live serving "
+                    "failed — it will still be picked up on the next process restart",
                     extra={"component": "main", "affected_component": component, "action": action_name, "error": str(exc)},
                 )
 
-        # Module 19: record + report. OAI migration (prompt2.md Step 6): record which real
-        # telemetry source/run ids/replay speed actually drove this event — never fabricated.
+        # Record which real telemetry source/run ids/replay speed drove this event.
         source_label = getattr(self.telemetry_source, "SOURCE_LABEL", "MOCK")
         replayed_run_ids = getattr(self.telemetry_source, "_run_ids", None) if source_label == "OAI_RAN_REPLAY" else None
         replay_speed = settings.telemetry.replay.speed if source_label == "OAI_RAN_REPLAY" else None
@@ -823,10 +645,7 @@ class ContinuousOrchestrator:
         )
         self.lifecycle_agent.generate_maintenance_report(record, rag_knowledge_base=self.rag_kb)
 
-        # Feed this cycle's REAL outcome into the NEXT decision context's previous-outcome slot
-        # for THIS component (prompt.md §18 "previous action taken for this component/incident and
-        # its outcome, where available") — per-component now, not a single global scalar, since
-        # there is no fixed-size observation vector to populate anymore.
+        # Feed this cycle's outcome into the next decision context for this component.
         self._previous_outcome_by_component[component] = PreviousOutcome(
             action=action_name,
             verification_result=verification_result.decision,

@@ -1,73 +1,27 @@
-"""Module 19 — Lifecycle Management Agent (Agent 6; prompt.md §37-38).
+"""Lifecycle Management Agent (Agent 6) — decides nothing; records and explains what every other
+agent already decided. Every adaptation event produces exactly one auditable `LifecycleRecord`
+plus an automatically-generated maintenance report.
 
-The last of the six agents (CLAUDE.md §3): it does not decide anything — it RECORDS and EXPLAINS
-what every other agent already decided. Every adaptation event (one adaptation trigger, external
-drift OR fidelity-based -> one Decision & Root-Cause Analysis Agent strategy choice -> one Module
-14/15/16 agent execution -> one Module 17 verification decision) must produce exactly one
-structured, auditable `LifecycleRecord`, plus an automatically-generated, human-readable
-maintenance report.
-
-**Design-pivot note** (see CLAUDE.md §12): the old PPO-era `drift_event`/`rl_observation`/
-`rl_action` fields have been replaced by `trigger` (the canonical `AdaptationTrigger`, covering
-BOTH trigger sources uniformly — prompt.md §16a) and `decision_strategy`/`root_cause_analysis`/
-`decision_confidence`/`decision_rationale`/`knowledge_refs` (the Decision & Root-Cause Analysis
-Agent's full structured `DecisionOutput`, prompt.md §20's explicit requirement that this agent's
-output — never free-form prose — is "what Module 19 records for the auditable history"). No
-existing field's MEANING changed beyond that rename; recording/persistence/report-generation logic
-is otherwise untouched.
-
-**`LifecycleRecord` carries every field prompt.md §37 lists, no more and no fewer** (plus the
-richer decision-output fields prompt.md §20 separately requires): event ID, timestamp, trigger,
-affected component/scope, trigger severity/type, decision strategy + root-cause analysis +
-confidence + rationale + knowledge refs, agent action, production version before, candidate
-version, fidelity before, fidelity after, verification result, verification explanation, training
-window, evaluation window, model metadata, LLM metadata if used, final status. Nothing here
-computes or re-derives any of these — every field is read verbatim from the real object each
-upstream module already produced:
-
-- `trigger`/`affected_component`/`trigger_severity`/`trigger_type` <- Module 11/12's canonical
-  `AdaptationTrigger` (`src/fidelity/trigger.py`).
+`LifecycleRecord` fields are read verbatim from upstream objects, never recomputed:
+- `trigger`/`affected_component`/`trigger_severity`/`trigger_type` <- the canonical
+  `AdaptationTrigger`.
 - `decision_strategy`/`root_cause_analysis`/`decision_confidence`/`decision_rationale`/
-  `knowledge_refs` <- Module 13's `DecisionAgent.decide()`/`decide_safe()` structured
-  `DecisionOutput`, verbatim.
-- `agent_action` <- a small, generic summary of whichever of Module 14/15/16's result objects the
-  caller passed in (`RecalibrationResult`/`RegenerationResult`/`ExpandScopeResult` — see
-  `_summarize_agent_action()`; these three types deliberately share no common base class, so this
-  function duck-types on the fields each one actually has rather than forcing an artificial
-  shared interface onto agents that don't otherwise need one).
-- `production_version_before` <- `candidate_version.parent_version_id`, i.e. exactly what Module
-  14/15's candidate was recalibrated/regenerated FROM (or `None` for Module 16's genuinely new
-  components) — this is already the correct value; no separate registry lookup is needed or
-  performed (a fresh lookup taken AFTER verification would be wrong on ACCEPT, since the registry
-  has already been updated by then).
+  `knowledge_refs` <- the Decision Agent's `DecisionOutput`, verbatim.
+- `agent_action` <- a duck-typed summary of whichever Recalibration/Regeneration/ExpandScope
+  result was produced (`_summarize_agent_action()` — the three share no base class).
+- `production_version_before` <- `candidate_version.parent_version_id` (not a fresh registry
+  lookup, which would be wrong on ACCEPT since the registry has already been updated).
 - `candidate_version`/`fidelity_before`/`fidelity_after`/`verification_result`/
-  `verification_explanation`/`final_status` <- Module 17's `VerificationResult` — the
-  INDEPENDENTLY RECOMPUTED fidelity values, never an agent's own self-reported ones (Module 17 is
-  the trusted authority for these; see its own module docstring).
-- `training_window`/`evaluation_window`/`model_metadata`/`llm_metadata` <- the agent result's own
-  windows, plus `VerificationResult.updated_version` (the ACTUAL post-promote/reject registry
-  record — component, model_class, dependencies, feature_schema, output_field, adaptation_type,
-  status, llm_metadata).
+  `verification_explanation`/`final_status` <- Verification's independently recomputed
+  `VerificationResult`, never an agent's self-reported numbers.
 
-**Persistence is a genuinely append-only, auditable log** (prompt.md §37 "must be auditable"):
-`config.lifecycle.records_path` is one JSON-Lines file — every `record_adaptation_event()` call
-appends exactly one line, under a lock, never rewrites or deletes a prior line. This is the
-"versioned adaptation record" requirement: each record is permanently identified by its own
-`event_id` and `timestamp`, and — because every field embeds the exact component/candidate
-VERSION IDs Modules 14-17 already produced — the full version lineage of any adaptation is
-reconstructable from the log alone, without needing to separately version the log file itself.
+Persistence: one append-only JSON-Lines file (`config.lifecycle.records_path`) — one line per
+event, under a lock, never rewritten.
 
-**The maintenance report is generated automatically** (prompt.md §38) from the SAME already-
-recorded `LifecycleRecord` — never from a re-query of live state, which could have moved on by
-report-generation time. A deterministic template (`_deterministic_report()`) is ALWAYS produced
-first and used as the report whenever no LLM client is supplied or the LLM call fails
-(`complete_safe`'s graceful-degradation convention, same as every other optional-LLM path in this
-codebase) — a maintenance report must exist for every event regardless of LLM availability. When
-a `GoogleClient` is supplied, it is asked to write better prose FROM the same deterministic
-facts (never invited to invent new ones), with D2's `RagKnowledgeBase` consulted for "relevant
-contextual knowledge" (prompt.md §38's own explicit requirement — "Use RAG retrieval where
-useful"), gracefully degrading to "not available" exactly like Module 17's own RAG consultation
-when no knowledge base is supplied or it's unavailable.
+Report generation: a deterministic template (`_deterministic_report()`) is always produced first
+and used whenever no LLM client is supplied or the call fails. When a client is supplied, it
+writes better prose FROM those same facts (never invited to invent new ones), with RAG consulted
+for context — degrading to "not available" when unavailable.
 """
 
 from __future__ import annotations
@@ -134,18 +88,15 @@ class LifecycleRecord(BaseModel):
     model_metadata: dict[str, Any]
     llm_metadata: dict[str, Any] | None
     final_status: Literal["promoted", "rejected"]
-    # OAI migration (prompt2.md Step 6): "record source=OAI_RAN_REPLAY, the run ids replayed,
-    # and the replay speed" — real values from the telemetry source actually driving this event,
-    # never fabricated. `source` matches schema.ALLOWED_SOURCES ("OAI_RAN_REPLAY" | "MOCK").
+    # Real values from whichever telemetry source drove this event ("OAI_RAN_REPLAY" | "MOCK").
     telemetry_source: str
     replayed_run_ids: list[int] | None
     replay_speed: float | None
 
 
 def _summarize_agent_action(agent_result: Any) -> dict[str, Any]:
-    """A generic summary of whichever Module 14/15/16 result object was produced — duck-typed on
-    the fields each one actually has (they deliberately share no common base class; see module
-    docstring). Never touches anything but plain, already-computed data already on the object."""
+    """Duck-typed summary of whichever adaptation result object was produced — the three result
+    types share no common base class."""
     version = agent_result.version
     summary: dict[str, Any] = {
         "adaptation_type": version.adaptation_type,

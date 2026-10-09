@@ -1,66 +1,25 @@
-"""Centralized Google AI (Gemini) API client (prompt.md §42, CLAUDE.md §7) — infrastructure only.
+"""Centralized Google AI (Gemini) API client — infrastructure only, no agent logic (no prompt
+templates, no output schemas, no business rules about when to call the LLM).
 
-This is the ONE place in the codebase that talks to the Google AI (Gemini) API, via the official
-`google-genai` SDK. Module 13 (Decision & Root-Cause Analysis), Module 15 (Regeneration), Module
-16 (Expand-Scope), and Module 17 (Agentic Verification) — plus Module 14 (Recalibration)'s
-optional training-window reasoning and Module 19 (Lifecycle)'s human-readable explanations — all
-call through `GoogleClient`, never construct their own `google.genai.Client()` instance. No agent
-logic lives here: no prompt templates, no per-agent output schemas, no business rules about when
-to call the LLM. Those belong to the agents themselves.
+The one place in the codebase that talks to the `google-genai` SDK; every agent calls through
+`GoogleClient`, never constructs its own `genai.Client()`.
 
-**Design pivot note**: this file replaces `src/llm/anthropic_client.py`/`AnthropicClient` (see
-CLAUDE.md §12's design-pivot notice) — the whole project moved LLM providers from Anthropic to
-Google AI. The public surface below (`LLMResponse`, `LLMUsage`, `LLMClientError`,
-`LLMTransportError`, `LLMStructuredOutputError`, `complete`/`complete_structured`/`complete_safe`/
-`complete_structured_safe`) is kept **intentionally identical** to the old `AnthropicClient`'s, so
-every consumer agent's own code barely changes — only the import and the concrete class name.
+Key facts about the SDK, load-bearing for this file:
+1. `GenerateContentConfig` exposes real `temperature`/`top_p`/`top_k` — genuine determinism knobs.
+2. The SDK's own transport retry defaults to "never retry" (no `retry_options` set here), so
+   there is exactly one retry/backoff schedule: `_call_with_retry` below.
+3. `google.genai.errors` has only `APIError` (base) / `ClientError` (4xx, `.code`) /
+   `ServerError` (5xx) — no named exception per failure type. Retryable: any `ServerError`, a
+   429 `ClientError`, and the raw transport exceptions `httpx.TimeoutException`/`ConnectError`/
+   `RemoteProtocolError` ("server disconnected", not even in the SDK's own transient-exception
+   tuple, but the same class of hiccup). Everything else (400/401/403/404/422) fails fast.
+4. `effort` maps onto `ThinkingConfig(thinking_level=...)`, clamped — Gemini's `ThinkingLevel`
+   has no `xhigh`/`max`, so both clamp to `HIGH`.
+5. `HttpOptions.timeout` is in **milliseconds** — `config.llm.timeout_seconds * 1000`.
 
-**A real, load-bearing discovery made while building this file** (verified directly against the
-installed `google-genai` SDK's actual `types.GenerateContentConfig`/`errors` modules, not assumed
-from documentation — the same discipline `anthropic_client.py`'s own docstring established):
-
-1. **Unlike the Anthropic Messages API, `google-genai`'s `GenerateContentConfig` DOES expose real
-   sampling-determinism controls** (`temperature`/`top_p`/`top_k`) — the opposite conclusion from
-   the Anthropic client's own documented finding. `config.llm.temperature` is therefore a genuine
-   determinism knob here, not a fictional one; `0.0` genuinely minimizes sampling randomness.
-2. **The SDK's own transport retry defaults to "never retry"** unless `http_options.retry_options`
-   is explicitly set (verified in `google.genai._api_client.retry_args`: "If None, the 'never
-   retry' stop strategy will be used"). This client deliberately never sets `retry_options`, so —
-   exactly like `AnthropicClient`'s explicit `max_retries=0` — there is exactly one retry/backoff
-   schedule in this system: the explicit, testable code in `_call_with_retry` below.
-3. **Exception shape is structurally different from Anthropic's**: `google.genai.errors` has no
-   named exception per failure type (no `RateLimitError`/`AuthenticationError`/etc.) — only
-   `APIError` (base), `ClientError` (any 4xx, with the real HTTP status on `.code`), and
-   `ServerError` (any 5xx). Retry classification here is therefore done on `.code`, not on
-   exception identity: every `ServerError` and a `ClientError` with `.code == 429` (rate limit)
-   are retryable; every other `ClientError` (400 bad request, 401/403 auth, 404 not found, 422
-   unprocessable) fails fast. Raw transport-level failures (`httpx.TimeoutException`,
-   `httpx.ConnectError`, `httpx.RemoteProtocolError`) can also propagate uncaught from this SDK
-   (the first two are in `google.genai._api_client`'s own `_HTTPX_TRANSIENT_EXC` tuple;
-   `RemoteProtocolError` — "server disconnected without sending a response" — is not in the SDK's
-   own tuple either, but is the same class of transient network hiccup, confirmed by a real
-   occurrence mid-run during baseline validation) and are treated as retryable too, alongside
-   `ServerError`.
-4. **`effort` maps onto `types.ThinkingConfig(thinking_level=...)`, clamped, not 1:1** — Gemini's
-   `ThinkingLevel` enum only has `MINIMAL`/`LOW`/`MEDIUM`/`HIGH` (no `xhigh`/`max`), so
-   `config.llm.effort` values `"xhigh"`/`"max"` both clamp down to `HIGH` — documented here so a
-   future reader isn't surprised the two don't produce different behavior on this provider.
-5. **`HttpOptions.timeout` is in MILLISECONDS**, not seconds — `config.llm.timeout_seconds` is
-   converted (`* 1000`) when constructing the client, never passed through directly.
-
-**Structured output uses the API's own native mechanism, not prompt-engineered JSON extraction**,
-exactly like the Anthropic client did: `complete_structured()` sets
-`response_mime_type="application/json"` + `response_json_schema=schema.model_json_schema()` (a
-real field on `GenerateContentConfig` accepting a plain JSON Schema dict — verified against
-`types.py`), which constrains the model's response server-side. The response is still
-independently re-validated against the caller's pydantic schema afterward (CLAUDE.md §7: "LLM
-output is always untrusted") — never trusted just because the API is expected to have enforced it.
-
-**No real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured in this development environment** (only
-a placeholder — see `.env.example`). Every test in `tests/unit/test_google_client.py` therefore
-drives this client against a mocked transport (real `google.genai.errors.APIError` subclasses,
-real response object shapes) — never a live call. Live-API validation is explicitly still
-pending; see CLAUDE.md §12 for the honest status note.
+Structured output uses the API's native `response_mime_type="application/json"` +
+`response_json_schema=...`, then is independently re-validated against the caller's pydantic
+schema — the server enforcing a schema is never trusted on its own.
 """
 
 from __future__ import annotations
@@ -279,15 +238,10 @@ class GoogleClient:
     def start_cache(
         self, cache_key: str, static_prefix: str, *, system_instruction: str | None = None, ttl_seconds: float | None = None
     ) -> bool:
-        """Creates one real Gemini context cache for `static_prefix` (+ `system_instruction`,
-        cached alongside it so a later call can omit `system` entirely when using this cache —
-        see `_build_config`), stored under `cache_key` for later calls to reference via
-        `complete*(..., cache_key=...)`. Returns `True` on success, `False` if caching was
-        skipped — below `config.llm.caching.min_cacheable_chars`, caching disabled in config, or
-        the API itself rejected it (e.g. genuinely below Gemini's own token minimum) — logged
-        either way, NEVER raised: a caching failure must never block the actual LLM call it was
-        only trying to optimize the cost of. Never changes `static_prefix`/`system_instruction`
-        content to "make caching work" (phase13 §3.3's own explicit rule)."""
+        """Creates a Gemini context cache for `static_prefix`, stored under `cache_key` for
+        `complete*(..., cache_key=...)` to reference. Returns `True` on success, `False` if
+        skipped (below `min_cacheable_chars`, disabled, or API-rejected) — logged, never raised:
+        a caching failure must never block the call it was optimizing."""
         if not self._config.caching.enabled:
             return False
         if len(static_prefix) < self._config.caching.min_cacheable_chars:
@@ -318,10 +272,8 @@ class GoogleClient:
         return True
 
     def end_cache(self, cache_key: str) -> None:
-        """Deletes the real cache for `cache_key`, if one exists — call this at the end of an
-        experiment run, including on error (phase13 §3.3), so a cache's own per-hour storage
-        cost never outlives the run that created it. Tolerant of an already-expired/never-created
-        cache (logs, never raises) — cleanup must never itself become a new failure mode."""
+        """Deletes the cache for `cache_key` if one exists — call at the end of a run (incl. on
+        error) so cost never outlives it. Tolerant of an already-gone cache; never raises."""
         name = self._cache_names.pop(cache_key, None)
         if name is None:
             return
@@ -480,20 +432,11 @@ class GoogleClient:
         effort: str | None = None,
         cache_key: str | None = None,
     ) -> tuple[SchemaT, LLMResponse]:
-        """Identical to `complete_structured()`, but also returns the real `LLMResponse` (usage/
-        latency/used_cache) for the attempt that actually succeeded — phase13 §3.5's cost
-        tracking needs real post-call token counts, not just the parsed object. `text` on the
-        returned `LLMResponse` is the raw JSON text that was validated.
-
-        Uses the API's own native `response_json_schema` JSON-schema constraint (see module
-        docstring) AND independently validates the result on our side — the latter is never
-        skipped just because the former is expected to have already enforced it (CLAUDE.md §7:
-        "LLM output is always untrusted"). If validation still fails, retries the WHOLE call
-        (not just re-parsing) up to `config.llm.max_retries` times, since asking again is the
-        only thing that can actually produce a different, valid response. Raises
-        `LLMStructuredOutputError` if every attempt fails validation. `cache_key`: see
-        `complete()`'s own docstring — identical semantics.
-        """
+        """Like `complete_structured()`, but also returns the `LLMResponse` (usage/latency/
+        used_cache) — cost tracking needs real token counts, not just the parsed object. On
+        validation failure, retries the whole call (not just re-parsing) up to `max_retries`
+        times, since only a fresh response can fix it; raises `LLMStructuredOutputError` if every
+        attempt fails."""
         cache_name = self._cache_names.get(cache_key) if cache_key is not None else None
         output_format = schema.model_json_schema()
         max_attempts = self._config.max_retries + 1

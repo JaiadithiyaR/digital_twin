@@ -1,18 +1,10 @@
-"""Module 5's dependency-graph registry for DT prediction components (Modules 6-10).
+"""In-memory dependency-graph registry for DT prediction components — not the same thing as
+`component_registry.py`'s `ComponentRegistry` (catalogs D1's state tables) or
+`src/registry/model_registry.py`'s `ModelRegistry` (tracks model VERSIONS for the adaptation
+lifecycle). This file only tracks which prediction components exist and how they depend on each
+other, so `DTOrchestrator` can compute an execution order.
 
-`DTModelRegistry` is deliberately NOT the same thing as either of these — do not confuse them:
-
-- `src/dt_models/component_registry.py`'s `ComponentRegistry` — catalogs D1's own state TABLES
-  (`telemetry_current`/`telemetry_history`/`telemetry_quarantine`). Nothing to do with
-  prediction models.
-- The future `src/registry/model_registry.py` (prompt.md §46, not built yet) — will track MODEL
-  VERSIONS for the adaptation lifecycle (current/previous version, artifact path, training/eval
-  metadata, promotion status). A completely different concern from this file, despite the
-  similar name — this one only tracks which prediction components exist and how they depend on
-  each other, so `DTOrchestrator` can compute an execution order.
-
-Registering a component here does not train it, save it, or touch any file — it only makes the
-component (and its declared metadata) visible to the orchestrator.
+Registering a component here does not train, save, or touch any file — just makes it visible.
 """
 
 from __future__ import annotations
@@ -39,12 +31,9 @@ class DTModelRegistry:
         self._components[name] = _RegisteredComponent(component=component, enabled=enabled)
 
     def replace(self, component: DTComponent, enabled: bool | None = None) -> None:
-        """Atomically swaps in a new instance/version under an ALREADY-registered name — the
-        primitive a hot-swapped recalibration/regeneration/expand-scope candidate uses to take
-        over live prediction serving the moment it's ACCEPTed, without a process restart. Unlike
-        `register()`, this requires the name to already exist (a replace has nothing to replace
-        otherwise — use `register()` for a genuinely new component); `enabled` defaults to
-        preserving whatever the current registration's enabled state already is."""
+        """Atomically swaps in a new instance under an already-registered name — what a
+        hot-swapped ACCEPT uses to take over live serving without a restart. Requires the name
+        to already exist; `enabled` defaults to preserving the current state."""
         name = component.COMPONENT_NAME
         if name not in self._components:
             raise KeyError(f"no component registered under '{name}' to replace — use register() for a new component")

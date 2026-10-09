@@ -1,82 +1,36 @@
-"""Module 17 — Agentic Verification Agent (prompt.md §31-34).
+"""Agentic Verification Agent (Agent 5) — the ACCEPT/REJECT gate every candidate from
+Recalibration/Regeneration/Expand-Scope must pass before becoming production. Unlike those three
+(which stop at "produce an evaluated candidate"), this agent acts: `ModelRegistry.promote()` on
+ACCEPT, `.reject()` on REJECT — the one trusted deterministic promoter in the system.
 
-This is the ACCEPT/REJECT gate every candidate produced by Modules 14 (Recalibration), 15
-(Regeneration), or 16 (Expand-Scope) must pass before it can ever become production. Unlike those
-three agents — which all stop at "produce an evaluated candidate" and explicitly never
-self-promote — this agent's entire purpose is to decide, and then ACT on that decision:
-`ModelRegistry.promote()` on ACCEPT, `ModelRegistry.reject()` on REJECT. This is the "trusted
-deterministic application logic" CLAUDE.md §8 refers to ("Promotion is performed only by trusted
-deterministic application logic after verification" — prompt.md line 506).
+Two layers, kept structurally separate:
 
-**Two layers, per prompt.md §31, kept structurally separate:**
+1. **Deterministic** (`verify()`'s main body): independently recomputes RMSE/MAE/Wasserstein/
+   MK-MMD -> composite FidelityScore via the real `FidelityEvaluator` — never trusts an agent's
+   self-reported before/after. Primary criterion:
 
-1. **Deterministic layer** (`verify()`'s main body): recomputes RMSE/MAE/Wasserstein/MK-MMD and
-   the composite FidelityScore *independently*, via the exact same `src.fidelity.evaluator.
-   FidelityEvaluator` Module 12 exposes — never trusting an agent's own self-reported
-   `fidelity_before`/`fidelity_after` for the actual decision (those exist on `ModelVersionMetadata`
-   only as audit metadata from whichever agent produced the candidate). The primary criterion is
-   exactly prompt.md §32: `FidelityScore_new > FidelityScore_old + delta`
-   (`config.adaptation.verification_delta`, never hardcoded), plus a handful of other mandatory
-   conditions (artifact present, interface identity consistent, evaluation actually ran, output
-   finite) — ALL must pass, mirroring CLAUDE.md §8 "any failed mandatory condition -> REJECT".
-2. **Agentic reasoning layer** (`_explain()`): an OPTIONAL LLM call producing a human-readable
-   explanation — error patterns, drift context, RAG knowledge, general commentary — run strictly
-   AFTER the deterministic `decision` variable is already final and has already been acted on
-   (promote/reject already happened). Rule 9 (prompt.md §70: "LLMs cannot override deterministic
-   acceptance criteria") is enforced STRUCTURALLY, not just by prompt wording: the LLM's
-   structured-output schema, `_LLMVerificationReasoning`, has exactly two fields —
-   `explanation`/`key_observations` — and genuinely no field anywhere that could express an
-   accept/reject/verdict/override. Even if a malicious or confused LLM response's free-text
-   `explanation` says "this should actually be REJECTED", no code anywhere reads that text for a
-   decision signal — it is stored verbatim as `VerificationResult.explanation`, nothing more.
-   `tests/unit/test_verification_agent.py::test_llm_disagreement_never_changes_the_deterministic_decision`
-   proves this concretely: a fake LLM client is made to explicitly argue for the OPPOSITE outcome
-   of what the deterministic gate computed, in both directions (ACCEPT-vs-LLM-says-reject and
-   REJECT-vs-LLM-says-accept), and the final `decision` plus the actual registry promotion/
-   rejection are shown to match the deterministic result every time.
+       FidelityScore_new > FidelityScore_old + delta      (delta = config.adaptation.verification_delta)
 
-**Candidate predictions are supplied as plain data, never as an untrusted live instance** — the
-same "never import/execute LLM-generated code in this process" boundary Modules 15/16 already
-established for the sandbox. `verify()` takes `candidate_predictions` (already-computed numeric
-values, e.g. `RecalibrationResult.candidate_component.predict(...)` for a recalibration candidate,
-or `RegenerationResult.sandbox_result.eval_predictions`/`ExpandScopeResult.sandbox_result.
-eval_predictions` — both already plain data the sandbox subprocess handed back — for a regenerate/
-expand-scope candidate) rather than a component instance to call `.predict()` on itself. This
-keeps `VerificationAgent` uniformly agent-type-agnostic: it never needs to know or care whether
-the candidate came from an in-process retrain or a sandboxed subprocess.
+   plus mandatory checks (artifact present, interface consistent, evaluation ran, output finite)
+   — any failure -> REJECT.
+2. **Agentic reasoning** (`_explain()`): an optional LLM call, run strictly AFTER the
+   deterministic decision is already final and acted on. Its schema (`_LLMVerificationReasoning`)
+   has exactly two fields — `explanation`/`key_observations` — structurally no field that could
+   express a verdict, so the LLM can never override the gate.
 
-**The production ("before") baseline, in contrast, IS re-evaluated by this agent itself** — via an
-optional `production_component_factory` that constructs a fresh instance of the CURRENT production
-class, which this agent then loads the current production artifact into (a genuinely trusted,
-already-production class — nothing untrusted is imported here) and predicts with, on the exact
-same `eval_features`/`eval_target` the candidate was evaluated on (prompt.md §33: "before" and
-"after" must use "the same comparable evaluation protocol"). `production_component_factory` is
-optional because a genuinely new (expand-scope) component has no prior production version to
-compare against at all — see the "no baseline" branch below.
+Candidate predictions are supplied as plain data (never a live instance to `.predict()` on) —
+the sandbox boundary Regeneration/Expand-Scope already established. The production ("before")
+baseline IS re-evaluated here, via an optional `production_component_factory`, on the exact same
+held-out data as the candidate. A brand-new (expand-scope) component has no baseline: the gate
+then requires only that the candidate's own FidelityScore is well-defined (not
+`insufficient_history`) — REJECT fail-safe otherwise, never a fabricated old score.
 
-**"No baseline" (expand-scope) is handled honestly, not by inventing a fake old score.** When
-`ModelRegistry.get_current_version(component)` returns `None` (a brand-new component), the primary
-`FidelityScore_new > FidelityScore_old + delta` criterion is structurally inapplicable — there is
-no `FidelityScore_old`. The gate falls back to requiring only that the candidate's own
-`FidelityScore` is well-defined (i.e. NOT `insufficient_history`, per Module 12's own "never
-fabricate a score" rule) — a candidate whose fidelity can't yet be computed at all is REJECTed,
-fail-safe, rather than blindly accepted for lack of a comparison. This mirrors Module 12's own
-`insufficient_history` handling and Module 15/16's already-established `fidelity_before=None` for
-genuinely-new candidates.
+Normalization sharing: production is evaluated with `update_window=True` immediately before the
+candidate with `update_window=False`, on the same `FidelityEvaluator` window — production and
+candidate must be comparable.
 
-**Normalization reference sharing (prompt.md §0.10, Module 12's own documented hook)**: production
-is evaluated with `update_window=True` (it genuinely joins the rolling history — this IS a real
-evaluation of the currently-deployed model, not a throwaway probe) immediately before the candidate
-is evaluated with `update_window=False` on the SAME `FidelityEvaluator` instance/window — the
-established Module 14/15/16 pattern, now finally consumed by the module Module 12's own docstring
-said it was built for.
-
-**Concurrency lock (prompt.md §30) is explicitly OUT OF SCOPE for this turn** — this agent assumes
-it is called with exclusive access to `candidate_version`'s component (whatever locking discipline
-a future orchestration loop enforces); `ModelRegistry.promote()`/`.reject()` are individually
-thread-safe (each holds the registry's own lock), but a full component-scoped adaptation lock
-across an entire `verify()` call is a follow-up for whenever the main continuous loop (prompt.md
-§39, not built yet) exists to actually run concurrent adaptations in the first place.
+Concurrency: this agent assumes exclusive access to the candidate's component; the
+component-scoped lock lives in the orchestrator, not here.
 """
 
 from __future__ import annotations

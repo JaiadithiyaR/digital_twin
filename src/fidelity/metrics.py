@@ -1,17 +1,10 @@
-"""Module 12 — Fidelity Evaluation: deterministic raw metric functions (prompt.md §16).
+"""Fidelity Evaluation: deterministic raw metric functions — pure functions of `(y_true, y_pred)`,
+no randomness, no LLM involvement anywhere.
 
-Every function here is a pure, deterministic function of its `(y_true, y_pred)` inputs — the
-same inputs always produce the same output, no randomness, no hidden state, no LLM involvement
-anywhere (prompt.md §0.10, §43: the LLM must never compute or modify a fidelity formula). This
-is the one place in the system where "deterministic" is completely non-negotiable.
-
-RMSE/MAE are pointwise (paired, same-index) accuracy metrics — how far each individual
-prediction is from its corresponding ground-truth value. Wasserstein distance and MK-MMD are
-distributional metrics — they compare the two samples AS DISTRIBUTIONS (order/pairing does not
-matter), capturing whether the DT's overall predicted distribution matches ground truth's
-overall shape, which pointwise metrics alone cannot. All four functions return a non-negative
-"distance" value in the same (non-squared) units; the fidelity evaluator (`evaluator.py`) squares
-all four uniformly per the formula — no metric function here squares its own output.
+RMSE/MAE are pointwise (paired) accuracy metrics. Wasserstein and MK-MMD are distributional
+metrics — they compare the two samples AS DISTRIBUTIONS (order-independent), capturing shape
+mismatches pointwise metrics can't. All four return a non-negative, non-squared distance;
+`evaluator.py` squares them uniformly per the fidelity formula.
 """
 
 from __future__ import annotations

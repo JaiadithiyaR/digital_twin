@@ -1,12 +1,9 @@
-"""Phase 13 §3.5/§3.6 — LLM cost tracking + the budget guard, plus `MeteredGoogleClient`, a thin
-metering wrapper around the real `GoogleClient` used only by experiment-running scripts (e.g.
-`scripts/run_baselines.py`), never by the agents themselves — `GoogleClient` stays
-infrastructure-only (no budget/cost business logic inside it, per its own docstring promise); this
-module is where that business logic actually lives.
+"""LLM cost tracking + budget guard, plus `MeteredGoogleClient` — a thin metering wrapper around
+`GoogleClient` used only by experiment-running scripts, never by the agents (which stay on the
+plain client; `GoogleClient` itself has no cost/budget logic — this module is where that lives).
 
-Never calls the LLM itself and never decides WHICH agent to call — purely bookkeeping over the
-real `LLMResponse.usage`/`.latency_seconds`/`.used_cache` a real `GoogleClient` call already
-returns.
+Never calls the LLM itself — purely bookkeeping over the real `LLMResponse.usage`/
+`.latency_seconds`/`.used_cache` a call already returns.
 """
 
 from __future__ import annotations
@@ -29,9 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 def estimate_cost_usd(input_tokens: int, output_tokens: int, cached_tokens: int, rates: "LlmRatesConfig") -> float:
-    """Phase13 §3.5/§3.6 — the one place a $ figure is computed from REAL post-call token counts
-    + config rates (never hardcoded elsewhere). `cached_tokens` is a SUBSET of `input_tokens`
-    (billed at the cheaper cached rate instead of the full input rate) — never double-counted."""
+    """Cost from real post-call token counts + config rates. `cached_tokens` is a subset of
+    `input_tokens` (billed at the cheaper rate instead of the full input rate) — never
+    double-counted."""
     uncached_input = max(0, input_tokens - cached_tokens)
     return (
         uncached_input * rates.input_per_million
@@ -41,11 +38,9 @@ def estimate_cost_usd(input_tokens: int, output_tokens: int, cached_tokens: int,
 
 
 def rough_token_estimate(text: str) -> int:
-    """A deliberately crude, honestly-labeled PRE-call estimate (~4 chars/token, a common rough
-    heuristic for English text) — used ONLY by `BudgetGuard.check_and_estimate` before a call is
-    actually made, since the real token count isn't known until the response comes back. Every
-    RECORDED/REPORTED cost always uses the real post-call usage via `estimate_cost_usd`, never
-    this estimate."""
+    """Crude pre-call estimate (~4 chars/token) used only by `BudgetGuard.check_and_estimate`
+    before the real token count is known. Every recorded/reported cost uses the real post-call
+    usage via `estimate_cost_usd`, never this estimate."""
     return max(1, len(text) // 4)
 
 
@@ -75,20 +70,14 @@ def append_llm_call_record(path: Path, record: LLMCallRecord) -> None:
 
 
 class BudgetExceededError(Exception):
-    """Raised by `BudgetGuard.check_and_estimate` when even the ESTIMATED cost of the next call
-    would push cumulative spend over the configured budget — phase13 §3.6: "stop the experiment
-    cleanly... never silently fall back to the default strategy because of the budget."
-    Deliberately NOT a subclass of `LLMClientError` — `DecisionAgent.decide_safe()` (and the
-    other agents' `*_safe` wrappers) only catch `LLMClientError`, so this exception propagates
-    all the way up to the experiment-run loop uncaught, exactly where phase13 §3.6 requires the
-    "stop cleanly, save outputs so far, mark the run incomplete" handling to live — never
-    silently absorbed into a fallback strategy."""
+    """Raised when even the estimated cost of the next call would exceed budget. Deliberately
+    NOT a subclass of `LLMClientError` — the agents' `*_safe` wrappers only catch
+    `LLMClientError`, so this propagates uncaught to the experiment-run loop, never silently
+    absorbed into a fallback strategy."""
 
 
 class BudgetGuard:
-    """Tracks cumulative real spend across one experiment run. Thread-safe defensively (this
-    orchestrator's own adaptation dispatch is single-threaded, but a shared guard instance used
-    across multiple roles/threads should never race on its own bookkeeping)."""
+    """Tracks cumulative real spend across one experiment run. Thread-safe."""
 
     def __init__(self, budget_usd: float) -> None:
         self._budget_usd = budget_usd
@@ -120,14 +109,10 @@ class BudgetGuard:
 
 
 class MeteredGoogleClient:
-    """Wraps a real `GoogleClient`: forwards every call through unchanged, but additionally (1)
-    checks `BudgetGuard` BEFORE the call using a rough pre-call estimate, (2) computes the REAL
-    cost from the REAL post-call usage once the call returns, (3) records it to both the
-    `BudgetGuard` and `llm_calls.jsonl`. `start_cache`/`end_cache`/`end_all_caches` pass straight
-    through to the wrapped client unmetered (no token cost of their own to track here — cache
-    storage cost is a separate, real Gemini billing dimension this project does not attempt to
-    track per-call). Used only by experiment-running scripts — never by an agent directly, so no
-    agent needs to know metering exists."""
+    """Wraps `GoogleClient`: (1) checks `BudgetGuard` before the call with a rough pre-call
+    estimate, (2) computes real cost from real post-call usage, (3) records it to both
+    `BudgetGuard` and `llm_calls.jsonl`. Cache methods pass through unmetered. Used only by
+    experiment-running scripts, never by an agent directly."""
 
     def __init__(
         self, client: "GoogleClient", *, mode: str, run: str, budget_guard: BudgetGuard, calls_log_path: Path, rates: "LlmRatesConfig"

@@ -1,45 +1,21 @@
-"""Module 2/3 replacement for the OAI migration (prompt2.md Step 3): builds model-ready
-train/val/test tables from the exported OAI RAN KPI CSVs at `config.data.oai_root` (read-only,
-outside this repository — never copied into git, never modified here).
+"""Builds model-ready train/test tables from the exported OAI RAN KPI CSVs at
+`config.data.oai_root` (read-only, outside this repo). Flat CSVs only — no database access.
+Unit of analysis: one row per `(run_id, session_id, ts_1s)` at UE level.
 
-No database access exists or is used here — this reads only the already-exported, flat CSV files
-under `oai_root`, never a live Postgres connection (prompt2.md "There is no database access").
-
-Unit of analysis: one row per `(run_id, session_id, ts_1s)` at UE level (prompt2.md Step 3).
-
-Grounded, empirically-verified facts this module's conversions rely on (see IMPLEMENTATION_STATUS.md
-for the full writeup of how each was checked against the real export, not assumed):
-  - `v_ue_kpm_1s`'s `DRB.UEThpDl_avg`/`DRB.UEThpUl_avg` are in **kbps** (confirmed against
-    `dim_kpm_meas_name.csv`'s own `unit` column — "kbps" — not Mbps as a bare reading of the
-    column name might suggest). Converted to Mbps here by dividing by 1000.
-  - `v_ue_kpm_1s` has **no** `DRB.RlcSduDelayDl` column at all in this export (verified directly
-    against the real CSV header) even though `dim_kpm_meas_name.csv` documents the KPI as
-    conceptually existing — so `dl_rlc_delay` is sourced ENTIRELY from
-    `rlc_bearer_1s.tx_sdu_avg_time_to_tx_avg`, never as a secondary "cross-check" source.
-  - `rlc_bearer_1s.tx_sdu_avg_time_to_tx_avg` is in **microseconds**, not milliseconds — verified
-    by magnitude (mean 483, p50 0, max 248446; interpreting these as milliseconds would imply an
-    average multi-hundred-millisecond RLC SDU delay under normal load, physically implausible for
-    this testbed; interpreting as microseconds, mean 0.48ms / max 248ms, is a realistic RAN delay
-    distribution with an occasional congestion/retransmission tail). Converted to ms by /1000.
-  - `RRU.PrbTotDl_avg`/`RRU.PrbTotUl_avg` (v_ue_kpm_1s) are already a raw per-second PRB-used
-    count (not a session-cumulative total) — no delta/conversion needed; they already match the
-    `dl_prb`/`ul_prb` target's "PRBs/s" unit directly.
-  - `mac_ue_1s.dl_aggr_tbs`/`ul_aggr_tbs`/`dl_aggr_prb`/`ul_aggr_prb` ARE genuine
-    session-cumulative counters (verified: monotonically non-decreasing within a real session) —
-    used only in the fallback throughput/PRB formulas, which therefore genuinely need `diff()`.
-  - `mac_ue_1s.dl_bler_avg`/`ul_bler_avg` are already a 0-1 ratio; many observed values are
-    float32-subnormal noise around exact 0 (e.g. 5.6e-45) — effectively zero, left as-is (no
-    special-casing needed; XGBoost/any downstream consumer treats ~1e-45 identically to 0.0).
-  - `v_ue_kpm_1s` carries no `session_id` column (only `run_id,cell_id,ue_id,slice_id,ts_1s`) —
-    joined to the `session_id`-keyed tables (`mac_ue_1s`, `rlc_bearer_1s`) via
-    `dim_ue_session_run{N}.csv`'s `(run_id,cell_id,ue_id) -> session_id` mapping, which is 1:1 for
-    every currently-exported run (no mid-run UE re-attach observed).
-  - `rlc_bearer_1s`'s `rbid` (radio-bearer id) is always `1` in this export (single default
-    bearer per UE) — no bearer-level aggregation is needed before joining on
-    `(run_id, session_id, ts_1s)`.
-  - `control_actions`'s only real controller parameter in this export is
-    `dedicated_prb_ratio` (`scope_type="slice"`, `unit="percent"`, `target` = the slice NAME,
-    e.g. `"slice-a"`), mapped to `slice_id` via `dim_slice.csv`.
+Unit-conversion facts this module relies on:
+  - `DRB.UEThpDl_avg`/`UEThpUl_avg` (v_ue_kpm_1s) are in **kbps** -> divide by 1000 for Mbps.
+  - `dl_rlc_delay` is sourced entirely from `rlc_bearer_1s.tx_sdu_avg_time_to_tx_avg` (no
+    `DRB.RlcSduDelayDl` column exists in this export), in **microseconds** -> divide by 1000 for ms.
+  - `RRU.PrbTotDl_avg`/`PrbTotUl_avg` (v_ue_kpm_1s) are already per-second PRB-used counts, not
+    cumulative — no delta needed, already match "PRBs/s".
+  - `mac_ue_1s.dl_aggr_tbs`/`ul_aggr_tbs`/`dl_aggr_prb`/`ul_aggr_prb` ARE session-cumulative
+    counters — used only in fallback formulas, which need `.diff()`.
+  - `mac_ue_1s.dl_bler_avg`/`ul_bler_avg` are already a 0-1 ratio.
+  - `v_ue_kpm_1s` has no `session_id` — joined via `dim_ue_session_run{N}.csv`'s
+    `(run_id,cell_id,ue_id) -> session_id` (1:1 for every exported run).
+  - `rlc_bearer_1s.rbid` is always `1` in this export — no bearer-level aggregation needed.
+  - `control_actions`'s only real parameter is `dedicated_prb_ratio`
+    (`scope_type="slice"`, `unit="percent"`, `target`=slice name), mapped via `dim_slice.csv`.
 """
 
 from __future__ import annotations

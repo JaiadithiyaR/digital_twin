@@ -1,46 +1,20 @@
-"""D2 — RAG Knowledge Base (prompt.md §35-36) — read-only contextual knowledge for Modules 15-17.
+"""RAG Knowledge Base (D2) — read-only contextual knowledge for the agents.
 
-```
-documents -> chunking -> embeddings -> vector store -> retrieval -> LLM context
-```
+    documents -> chunking -> embeddings -> vector store -> retrieval -> LLM context
 
-**Read-only is a structural property of this file, not a policy comment** (prompt.md §35:
-"Agents must NOT use RAG as a write path into the DT. The RAG system must not directly modify
-models, state, or registry."). Two separate classes enforce this by construction:
+Read-only is structural, not a convention. Two classes enforce it:
+- `RagKnowledgeBase` — the only class any agent receives. Public surface: `retrieve()`,
+  `is_available`, `count` — no add/write/update/delete/ingest method exists, and its constructor
+  takes no D1/registry reference, so no agent has any object-graph path to DT state.
+- `RagIngestor` — admin/build-time only (`scripts/ingest_rag.py`), the only class that writes to
+  the vector store. Also takes no D1/registry reference.
 
-- **`RagKnowledgeBase`** — the ONLY class any agent (Modules 14-17) ever receives. Its entire
-  public surface is `retrieve()` (plus trivial introspection: `is_available`/`count`). There is
-  no `add`/`write`/`update`/`delete`/`ingest` method anywhere on it — not hidden, not disabled,
-  genuinely absent — and its constructor accepts no `D1Store`/`ModelRegistry`/`DTModelRegistry`
-  reference, so even a determined caller has no object graph path from this class to any DT
-  state. `tests/unit/test_rag_kb.py::test_agent_cannot_reach_a_write_path_through_the_knowledge_base`
-  proves this concretely: it simulates an agent holding a `RagKnowledgeBase` and enumerates every
-  attribute looking for anything write-shaped, asserting none exists.
-- **`RagIngestor`** — the ADMIN/build-time-only class that DOES write to the vector store
-  (`ingest_corpus()`). It is never constructed by, or passed to, any agent — only by
-  `scripts/ingest_rag.py` and tests. Its constructor also accepts no D1/registry reference, so
-  even this write-capable class is structurally incapable of touching DT state — proven by
-  `tests/unit/test_rag_kb.py::test_ingestion_never_touches_d1_or_model_registry_state`, which runs
-  a real ingestion next to a real `D1Store`/`ModelRegistry` and asserts their files are
-  byte-identical before and after.
+Embeddings: `all-MiniLM-L6-v2` via ChromaDB's bundled `DefaultEmbeddingFunction` (local ONNX, no
+torch dependency). `config.rag.embedding_model` must equal this exact name — anything else raises
+at construction rather than silently being ignored.
 
-**Embeddings**: `config.rag.embedding_model` names `all-MiniLM-L6-v2`. This uses ChromaDB's own
-bundled `DefaultEmbeddingFunction`, which runs exactly that model via a local ONNX runtime — no
-`sentence-transformers`/`torch` dependency needed for it specifically (this project has no torch
-dependency at all since the LLM/RL design pivot — see CLAUDE.md §12 — and pulling in the much
-larger `sentence-transformers` stack just to re-select a model ChromaDB already runs natively
-would be exactly the unnecessary infrastructure prompt.md §10 warns against). Genuine, real
-embeddings — verified directly in
-`tests/integration/test_rag_kb.py` by confirming two similar queries embed closer together than
-two unrelated ones. Documented limitation: `DefaultEmbeddingFunction` always uses this specific
-model regardless of what `config.rag.embedding_model` is set to — changing that config value
-currently has no effect; `RagIngestor`/`RagKnowledgeBase` raise a clear error at construction if
-it's set to anything else, rather than silently ignoring an unsupported value.
-
-**RAG content is untrusted input** (prompt.md §62: "Treat: LLM output, RAG content,... as
-untrusted"), same as any other externally-sourced text handed to an LLM prompt — nothing here
-executes or specially trusts retrieved text; it is returned as plain strings for a caller (e.g.
-`RegenerationAgent`'s prompt-building) to include as context, same as any other prompt fragment.
+RAG content is untrusted input, same as any other externally-sourced prompt fragment — nothing
+here executes or specially trusts retrieved text.
 """
 
 from __future__ import annotations
@@ -66,10 +40,8 @@ _SOURCE_COMMENT_RE = re.compile(r"^<!--\s*source:\s*(.+?)\s*-->\s*\n", re.IGNORE
 
 
 class RagUnavailableError(Exception):
-    """Raised when the vector store can't be reached/queried. Per prompt.md §61 ("RAG
-    unavailable: continue only where RAG is non-critical; never fabricate retrieved
-    information"), a caller must catch this and proceed WITHOUT retrieved context — never invent
-    a plausible-looking answer in its place."""
+    """Raised when the vector store can't be reached/queried. A caller must proceed without
+    retrieved context — never invent a plausible-looking answer in its place."""
 
 
 @dataclass(frozen=True)
@@ -94,13 +66,9 @@ def _build_embedding_function(embedding_model: str) -> embedding_functions.Defau
 
 
 def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
-    """Deterministic, word-based greedy chunker: packs whole words into each chunk up to
-    `chunk_size` characters (never splitting a word — operating on whole words rather than raw
-    character offsets makes this a structural guarantee, not a best-effort boundary snap), then
-    carries the trailing ~`chunk_overlap` characters' worth of whole words forward as the start
-    of the next chunk. Empty/whitespace-only input yields no chunks — never a single empty chunk
-    that would silently pollute the vector store with nothing to retrieve.
-    """
+    """Greedy word-based chunker: packs whole words up to `chunk_size` chars (never splits a
+    word), carrying ~`chunk_overlap` trailing words into the next chunk. Empty input -> no
+    chunks."""
     if chunk_overlap >= chunk_size:
         raise ValueError(f"chunk_overlap ({chunk_overlap}) must be smaller than chunk_size ({chunk_size})")
     words = text.split()
@@ -186,14 +154,10 @@ class RagIngestor:
         )
 
     def ingest_corpus(self, corpus_dirs: dict[str, Path]) -> IngestionSummary:
-        """Idempotent (prompt.md §36: "do not duplicate documents every time the application
-        starts"): every chunk's ChromaDB ID is deterministic (`f"{document_id}::{chunk_index}"`,
-        where `document_id` is the file's path relative to its corpus directory), and every
-        upsert uses Chroma's `upsert()` — re-running this on unchanged files overwrites each
-        chunk with identical content rather than duplicating it. If a document shrinks (fewer
-        chunks than a previous ingest), the now-stale trailing chunk IDs from the old, longer
-        version are explicitly deleted so retrieval never returns orphaned old content.
-        """
+        """Idempotent: each chunk's ChromaDB ID is deterministic
+        (`f"{document_id}::{chunk_index}"`) and upserted, so re-running on unchanged files
+        overwrites rather than duplicates. If a document shrinks, stale trailing chunk IDs from
+        the longer version are explicitly deleted."""
         documents_processed = 0
         chunks_upserted = 0
         per_category: dict[str, int] = {}

@@ -1,22 +1,12 @@
-"""Drift Detection Interface (Module 11, prompt.md §15, §0.19, §0.20 rule 7).
+"""Drift Detection Interface — the actual drift-detection algorithm is external/partner-owned
+and not implemented here. This is the receiving side: validate and normalize whatever a
+`DriftSource` (mock now, a real adapter later) hands it, and identify which component the
+notification concerns — an event naming a component this system doesn't run is quarantined, not
+routed anywhere.
 
-The actual drift-detection algorithm is an external/partner module and is explicitly NOT
-implemented here (prompt.md §0.19: "Do not implement the actual drift-detection algorithm").
-What lives in this file is the receiving side of that integration contract: validate and
-normalize whatever a `DriftSource` (mock now; a real external adapter later, unchanged by this
-class) hands it, and identify which DT scope (`component`) the notification concerns.
-
-`DriftDetectorInterface.process_event`'s component-name check IS the "identify which DT scope
-needs adaptation" responsibility named on fig-dataflow.png for Module 11: an event naming a
-component this system doesn't actually run (typo, stale detector config, unrelated KPI) cannot be
-routed anywhere real, so it is quarantined rather than silently passed to whatever consumes
-`DriftEvent`s next (Module 13's Decision & Root-Cause Analysis Agent, via `src.fidelity.trigger.trigger_from_drift_event`'s normalization).
-
-Deliberately does NOT carry-forward-impute like Module 2's `TelemetryPreprocessor` does for
-missing telemetry fields: a drift notification is a discrete, one-off signal with no "last known
-good value" to substitute, and unlike a telemetry field it feeds directly into a system that
-takes real, side-effecting adaptation actions — prompt.md §61's "fail safely" means a malformed
-trigger must be dropped, never guessed at.
+Deliberately does NOT carry-forward-impute missing fields like `TelemetryPreprocessor` does: a
+drift notification is a discrete signal with no "last known good value", and it feeds directly
+into side-effecting adaptation actions — a malformed trigger is dropped, never guessed at.
 """
 
 from __future__ import annotations

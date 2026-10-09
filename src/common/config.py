@@ -21,10 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SETTINGS_PATH = REPO_ROOT / "config" / "settings.yaml"
 
-# The five NS-3-era component ids — structurally forbidden from ever reappearing as live
-# component config (OAI migration, prompt2.md addendum item 6: "fail at startup if any old
-# component id or NS-3 setting appears"). Checked explicitly below since `drift.valid_components`
-# is a plain `list[str]`, not a fixed set of typed fields the way `DtModelsConfig` is.
+# The 5 retired NS-3-era component ids — structurally forbidden from reappearing in live config.
 _RETIRED_COMPONENT_IDS = frozenset({"throughput", "latency", "packet_loss", "prb_utilization", "jitter"})
 
 
@@ -93,10 +90,7 @@ class DataConfig(BaseModel):
 class SynchronizationConfig(BaseModel):
     batch_size: int
     batch_timeout_seconds: float
-    # phase13 §8.4: how long ContinuousOrchestrator.stop() waits for the background
-    # dt-continuous-sync/dt-drift-consumer threads to actually exit before giving up — makes
-    # shutdown deterministic (a bounded wait + explicit outcome) rather than a fire-and-forget
-    # stop_event.set() that returns before the threads have genuinely stopped.
+    # How long stop() waits for background threads to actually exit before giving up.
     shutdown_join_timeout_seconds: float
 
 
@@ -174,20 +168,15 @@ class DriftConfig(BaseModel):
 
 
 class DecisionAgentFallbackConfig(BaseModel):
-    # Deterministic fallback used ONLY on genuine decision-agent infrastructure failure (LLM
-    # transport failure, or structured-output schema validation exhausting its retries) — never a
-    # routine substitute for a genuine LLM call (prompt.md §21, CLAUDE.md §6). Every use is
-    # logged.
+    # Used only on genuine decision-agent infrastructure failure, never a routine substitute.
     enabled: bool
     default_strategy: Literal["recalibrate", "regenerate", "expand_scope"]
 
 
 class DecisionAgentConfig(BaseModel):
-    """Module 13 — Decision & Root-Cause Analysis Agent (design pivot: replaces the deleted PPO
-    RL policy's `PpoConfig`; see CLAUDE.md §12's design-pivot notice). No training
-    hyperparameters here — this is a direct LLM call, not a trained policy (prompt.md §21)."""
+    """No training hyperparameters — this is a direct LLM call, not a trained policy."""
 
-    action_mapping: dict[int, str]  # the fixed 3-strategy enum (prompt.md §19), never a 4th/5th
+    action_mapping: dict[int, str]  # the fixed 3-strategy enum, never a 4th/5th
     fallback: DecisionAgentFallbackConfig
 
 
@@ -197,24 +186,22 @@ class RecalibrationConfig(BaseModel):
 
 
 class RegenerationConfig(BaseModel):
-    max_llm_iterations: int  # max self-correction attempts: LLM generates -> sandbox rejects -> LLM retries with the rejection reason as feedback
-    training_window_hours: int  # independently tunable from recalibration's — rebuilding a pipeline from scratch reasonably wants more history than a lightweight refit
+    max_llm_iterations: int  # self-correction attempts: generate -> sandbox rejects -> retry with feedback
+    training_window_hours: int
     min_training_rows: int
 
 
 class ExpandScopeConfig(BaseModel):
-    max_llm_iterations: int  # shared retry budget for BOTH the design-proposal step and the implementation-generation step
+    max_llm_iterations: int  # shared retry budget for both the design and implementation steps
     training_window_hours: int
     min_training_rows: int
 
 
 class AdaptationConfig(BaseModel):
     lock_policy: Literal["queue", "coalesce", "defer"]
-    # Phase 13 §2: different components may adapt concurrently only if this is true — default
-    # false matches this orchestrator's actual single-threaded dispatch loop (one adaptation
-    # cycle, across ALL components, running at a time); `true` would need a genuine per-component
-    # worker-thread redesign that isn't built (fails fast at startup instead of silently ignoring
-    # the setting — see Settings._forbid_unsupported_concurrent_components below).
+    # Must be false — this orchestrator's dispatch loop is single-threaded (one adaptation cycle
+    # at a time across all components); true would need a worker-thread redesign that isn't
+    # built, so it fails fast at startup rather than silently being ignored.
     allow_concurrent_components: bool
     recalibration: RecalibrationConfig
     regeneration: RegenerationConfig
