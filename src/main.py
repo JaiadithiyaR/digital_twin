@@ -42,6 +42,7 @@ from src.adaptation.recalibration_agent import RecalibrationAgent, Recalibration
 from src.adaptation.regeneration_agent import RegenerationAgent, RegenerationError
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import Settings, load_secrets, load_settings
+from src.common import console_report as console
 from src.common.logging import setup_logging
 from src.data.oai_dataset import TARGET_COLUMNS as _OAI_TARGETS
 from src.dt_models.base import DTComponent
@@ -101,12 +102,19 @@ class ContinuousOrchestrator:
         settings: Settings,
         secrets: "Secrets",
         drift_severity_range_override: tuple[float, float] | None = None,
+        enable_external_drift: bool = True,
     ) -> None:
         self._settings = settings
         self._secrets = secrets
         # Only biases what severities the mock drift source GENERATES (demo/validation runs) —
         # never what DriftDetectorInterface accepts.
         self._drift_severity_range_override = drift_severity_range_override
+        # When False, the external-drift consumer thread is never started in start() — the
+        # internal fidelity-based trigger (run_prediction_and_fidelity_cycle's own
+        # check_fidelity_trigger call) is the only trigger source. Defaults to True so existing
+        # callers (tests, demo scripts, baselines — which build their own separate harness and
+        # never touch this flag at all) keep their current behavior unchanged.
+        self._enable_external_drift = enable_external_drift
 
         self._stop_event = threading.Event()
         # None until start(); lets stop() without a prior start() be a harmless no-op.
@@ -120,6 +128,11 @@ class ContinuousOrchestrator:
         self._pending_order: list[str] = []  # component names, FIFO by first-pending arrival
         self._locked_component: str | None = None  # component currently mid-cycle, else None
         self._latest_fidelity: dict[str, float | None] = {}
+        # Latest D1 ts_1s seen by the last successful fidelity cycle — lets
+        # run_prediction_and_fidelity_cycle() detect "nothing new has arrived" (a finite replay
+        # source fully consumed) and skip re-evaluating an identical, degenerate window.
+        self._last_evaluated_max_ts: Any = None
+        self._reported_replay_exhausted = False  # print the "now idling" notice once, not every cycle
         # Per-component previous-outcome tracking for the Decision Agent's context.
         self._previous_outcome_by_component: dict[str, PreviousOutcome] = {}
 
@@ -172,9 +185,21 @@ class ContinuousOrchestrator:
 
         self.preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
         self.telemetry_source = self._build_telemetry_source()
-        self.synchronizer = ContinuousSynchronizer(
-            self.telemetry_source, self.preprocessor, self.d1_store, settings.synchronization
-        )
+        sync_config = settings.synchronization
+        if settings.telemetry.source == "oai_replay" and settings.telemetry.replay.speed == 0:
+            # Real bug, reproduced: D1Store.append_history() rewrites the WHOLE accumulated
+            # history file on every flush (never an incremental append) — fine at the live-
+            # streaming default batch_size=20 for genuine telemetry trickling in in real time, but
+            # an O(n**2) blowup for a finite, speed=0 ("as fast as possible") replay, where
+            # thousands of rows arrive in a tight loop almost instantly (the full TEST split is
+            # 25,865 rows -> ~1,293 full-file rewrites at batch_size=20, observed to make
+            # `--mode live` take many minutes just to finish loading). Larger batches here only
+            # affect how fast the replay's OWN backlog drains into D1 — never genuine live
+            # telemetry pacing, which is untouched (this branch only fires for a non-real-time
+            # replay). Matches the same batch_size=500 override already proven in
+            # baselines/_lib.py and the smoke test for exactly this reason.
+            sync_config = sync_config.model_copy(update={"batch_size": 500})
+        self.synchronizer = ContinuousSynchronizer(self.telemetry_source, self.preprocessor, self.d1_store, sync_config)
 
         self.drift_detector = DriftDetectorInterface.from_settings(settings)
         severity_range = self._drift_severity_range_override or settings.drift.severity_range
@@ -195,6 +220,11 @@ class ContinuousOrchestrator:
                 "llm_available": self.llm_client is not None,
                 "rag_available": self.rag_kb.is_available,
             },
+        )
+        console.startup_banner(
+            mode=settings.environment, telemetry_source=settings.telemetry.source,
+            components=list(self._dt_components.keys()), llm_available=self.llm_client is not None,
+            rag_available=self.rag_kb.is_available,
         )
 
     def _build_telemetry_source(self):
@@ -325,9 +355,14 @@ class ContinuousOrchestrator:
 
     def start(self) -> None:
         self.sync_thread = self.synchronizer.start()
-        self.drift_thread = threading.Thread(target=self._drift_consumer_loop, name="dt-drift-consumer", daemon=True)
-        self.drift_thread.start()
-        logger.info("orchestrator started — telemetry sync and drift consumption running in the background", extra={"component": "main"})
+        if self._enable_external_drift:
+            self.drift_thread = threading.Thread(target=self._drift_consumer_loop, name="dt-drift-consumer", daemon=True)
+            self.drift_thread.start()
+        logger.info(
+            "orchestrator started — telemetry sync running in the background"
+            + (" with drift consumption" if self._enable_external_drift else " (external drift disabled — fidelity-based trigger only)"),
+            extra={"component": "main", "external_drift_enabled": self._enable_external_drift},
+        )
 
     def stop(self) -> None:
         """Deterministic shutdown: signal both background threads, then block (bounded by
@@ -355,6 +390,7 @@ class ContinuousOrchestrator:
             )
         else:
             logger.info("orchestrator stopped — both background threads confirmed exited", extra={"component": "main"})
+        console.shutdown_line(clean=not still_alive)
 
     def _drift_consumer_loop(self) -> None:
         for event in self.drift_detector.process_stream(self.drift_source):
@@ -419,38 +455,107 @@ class ContinuousOrchestrator:
         history = self.d1_store.get_history()
         if len(history) < self._settings.dt_models.bootstrap_min_rows:
             return {}
-        recent = history.sort_values("ts_1s", kind="stable").tail(self._settings.evaluation.window_size).reset_index(drop=True)
-        try:
-            predictions = self.dt_orchestrator.run_predictions(recent)
-        except OrchestratorError as exc:
-            logger.warning("DT prediction cycle failed", extra={"component": "main", "error": str(exc)})
-            return {}
-
-        for name, preds in predictions.items():
-            target_column = self._target_columns.get(name)
-            if target_column is None:
-                # An expand_scope component whose target_column wasn't recovered — predictions
-                # still serve; only fidelity tracking for it is skipped.
-                continue
-            # Residual components legitimately return NaN for each session's first row (no
-            # y_t-1 anchor). The fidelity formula must never silently score NaN rows, so mask here.
-            target_values = np.asarray(recent[target_column], dtype=float)
-            pred_values = np.asarray(preds, dtype=float)
-            valid_mask = np.isfinite(target_values) & np.isfinite(pred_values)
-            if not valid_mask.any():
-                logger.debug(
-                    "fidelity cycle: no rows with a valid prediction+target this cycle, skipping",
-                    extra={"component": "main", "dt_component": name},
+        latest_ts = history["ts_1s"].max()
+        if self._last_evaluated_max_ts is not None and latest_ts <= self._last_evaluated_max_ts:
+            # No genuinely new telemetry since the last cycle — e.g. a finite OAI replay source
+            # (speed=0) loads its entire split in under a second, after which D1 never grows
+            # again. Re-evaluating the IDENTICAL (y_true, y_pred) pair on every timer tick would
+            # collapse the fidelity rolling window to zero variance (every entry becomes the same
+            # value) and falsely pin FidelityScore at exactly 1.0 — a real bug this reproduced:
+            # the same degenerate-window pitfall Module 17's own docstring documents for
+            # repeated point-mass test fixtures, just arising naturally from replay exhaustion
+            # instead. Skip the cycle entirely rather than manufacture a meaningless measurement.
+            #
+            # Real UX bug this introduced, found and fixed in the same change: silently returning
+            # here means the console goes completely quiet for the rest of the run once a finite
+            # replay is exhausted — indistinguishable from a genuine hang. Tell the user exactly
+            # once, then stay quiet (never spam "still idle" every cycle).
+            if not self._reported_replay_exhausted:
+                self._reported_replay_exhausted = True
+                console.skipped(
+                    f"no new telemetry since ts_1s={latest_ts} — the replay source has been fully "
+                    "consumed (this is expected for a finite OAI replay once it finishes loading); "
+                    "the system is alive and idling, waiting for a fidelity-based trigger from "
+                    "already-replayed history, if one is warranted"
                 )
+            return dict(self._latest_fidelity)
+        self._last_evaluated_max_ts = latest_ts
+        history_sorted = history.sort_values("ts_1s", kind="stable").reset_index(drop=True)
+        window_size = self._settings.evaluation.window_size
+        recent = history_sorted.tail(window_size)
+
+        # Normally this method evaluates just the single most-recent window — live telemetry
+        # grows a window's worth every few real ticks, so a handful of real calls is enough to
+        # reach config.fidelity.min_history_for_normalization and that's the common path below.
+        # But a finite OAI replay at speed=0 (the config default) can load its ENTIRE split
+        # before this method is ever called a second time — and the skip-branch above means it
+        # may then never run again at all (D1 never grows further). Without backfilling, every
+        # component's rolling window would be permanently stranded at 1 point, fidelity could
+        # never become defined, and a fidelity-based trigger could never fire. Reproduced for
+        # real: plain `python -m src.main --mode live` with no extra flags never produced a
+        # defined fidelity score. Fix: when enough already-replayed history exists beyond the
+        # most-recent window, walk back through it in window_size chunks and evaluate each one
+        # too, oldest first — warming the rolling window from genuinely different real historical
+        # periods in one burst, exactly as several real ticks against slowly-growing live
+        # telemetry would have produced anyway. On genuinely live/slow-growing telemetry every
+        # component is already warmed by the time a deficit could exist, so n_backfill is 0 and
+        # behavior is unchanged from before this fix.
+        deficits = [
+            max(0, self._settings.fidelity.min_history_for_normalization - self.fidelity_evaluator.history_length(name))
+            for name in self._target_columns
+        ]
+        max_available_backfill = max(0, len(history_sorted) // window_size - 1)
+        n_backfill = min(max(deficits, default=0), max_available_backfill)
+
+        windows = []
+        for i in range(n_backfill, 0, -1):
+            end = len(history_sorted) - i * window_size
+            start = max(0, end - window_size)
+            chunk = history_sorted.iloc[start:end]
+            if not chunk.empty:
+                windows.append(chunk)
+        windows.append(recent)
+
+        for window_df in windows:
+            try:
+                predictions = self.dt_orchestrator.run_predictions(window_df)
+            except OrchestratorError as exc:
+                logger.warning("DT prediction cycle failed", extra={"component": "main", "error": str(exc)})
                 continue
-            result = self.fidelity_evaluator.evaluate(
-                name, target_values[valid_mask], pred_values[valid_mask], update_window=True
-            )
-            self._latest_fidelity[name] = result.fidelity_score
+
+            for name, preds in predictions.items():
+                target_column = self._target_columns.get(name)
+                if target_column is None:
+                    # An expand_scope component whose target_column wasn't recovered — predictions
+                    # still serve; only fidelity tracking for it is skipped.
+                    continue
+                # Residual components legitimately return NaN for each session's first row (no
+                # y_t-1 anchor). The fidelity formula must never silently score NaN rows, so mask here.
+                target_values = np.asarray(window_df[target_column], dtype=float)
+                pred_values = np.asarray(preds, dtype=float)
+                valid_mask = np.isfinite(target_values) & np.isfinite(pred_values)
+                if not valid_mask.any():
+                    logger.debug(
+                        "fidelity cycle: no rows with a valid prediction+target this cycle, skipping",
+                        extra={"component": "main", "dt_component": name},
+                    )
+                    continue
+                result = self.fidelity_evaluator.evaluate(
+                    name, target_values[valid_mask], pred_values[valid_mask], update_window=True
+                )
+                self._latest_fidelity[name] = result.fidelity_score
         logger.info(
             "prediction + fidelity cycle complete",
-            extra={"component": "main", "rows": len(recent), "fidelity": dict(self._latest_fidelity)},
+            extra={
+                "component": "main",
+                "rows": len(recent),
+                "windows_evaluated": len(windows),
+                "backfilled_windows": n_backfill,
+                "fidelity": dict(self._latest_fidelity),
+            },
         )
+        unified = self.fidelity_evaluator.compute_unified_score(self._latest_fidelity)
+        console.live_status(unified.unified_score, unified.worst_component, unified.n_components_defined)
 
         fidelity_trigger = self.fidelity_evaluator.check_fidelity_trigger(self._latest_fidelity)
         if fidelity_trigger is not None:
@@ -514,9 +619,11 @@ class ContinuousOrchestrator:
     def _run_adaptation_cycle(self, trigger: AdaptationTrigger) -> None:
         settings = self._settings
         component = trigger.component
+        console.trigger_seen(component, trigger.trigger_type, trigger.severity)
         component_cls = self._component_class_for(component)
         if component_cls is None:
             logger.warning("trigger names an unknown component, skipping", extra={"component": "main", "affected_component": component})
+            console.skipped(f"trigger names an unknown component ({component!r})")
             return
 
         context = build_decision_context(
@@ -536,6 +643,7 @@ class ContinuousOrchestrator:
                 "severity": trigger.severity, "strategy": action_name, "confidence": decision.confidence,
             },
         )
+        console.decision_made(component, action_name, decision.confidence)
 
         target_column = self._target_columns[component]
         # A dynamically-loaded (hot-swapped) class only guarantees a no-arg constructor — never
@@ -553,6 +661,7 @@ class ContinuousOrchestrator:
                 "trigger are entirely unaffected)",
                 extra={"component": "main", "action": action_name, "affected_component": component},
             )
+            console.skipped(f"{action_name} selected for {component!r} but no LLM client is configured")
             return
 
         try:
@@ -583,6 +692,7 @@ class ContinuousOrchestrator:
                 "telemetry ingestion is unaffected",
                 extra={"component": "main", "action": action_name, "affected_component": component, "error": str(exc)},
             )
+            console.warning(f"{action_name} failed for {component!r}: {exc}")
             return
 
         candidate_version = agent_result.version
@@ -620,6 +730,7 @@ class ContinuousOrchestrator:
             )
         except Exception as exc:  # verification must never crash the orchestration loop
             logger.warning("verification failed unexpectedly — treating as REJECT-equivalent, no promotion occurred", extra={"component": "main", "error": str(exc)})
+            console.warning(f"verification failed unexpectedly for {component!r}: {exc} (treated as REJECT)")
             return
 
         # Hot swap: an ACCEPT takes over live serving immediately, no restart required. Never on
@@ -634,6 +745,15 @@ class ContinuousOrchestrator:
                     "failed — it will still be picked up on the next process restart",
                     extra={"component": "main", "affected_component": component, "action": action_name, "error": str(exc)},
                 )
+                console.warning(f"candidate ACCEPTed but hot-swap into live serving failed for {component!r}: {exc}")
+
+        version_before = candidate_version.parent_version_id
+        version_after = candidate_version.version_id if verification_result.decision == "ACCEPT" else version_before
+        duration = time.monotonic() - (self.last_adaptation_started_at or time.monotonic())
+        console.adaptation_event(
+            component, action_name, verification_result.decision, verification_result.fidelity_before,
+            verification_result.fidelity_after, version_before, version_after, duration,
+        )
 
         # Record which real telemetry source/run ids/replay speed drove this event.
         source_label = getattr(self.telemetry_source, "SOURCE_LABEL", "MOCK")
@@ -664,7 +784,8 @@ class ContinuousOrchestrator:
 
 
 def build_orchestrator(
-    mode: str | None = None, drift_severity_range_override: tuple[float, float] | None = None
+    mode: str | None = None, drift_severity_range_override: tuple[float, float] | None = None,
+    enable_external_drift: bool = True, replay_speed_override: float | None = None,
 ) -> ContinuousOrchestrator:
     settings = load_settings()
     if mode is not None:
@@ -672,8 +793,24 @@ def build_orchestrator(
         settings = settings.model_copy(
             update={"telemetry": settings.telemetry.model_copy(update={"source": telemetry_source}), "environment": mode}
         )
+    if replay_speed_override is not None:
+        # `speed=0` ("as fast as possible") loads a whole finite OAI run in well under 5 seconds
+        # at the batch_size=500 override above — genuinely correct, but a poor demonstration for
+        # a human watching live: the system goes idle almost immediately, since there's nothing
+        # more to replay. A real, positive speed paces ticks in (near-)real time instead, so the
+        # run visibly spans the duration the caller actually wants (e.g. a CLI --replay-speed
+        # chosen so the whole split takes ~10-15 minutes rather than seconds or the recorded
+        # run's own full ~62-minute real duration).
+        settings = settings.model_copy(
+            update={"telemetry": settings.telemetry.model_copy(
+                update={"replay": settings.telemetry.replay.model_copy(update={"speed": replay_speed_override})}
+            )}
+        )
     secrets = load_secrets()
-    orchestrator = ContinuousOrchestrator(settings, secrets, drift_severity_range_override=drift_severity_range_override)
+    orchestrator = ContinuousOrchestrator(
+        settings, secrets, drift_severity_range_override=drift_severity_range_override,
+        enable_external_drift=enable_external_drift,
+    )
     orchestrator.initialize()
     return orchestrator
 
@@ -683,11 +820,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=["demo", "live"], default=None, help="demo=mock telemetry, live=real OAI RAN KPI replay; omit to use config/settings.yaml as-is")
     parser.add_argument("--max-drift-events", type=int, default=None, help="stop the orchestration loop after this many adaptation cycles (telemetry sync keeps running until stop()); omit for real continuous operation")
     parser.add_argument("--prediction-interval-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--replay-speed", type=float, default=None,
+        help="--mode live only: pace the OAI replay instead of loading it near-instantly "
+        "(config default speed=0 = 'as fast as possible', which loads a whole finite run in "
+        "seconds and then correctly goes idle, since there is nothing left to replay). "
+        "1.0 = real time (the recorded run's own real duration); e.g. 5.0 replays 5x faster than "
+        "real time. Omit to use config/settings.yaml's speed as-is.",
+    )
+    parser.add_argument(
+        "--enable-external-drift", action="store_true",
+        help="also run the external (mock) drift source alongside the internal fidelity-based "
+        "trigger — off by default: the end-to-end system adapts purely from its own deterministic "
+        "fidelity evaluation, never a simulated external event",
+    )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="print full structured JSON logs to the console too (default: console shows only the "
+        "clean status/adaptation-event lines + WARNING+; the log file always has full detail)",
+    )
     args = parser.parse_args(argv)
 
-    orchestrator = build_orchestrator(mode=args.mode)
+    orchestrator = build_orchestrator(
+        mode=args.mode, enable_external_drift=args.enable_external_drift, replay_speed_override=args.replay_speed,
+    )
     setup_logging(
-        level=orchestrator._settings.logging.level, fmt=orchestrator._settings.logging.format, log_dir=orchestrator._settings.logging.log_dir
+        level=orchestrator._settings.logging.level, fmt=orchestrator._settings.logging.format,
+        log_dir=orchestrator._settings.logging.log_dir,
+        console_level=orchestrator._settings.logging.level if args.verbose else None,
     )
     orchestrator.start()
     try:

@@ -104,6 +104,38 @@ def test_recalibrate_raises_when_window_has_too_few_rows(tmp_path):
         agent.recalibrate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler", window_hours=1e-9)
 
 
+def test_recalibrate_raises_recalibration_error_not_a_raw_valueerror_when_window_is_all_nan(tmp_path):
+    """Real production bug, reproduced directly: enough ROWS to pass the min_training_rows check,
+    but every row missing a required feature (e.g. a window landing on sessions too young for the
+    richer lag/rolling features to be populated) makes `candidate.train()` raise a bare
+    `ValueError` — which must be converted to `RecalibrationError` here, since `src/main.py`'s
+    orchestrator only catches `(RecalibrationError, RegenerationError, ExpandScopeError)` and an
+    uncaught `ValueError` would crash the whole continuous loop instead of just skipping this
+    one adaptation cycle."""
+    # Bootstrap the production version from a separate, clean store (bootstrap training must
+    # itself succeed) — only the store RecalibrationAgent reads live history from is poisoned.
+    clean_store = _build_store(tmp_path / "clean")
+    registry, _ = _bootstrap_registry(tmp_path / "clean", clean_store)
+
+    now = datetime.now(UTC)
+    poisoned_store = D1Store(
+        current_state_path=tmp_path / "current.parquet",
+        history_path=tmp_path / "history.parquet",
+        quarantine_path=tmp_path / "quarantine.parquet",
+        history_retention_rows=SETTINGS.storage.history_retention_rows,
+    )
+    # Every row poisoned on the same required feature — enough rows to pass the count check,
+    # zero of them survive residual_base.py's dropna, exactly like a real NaN-poisoned window.
+    poisoned = [
+        _clean_record(i % 10 + 1, i % 2 + 1, now - timedelta(seconds=300 - i), features={**{c: 0.5 for c in ALL_FEATURES}, REQUIRED_FEATURES[0]: float("nan")})
+        for i in range(300)
+    ]
+    poisoned_store.append_history(poisoned)
+    agent = RecalibrationAgent(SETTINGS, poisoned_store, registry)
+    with pytest.raises(RecalibrationError, match="candidate training failed"):
+        agent.recalibrate(lambda: DlBlerModel.from_settings(SETTINGS), "dl_bler")
+
+
 def test_recalibrate_registers_candidate_with_correct_parent_and_status(tmp_path):
     store = _build_store(tmp_path)
     registry, bootstrap_model = _bootstrap_registry(tmp_path, store)

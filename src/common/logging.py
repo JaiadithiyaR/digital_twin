@@ -68,8 +68,17 @@ class _TextFormatter(logging.Formatter):
         return super().format(record)
 
 
-def setup_logging(level: str = "INFO", fmt: str = "json", log_dir: str | Path | None = None) -> None:
-    """Configure the root logger once. Safe to call multiple times (idempotent)."""
+def setup_logging(
+    level: str = "INFO", fmt: str = "json", log_dir: str | Path | None = None, console_level: str | None = None
+) -> None:
+    """Configure the root logger once. Safe to call multiple times (idempotent).
+
+    `console_level` defaults to WARNING — routine INFO-level pipeline chatter is structured for
+    log aggregation, not for a human watching a terminal live (see `src/common/console_report.py`
+    for the clean, human-readable channel that replaces it on the console). The log FILE (if
+    `log_dir` is set) always gets the full `level` regardless — nothing is lost, it just isn't
+    printed to the terminal. Pass `console_level=level` (e.g. via `--verbose`) to restore the old
+    firehose-on-console behavior for debugging."""
     global _CONFIGURED
     if _CONFIGURED:
         return
@@ -79,6 +88,7 @@ def setup_logging(level: str = "INFO", fmt: str = "json", log_dir: str | Path | 
     root.setLevel(level.upper())
 
     console_handler = logging.StreamHandler(stream=sys.stdout)
+    console_handler.setLevel((console_level or "WARNING").upper())
     console_handler.setFormatter(formatter)
     console_handler.addFilter(_RedactFilter())
     root.addHandler(console_handler)

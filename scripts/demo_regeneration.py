@@ -5,7 +5,7 @@ to ONE agent so its behaviour — including a genuine LLM code-generation call a
 subprocess training run — can be inspected in isolation).
 
 What this script does, all real, nothing mocked:
-    1. Bootstrap-trains and registers a real production `ThroughputModel` (version 1) on an
+    1. Bootstrap-trains and registers a real production `DlBlerModel` (version 1) on an
        EARLIER, smaller telemetry population (fewer UEs/cells), kept out of the live D1Store the
        agent reads from — exactly like `demo_recalibration.py`'s fair before/after split.
     2. Builds a SEPARATE, live D1 history from a genuinely different (larger) telemetry
@@ -53,7 +53,7 @@ from src.adaptation.verification_agent import VerificationAgent  # noqa: E402
 from src.common.config import load_secrets, load_settings  # noqa: E402
 from src.common.logging import setup_logging  # noqa: E402
 from src.dt_models.d1_model_store import D1Store  # noqa: E402
-from src.dt_models.throughput import ThroughputModel  # noqa: E402
+from src.dt_models.dl_bler import DlBlerModel  # noqa: E402
 from src.fidelity.evaluator import FidelityEvaluator  # noqa: E402
 from src.llm.google_client import GoogleClient  # noqa: E402
 from src.rag.rag_kb import RagKnowledgeBase  # noqa: E402
@@ -87,7 +87,7 @@ def main() -> int:
 
     preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
     sync_config = settings.synchronization.model_copy(update={"batch_size": 100})
-    features = list(ThroughputModel.REQUIRED_FEATURES)
+    features = list(DlBlerModel.REQUIRED_FEATURES)
 
     # 1. Bootstrap-train production on an EARLIER, smaller network population — kept out of the
     # live D1Store below, so production genuinely never sees it.
@@ -107,18 +107,18 @@ def main() -> int:
     bootstrap_history = bootstrap_store.get_history()
 
     registry = ModelRegistry(models_dir=DEMO_DIR / "models", index_path=DEMO_DIR / "models" / "index.json")
-    bootstrap_model = ThroughputModel.from_settings(settings)
-    bootstrap_model.train(bootstrap_history[features], bootstrap_history["throughput_mbps"])
+    bootstrap_model = DlBlerModel.from_settings(settings)
+    bootstrap_model.train(bootstrap_history[features], bootstrap_history["dl_bler"])
     registry.register_version(
         component_instance=bootstrap_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(bootstrap_history)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=bootstrap_model.evaluate(bootstrap_history[features], bootstrap_history["throughput_mbps"]),
+        evaluation_metrics=bootstrap_model.evaluate(bootstrap_history[features], bootstrap_history["dl_bler"]),
         status="production",
     )
-    print(f"[demo] registered production version: {registry.get_current_version('throughput').version_id}")
+    print(f"[demo] registered production version: {registry.get_current_version('dl_bler').version_id}")
 
     # 2. The LIVE D1 history the agent actually reads from — a genuinely different, larger
     # network population (network growth since the production model was trained).
@@ -146,9 +146,9 @@ def main() -> int:
     n_warm = settings.fidelity.min_history_for_normalization + 1
     for i in range(n_warm):
         chunk = history.sample(n=min(50, len(history)), random_state=i)
-        y_true_chunk = chunk["throughput_mbps"].reset_index(drop=True)
-        y_pred_chunk = y_true_chunk + rng.normal(0, 1.0 + 0.3 * i, size=len(y_true_chunk))
-        fidelity_evaluator.evaluate("throughput", y_true_chunk, y_pred_chunk, update_window=True)
+        y_true_chunk = chunk["dl_bler"].reset_index(drop=True)
+        y_pred_chunk = y_true_chunk + rng.normal(0, 0.01 + 0.003 * i, size=len(y_true_chunk))
+        fidelity_evaluator.evaluate("dl_bler", y_true_chunk, y_pred_chunk, update_window=True)
 
     # 4. Real RAG knowledge base, pointed at this repo's already-ingested rag_data/ corpus.
     rag_kb = RagKnowledgeBase.from_settings(settings)
@@ -164,8 +164,8 @@ def main() -> int:
           "runs a real sandboxed subprocess; may take a while...")
     try:
         result = agent.regenerate(
-            lambda: ThroughputModel.from_settings(settings),
-            "throughput_mbps",
+            lambda: DlBlerModel.from_settings(settings),
+            "dl_bler",
             window_hours=96,
             held_out_fraction=0.2,
             drift_context="network densification (more UEs/cells) since the production model was trained — "
@@ -193,13 +193,13 @@ def main() -> int:
     print("\n[demo] calling VerificationAgent.verify() to decide ACCEPT/REJECT...")
     window_df = select_recent_window(store.get_history(), 96)
     _, held_out_df = time_split(window_df, 0.2)
-    eval_target = held_out_df["throughput_mbps"]
+    eval_target = held_out_df["dl_bler"]
     candidate_predictions = result.sandbox_result.eval_predictions
 
     verification_agent = VerificationAgent(settings, registry, fidelity_evaluator, llm_client=llm_client)
     verification_result = verification_agent.verify(
         result.version, held_out_df, eval_target, candidate_predictions,
-        production_component_factory=lambda: ThroughputModel.from_settings(settings),
+        production_component_factory=lambda: DlBlerModel.from_settings(settings),
         drift_context="manual regeneration demo run",
         rag_knowledge_base=rag_kb,
     )
@@ -207,7 +207,7 @@ def main() -> int:
     print("\n[demo] === verification result ===")
     print(f"  decision      = {verification_result.decision}")
     print(f"  explanation   = {verification_result.explanation}")
-    final_production = registry.get_current_version("throughput")
+    final_production = registry.get_current_version("dl_bler")
     print(f"  production is now: {final_production.version_id} (adaptation_type={final_production.adaptation_type})")
 
     print("\n[demo] OK — one full real regeneration cycle completed (live LLM call + real sandboxed subprocess).")

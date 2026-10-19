@@ -17,10 +17,14 @@ except ImportError:  # pragma: no cover - rich is confirmed installed in this en
 def live_line(mode: str, cycle: int, total_cycles: int, unified_fidelity: float | None, lowest_component: str | None) -> None:
     fu = f"{unified_fidelity:.4f}" if unified_fidelity is not None else "insufficient_history"
     text = f"[{mode}] cycle {cycle}/{total_cycles}  F_U={fu}  lowest={lowest_component or '-'}"
+    # Explicit flush always — when stdout is redirected to a file (not a TTY), Python fully
+    # buffers it and neither print() nor rich.Console.print() flushes on its own; a run killed
+    # before a clean exit (Ctrl-C, a timeout, a crash) can silently lose every buffered line.
     if _console is not None:
         _console.print(text, style="dim")
+        _console.file.flush()
     else:
-        print(text)
+        print(text, flush=True)
 
 
 def adaptation_event_block(mode: str, event: dict[str, Any]) -> None:
@@ -37,9 +41,10 @@ def adaptation_event_block(mode: str, event: dict[str, Any]) -> None:
         for line in lines:
             _console.print(line)
         _console.rule()
+        _console.file.flush()
     else:
         border = "=" * 70
         print(border)
         for line in lines:
             print(line)
-        print(border)
+        print(border, flush=True)

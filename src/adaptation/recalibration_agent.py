@@ -217,8 +217,22 @@ class RecalibrationAgent:
         ]
         train_df, held_out_df = time_split(window_df, held_out_fraction)
 
-        # 6. call the existing generic train() interface (Module 5's DTComponent contract)
-        candidate.train(train_df[input_columns], train_df[target_column])
+        # 6. call the existing generic train() interface (Module 5's DTComponent contract).
+        # `train()` legitimately raises ValueError on an all-NaN training slice (e.g. a window
+        # landing on sessions too young for the richer lag/rolling features to be populated yet
+        # — real, reachable in live operation, not just a theoretical edge case) — the raw-count
+        # check above only guards row COUNT, not post-NaN-filter validity. Converted to
+        # RecalibrationError so this is a clean, recognized recalibration failure (caught by
+        # src/main.py's existing except (RecalibrationError, ...) handler, which skips this cycle
+        # without affecting telemetry or the next trigger) rather than an uncaught ValueError that
+        # crashes the whole orchestrator.
+        try:
+            candidate.train(train_df[input_columns], train_df[target_column])
+        except ValueError as exc:
+            raise RecalibrationError(
+                f"candidate training failed for {component_name!r} over the last "
+                f"{resolved_window_hours:.2f}h window ({len(train_df)} rows): {exc}"
+            ) from exc
 
         # 8. evaluate it — component-local metrics, plus real Module 12 fidelity before/after
         # when a shared evaluator was supplied (comparing production vs. candidate over the SAME

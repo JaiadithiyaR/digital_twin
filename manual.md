@@ -1,16 +1,18 @@
 # MANUAL.md — AI-Driven Self-Adaptive Network Digital Twin
 
 This is the single run-and-reference manual for this repository: how to set it up, every command
-you can run, and what every folder/file does. It supersedes the old repo-root `manual.txt` (that
-file documented the pre-Phase-13 architecture and some retired NS-3 content — kept on disk,
-unmodified, purely as a historical artifact; read this file instead). `docs/MANUAL.md` and
-`docs/HOW_TO_RUN.md` are earlier, narrower versions written mid-project (post-OAI-migration,
-pre-Phase-13) — this file is the current, complete one; where they conflict, this file wins.
+you can run, and what every folder/file does. It supersedes the old repo-root `manual.txt`
+(pre-Phase-13, described the retired NS-3 architecture — removed from the repo during cleanup).
+`docs/MANUAL.md` and `docs/HOW_TO_RUN.md` are earlier, narrower versions written mid-project
+(post-OAI-migration, pre-Phase-13) — this file is the current, complete one; where they conflict,
+this file wins.
 
 The authoritative architecture/design document is `CLAUDE.md` (205KB, extremely detailed —
 read it when you need the "why", not just the "what"). `IMPLEMENTATION_STATUS.md` tracks
-module-by-module build status. `claude_code_prompt_phase13.md` is the specification this latest
-phase of work was executed against. This manual only covers *how to run things and what's where*.
+module-by-module build status. The phase-13 specification this latest round of work was executed
+against has since been removed from the repo (see §4's file table) — `PHASE13_FINAL_REPORT.md`
+is the durable record of what it asked for and what was done. This manual only covers *how to run
+things and what's where*.
 
 ---
 
@@ -146,7 +148,8 @@ not a regression to chase.
 | `manual.md` | **This file.** |
 | `PHASE13_FINAL_REPORT.md` | The §9 final report for this phase — model-fix results, lock, LLM cost/caching, baseline comparison table, graphs list, outputs list, docs status, Phase-12 open-issues resolution, and test pass counts. |
 | `AGENTS.md` | The 6 agentic AI agents (Decision & Root-Cause, Recalibration, Regeneration, Expand-Scope, Verification, Lifecycle) — what each does, how it does it, and exactly what tools/resources (LLM, RAG, sandbox, registries, D1) each one can access. |
-| `manual.txt` | Superseded by this file — kept for history, documents the pre-Phase-13 state. |
+| `BASELINES.md` | The `baselines/` comparison framework — what's compared, every formula (fidelity, unified fidelity, acceptance gate, comparison-table metrics), and every graph produced. |
+| `CHANGELOG.md` | Real bugs found and fixed while actually running this system — symptom, root cause, fix, and how each was verified, newest first. |
 | `config/settings.yaml` | Every tunable parameter in the system. Nothing is hardcoded in `src/` that should live here. |
 | `.env` / `.env.example` | Secrets (`GOOGLE_API_KEY`/`GEMINI_API_KEY`). `.env` is never committed; `.env.example` documents the required keys with placeholder values. |
 | `.gitignore` | Standard excludes — notably all of `data/`'s runtime output, `baselines/results/`, `.venv/`, real OAI exports, `rankpi_kpi/`. |

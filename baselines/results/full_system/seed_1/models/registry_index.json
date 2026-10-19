@@ -261,7 +261,7 @@
       "output_field": "dl_bler_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:08.625357Z",
+      "created_at": "2026-10-09T05:35:01.218183Z",
       "training_window": {
         "n_rows": 60858
       },
@@ -538,7 +538,7 @@
       "output_field": "dl_bler_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "dl_bler-v1",
-      "created_at": "2026-10-08T10:35:14.456727Z",
+      "created_at": "2026-10-09T05:37:12.319183Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -577,28 +577,24 @@
         "dl_bler_lag4",
         "dl_bler_lag5",
         "dl_bler_roll_mean_5s",
-        "dl_bler_roll_mean_10s",
         "dl_bler_roll_std_5s",
+        "dl_bler_roll_mean_10s",
         "dl_bler_roll_std_10s",
-        "dl_bler_avg_lag1",
-        "dl_bler_avg_lag2",
-        "dl_bler_std_lag1",
-        "wb_cqi_avg_lag1",
-        "wb_cqi_avg_roll_mean_5s",
         "dl_mcs1_avg_lag1",
-        "dl_mcs1_avg_roll_mean_5s",
-        "pusch_snr_avg_lag1",
-        "pucch_snr_avg_lag1",
+        "dl_mcs1_avg_lag2",
+        "wb_cqi_avg_lag1",
+        "wb_cqi_avg_lag2",
         "dl_curr_tbs_avg_lag1",
         "dl_sched_rb_avg_lag1",
-        "dl_throughput_lag1",
         "dl_prb_lag1",
-        "ul_bler_lag1"
+        "dl_throughput_lag1",
+        "pusch_snr_avg_lag1",
+        "pucch_snr_avg_lag1"
       ],
       "output_field": "dl_bler_pred",
       "adaptation_type": "regenerate",
       "parent_version_id": "dl_bler-v1",
-      "created_at": "2026-10-08T10:36:14.394981Z",
+      "created_at": "2026-10-09T05:38:04.727696Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -615,15 +611,15 @@
         "provenance": "d1_history"
       },
       "evaluation_metrics": {
-        "rmse": 9.184959078718519e-05,
-        "mae": 9.18495907871852e-05
+        "rmse": 0.00010337037572579326,
+        "mae": 0.00010337037572579326
       },
       "fidelity_before": null,
       "fidelity_after": null,
       "status": "rejected",
       "llm_metadata": {
         "model": "gemini-3.6-flash",
-        "reasoning": "Rebuilt DlBlerModel using HistGradientBoostingRegressor targeting key DL BLER lag and rolling statistical features along with channel quality metrics (CQI, MCS, SNR, TBS). Output predictions are strictly clipped to valid ratio bounds [0, 1].",
+        "reasoning": "Rebuilt DlBlerModel using HistGradientBoostingRegressor with tailored lag and rolling features for DL BLER prediction. Enforced target constraints by clipping predictions to [0.0, 1.0] range and handling missing input data gracefully.",
         "attempts": 1
       }
     },
@@ -888,7 +884,7 @@
       "output_field": "dl_bler_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "dl_bler-v1",
-      "created_at": "2026-10-08T10:38:30.629521Z",
+      "created_at": "2026-10-09T05:40:02.770056Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -1174,7 +1170,7 @@
       "output_field": "dl_bler_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "dl_bler-v4",
-      "created_at": "2026-10-08T10:39:55.066024Z",
+      "created_at": "2026-10-09T05:42:04.922720Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -1462,7 +1458,7 @@
       "output_field": "ul_bler_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:11.608450Z",
+      "created_at": "2026-10-09T05:35:06.738747Z",
       "training_window": {
         "n_rows": 60858
       },
@@ -1739,7 +1735,7 @@
       "output_field": "ul_bler_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "ul_bler-v1",
-      "created_at": "2026-10-08T10:34:56.909376Z",
+      "created_at": "2026-10-09T05:36:54.205404Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -1781,26 +1777,26 @@
         "ul_bler_roll_std_5s",
         "ul_bler_roll_mean_10s",
         "ul_bler_roll_std_10s",
-        "pusch_snr_avg_lag1",
-        "pusch_snr_avg_lag2",
-        "pusch_snr_std_lag1",
-        "pusch_snr_avg_roll_mean_5s",
-        "pusch_snr_avg_roll_mean_10s",
-        "pucch_snr_avg_lag1",
-        "ul_mcs1_avg_lag1",
-        "ul_mcs1_std_lag1",
-        "ul_prb_lag1",
-        "ul_throughput_lag1",
-        "phr_avg_lag1",
         "ul_bler_avg_lag1",
         "ul_bler_std_lag1",
-        "bsr_avg_lag1",
-        "requested_prb_ratio_lag1"
+        "pusch_snr_avg_lag1",
+        "pusch_snr_std_lag1",
+        "pusch_snr_avg_roll_mean_5s",
+        "pucch_snr_avg_lag1",
+        "pucch_snr_std_lag1",
+        "ul_mcs1_avg_lag1",
+        "ul_mcs1_std_lag1",
+        "phr_avg_lag1",
+        "phr_std_lag1",
+        "ul_throughput_lag1",
+        "ul_prb_lag1",
+        "dl_bler_lag1",
+        "bsr_avg_lag1"
       ],
       "output_field": "ul_bler_pred",
       "adaptation_type": "regenerate",
       "parent_version_id": "ul_bler-v1",
-      "created_at": "2026-10-08T10:37:11.308328Z",
+      "created_at": "2026-10-09T05:38:48.012753Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -1817,16 +1813,16 @@
         "provenance": "d1_history"
       },
       "evaluation_metrics": {
-        "rmse": 0.0001451199605256803,
-        "mae": 0.00014484811837889284
+        "rmse": 0.00013333740503571498,
+        "mae": 0.00013153936439927897
       },
       "fidelity_before": null,
       "fidelity_after": null,
       "status": "rejected",
       "llm_metadata": {
         "model": "gemini-3.6-flash",
-        "reasoning": "Replaced lightgbm dependency with sklearn's HistGradientBoostingRegressor, which is included in standard scikit-learn installations and resolves the ModuleNotFoundError during sandbox imports.",
-        "attempts": 2
+        "reasoning": "Rebuilt UlBlerModel using HistGradientBoostingRegressor focusing on key uplink signal quality features (PUSCH SNR, PUCCH SNR, UL MCS, PHR, UL PRB/Throughput, and UL BLER lags) to resolve drift and improve fidelity.",
+        "attempts": 1
       }
     },
     {
@@ -2090,7 +2086,7 @@
       "output_field": "ul_bler_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "ul_bler-v1",
-      "created_at": "2026-10-08T10:38:12.100850Z",
+      "created_at": "2026-10-09T05:39:46.382463Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -2378,7 +2374,7 @@
       "output_field": "dl_prb_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:14.230453Z",
+      "created_at": "2026-10-09T05:35:10.323118Z",
       "training_window": {
         "n_rows": 60858
       },
@@ -2391,7 +2387,7 @@
       },
       "fidelity_before": null,
       "fidelity_after": null,
-      "status": "superseded",
+      "status": "production",
       "llm_metadata": null
     },
     {
@@ -2655,7 +2651,7 @@
       "output_field": "dl_prb_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "dl_prb-v1",
-      "created_at": "2026-10-08T10:34:01.835607Z",
+      "created_at": "2026-10-09T05:35:58.776212Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -2701,16 +2697,20 @@
         "dl_throughput_roll_mean_5s",
         "dl_throughput_roll_mean_10s",
         "dl_sched_rb_avg_lag1",
+        "dl_sched_rb_avg_roll_mean_5s",
         "dl_curr_tbs_avg_lag1",
+        "dl_curr_tbs_avg_roll_mean_5s",
+        "dl_mcs1_avg_lag1",
         "wb_cqi_avg_lag1",
         "requested_prb_ratio_lag1",
         "ue_count_cell_lag1",
-        "has_controller_lag1"
+        "dl_bler_lag1",
+        "ul_prb_lag1"
       ],
       "output_field": "dl_prb_pred",
       "adaptation_type": "regenerate",
       "parent_version_id": "dl_prb-v1",
-      "created_at": "2026-10-08T10:34:39.557570Z",
+      "created_at": "2026-10-09T05:36:36.544444Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -2727,15 +2727,15 @@
         "provenance": "d1_history"
       },
       "evaluation_metrics": {
-        "rmse": 0.1275196791449774,
-        "mae": 0.1250878981512605
+        "rmse": 0.1799207339452031,
+        "mae": 0.17819228358397537
       },
       "fidelity_before": null,
       "fidelity_after": null,
       "status": "rejected",
       "llm_metadata": {
         "model": "gemini-3.6-flash",
-        "reasoning": "Rebuilt dl_prb model using scikit-learn's HistGradientBoostingRegressor with non-negative lower bound clipping. Features focus on PRB lags, throughput, scheduling statistics, CQI, and controller status.",
+        "reasoning": "Rebuilding the dl_prb component pipeline using a specialized HistGradientBoostingRegressor trained on downlink PRB temporal lags, rolling statistics, throughput, MCS, scheduled resource block averages, and requested PRB ratios. Output values are non-negative and calibrated to capture non-linear gNodeB scheduling allocations accurately.",
         "attempts": 1
       }
     },
@@ -3000,7 +3000,7 @@
       "output_field": "dl_prb_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "dl_prb-v1",
-      "created_at": "2026-10-08T10:39:35.873161Z",
+      "created_at": "2026-10-09T05:37:29.020762Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -3022,8 +3022,91 @@
       },
       "fidelity_before": null,
       "fidelity_after": null,
-      "status": "production",
+      "status": "rejected",
       "llm_metadata": null
+    },
+    {
+      "component": "dl_prb",
+      "version_id": "dl_prb-v5",
+      "model_class": "DlPrbModel",
+      "artifact_path": "dl_prb/dl_prb-v5.joblib",
+      "source_path": "dl_prb/dl_prb-v5.py",
+      "dependencies": [],
+      "feature_schema": [
+        "dl_prb_lag1",
+        "dl_prb_lag2",
+        "dl_prb_lag3",
+        "dl_prb_lag4",
+        "dl_prb_lag5",
+        "dl_prb_roll_mean_5s",
+        "dl_prb_roll_mean_10s",
+        "dl_prb_roll_std_5s",
+        "dl_prb_roll_std_10s",
+        "dl_throughput_lag1",
+        "dl_throughput_lag2",
+        "dl_throughput_lag3",
+        "dl_throughput_lag4",
+        "dl_throughput_lag5",
+        "dl_throughput_roll_mean_5s",
+        "dl_throughput_roll_mean_10s",
+        "dl_throughput_roll_std_5s",
+        "dl_throughput_roll_std_10s",
+        "dl_curr_tbs_avg_lag1",
+        "dl_curr_tbs_avg_lag2",
+        "dl_curr_tbs_avg_lag3",
+        "dl_curr_tbs_avg_lag4",
+        "dl_curr_tbs_avg_lag5",
+        "dl_curr_tbs_avg_roll_mean_5s",
+        "dl_curr_tbs_avg_roll_mean_10s",
+        "dl_curr_tbs_avg_roll_std_5s",
+        "dl_curr_tbs_avg_roll_std_10s",
+        "dl_sched_rb_avg_lag1",
+        "dl_sched_rb_avg_lag2",
+        "dl_sched_rb_avg_lag3",
+        "dl_sched_rb_avg_lag4",
+        "dl_sched_rb_avg_lag5",
+        "dl_sched_rb_avg_roll_mean_5s",
+        "dl_sched_rb_avg_roll_mean_10s",
+        "dl_sched_rb_avg_roll_std_5s",
+        "dl_sched_rb_avg_roll_std_10s",
+        "wb_cqi_avg_lag1",
+        "dl_mcs1_avg_lag1",
+        "requested_prb_ratio_lag1",
+        "ue_count_cell_lag1",
+        "bsr_avg_lag1",
+        "has_controller_lag1"
+      ],
+      "output_field": "dl_prb_pred",
+      "adaptation_type": "regenerate",
+      "parent_version_id": "dl_prb-v1",
+      "created_at": "2026-10-09T05:41:48.662191Z",
+      "training_window": {
+        "start": "2026-09-28T15:38:19+00:00",
+        "end": "2026-09-28T16:27:34+00:00",
+        "n_rows": 20692,
+        "window_hours": 48,
+        "provenance": "d1_history",
+        "ue_id": null,
+        "cell_id": null
+      },
+      "evaluation_window": {
+        "start": "2026-09-28T16:27:35+00:00",
+        "end": "2026-09-28T16:39:53+00:00",
+        "n_rows": 5173,
+        "provenance": "d1_history"
+      },
+      "evaluation_metrics": {
+        "rmse": 0.5345337056165014,
+        "mae": 0.3708066100434023
+      },
+      "fidelity_before": null,
+      "fidelity_after": null,
+      "status": "rejected",
+      "llm_metadata": {
+        "model": "gemini-3.6-flash",
+        "reasoning": "Replaced LightGBM (which was missing in the execution environment) with scikit-learn's standard `HistGradientBoostingRegressor`. Maintained identical input/output interface, required feature list, non-negative clipping on predictions, and serialization protocol.",
+        "attempts": 2
+      }
     }
   ],
   "ul_prb": [
@@ -3288,7 +3371,7 @@
       "output_field": "ul_prb_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:16.867991Z",
+      "created_at": "2026-10-09T05:35:13.037205Z",
       "training_window": {
         "n_rows": 60858
       },
@@ -3570,7 +3653,7 @@
       "output_field": "dl_throughput_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:19.796619Z",
+      "created_at": "2026-10-09T05:35:16.103859Z",
       "training_window": {
         "n_rows": 60858
       },
@@ -3850,7 +3933,7 @@
       "output_field": "dl_throughput_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "dl_throughput-v1",
-      "created_at": "2026-10-08T10:37:50.521033Z",
+      "created_at": "2026-10-09T05:39:24.368135Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -4141,7 +4224,7 @@
       "output_field": "ul_throughput_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:22.701165Z",
+      "created_at": "2026-10-09T05:35:18.808187Z",
       "training_window": {
         "n_rows": 60858
       },
@@ -4421,7 +4504,7 @@
       "output_field": "ul_throughput_pred",
       "adaptation_type": "recalibrate",
       "parent_version_id": "ul_throughput-v1",
-      "created_at": "2026-10-08T10:37:31.076904Z",
+      "created_at": "2026-10-09T05:39:04.887025Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -4460,24 +4543,55 @@
         "ul_throughput_lag1",
         "ul_throughput_lag2",
         "ul_throughput_lag3",
+        "ul_throughput_lag4",
+        "ul_throughput_lag5",
         "ul_throughput_roll_mean_5s",
+        "ul_throughput_roll_mean_10s",
         "ul_throughput_roll_std_5s",
+        "ul_throughput_roll_std_10s",
         "ul_prb_lag1",
+        "ul_prb_lag2",
+        "ul_prb_lag3",
+        "ul_prb_lag4",
+        "ul_prb_lag5",
         "ul_prb_roll_mean_5s",
+        "ul_prb_roll_mean_10s",
+        "ul_prb_roll_std_5s",
+        "ul_prb_roll_std_10s",
         "ul_bler_lag1",
+        "ul_bler_lag2",
+        "ul_bler_lag3",
+        "ul_bler_lag4",
+        "ul_bler_lag5",
         "ul_bler_roll_mean_5s",
+        "ul_bler_roll_mean_10s",
+        "ul_bler_roll_std_5s",
+        "ul_bler_roll_std_10s",
         "pusch_snr_avg_lag1",
-        "pusch_snr_std_lag1",
+        "pusch_snr_avg_lag2",
+        "pusch_snr_avg_lag3",
+        "pusch_snr_avg_roll_mean_5s",
+        "pusch_snr_avg_roll_mean_10s",
         "pucch_snr_avg_lag1",
+        "pucch_snr_avg_lag2",
         "ul_mcs1_avg_lag1",
+        "ul_mcs1_avg_lag2",
+        "ul_mcs1_avg_roll_mean_5s",
         "phr_avg_lag1",
+        "phr_avg_lag2",
         "bsr_avg_lag1",
-        "ue_count_cell_lag1"
+        "n_samples_lag1",
+        "ue_count_cell_lag1",
+        "ue_count_slice_lag1",
+        "requested_prb_ratio_lag1",
+        "has_controller_lag1",
+        "ul_bler_pred",
+        "ul_prb_pred"
       ],
       "output_field": "ul_throughput_pred",
       "adaptation_type": "regenerate",
       "parent_version_id": "ul_throughput-v1",
-      "created_at": "2026-10-08T10:39:15.549573Z",
+      "created_at": "2026-10-09T05:40:49.674558Z",
       "training_window": {
         "start": "2026-09-28T15:38:19+00:00",
         "end": "2026-09-28T16:27:34+00:00",
@@ -4494,15 +4608,15 @@
         "provenance": "d1_history"
       },
       "evaluation_metrics": {
-        "rmse": 0.0003368912090519862,
-        "mae": 0.00021441188224004078
+        "rmse": 0.00030726222389842436,
+        "mae": 0.0001886399535811223
       },
       "fidelity_before": null,
       "fidelity_after": null,
       "status": "rejected",
       "llm_metadata": {
         "model": "gemini-3.6-flash",
-        "reasoning": "Rebuilt UlThroughputModel using standard DTComponent subclassing with HistGradientBoostingRegressor on key domain features (UL throughput lags, PUSCH/PUCCH SNR, BSR, UL PRB, UL MCS) alongside predicted upstream dependencies (ul_bler_pred, ul_prb_pred). Added prediction clipping at zero to guarantee non-negative physical throughput predictions.",
+        "reasoning": "Rebuilt the `ul_throughput` component using `HistGradientBoostingRegressor` with focused feature selection targeting UL physical metrics (UL PRB, UL MCS, PUSCH/PUCCH SNR, BSR, PHR) and prior lag dynamics. Fallbacks handle target/prediction column mapping for upstream dependencies seamlessly.",
         "attempts": 1
       }
     }
@@ -4772,7 +4886,7 @@
       "output_field": "dl_rlc_delay_pred",
       "adaptation_type": "bootstrap",
       "parent_version_id": null,
-      "created_at": "2026-10-08T10:33:25.124513Z",
+      "created_at": "2026-10-09T05:35:21.296902Z",
       "training_window": {
         "n_rows": 60858
       },

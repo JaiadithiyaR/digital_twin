@@ -29,3 +29,6 @@ pytest-cov>=5.0
 
 # Networkx used for dependency-graph topological ordering in the DT orchestrator
 networkx>=3.3
+
+# Clean console output for the live orchestrator and baseline experiments
+rich>=13.7

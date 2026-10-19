@@ -5,7 +5,7 @@ be inspected in isolation, without waiting on a real drift event or the Decision
 Analysis Agent to select this strategy).
 
 What this script does, all real, nothing mocked:
-    1. Bootstrap-trains and registers a real production `ThroughputModel` (version 1) on an
+    1. Bootstrap-trains and registers a real production `DlBlerModel` (version 1) on an
        EARLIER, smaller telemetry population (fewer UEs/cells — representing network conditions
        at initial deployment) via the real Module 2/3/4 pipeline. This data is deliberately never
        written into the live D1Store the agent reads from below — production must genuinely never
@@ -54,7 +54,7 @@ from src.adaptation.verification_agent import VerificationAgent  # noqa: E402
 from src.common.config import load_secrets, load_settings  # noqa: E402
 from src.common.logging import setup_logging  # noqa: E402
 from src.dt_models.d1_model_store import D1Store  # noqa: E402
-from src.dt_models.throughput import ThroughputModel  # noqa: E402
+from src.dt_models.dl_bler import DlBlerModel  # noqa: E402
 from src.fidelity.evaluator import FidelityEvaluator  # noqa: E402
 from src.llm.google_client import GoogleClient  # noqa: E402
 from src.rag.rag_kb import RagKnowledgeBase  # noqa: E402
@@ -80,7 +80,7 @@ def main() -> int:
 
     preprocessor = TelemetryPreprocessor(settings.telemetry.preprocessing)
     sync_config = settings.synchronization.model_copy(update={"batch_size": 100})
-    features = list(ThroughputModel.REQUIRED_FEATURES)
+    features = list(DlBlerModel.REQUIRED_FEATURES)
 
     # 1. Bootstrap-train production on an EARLIER, smaller network population — this data is
     # intentionally kept out of the live D1Store below, so production genuinely never sees it.
@@ -100,18 +100,18 @@ def main() -> int:
     bootstrap_history = bootstrap_store.get_history()
 
     registry = ModelRegistry(models_dir=DEMO_DIR / "models", index_path=DEMO_DIR / "models" / "index.json")
-    bootstrap_model = ThroughputModel.from_settings(settings)
-    bootstrap_model.train(bootstrap_history[features], bootstrap_history["throughput_mbps"])
+    bootstrap_model = DlBlerModel.from_settings(settings)
+    bootstrap_model.train(bootstrap_history[features], bootstrap_history["dl_bler"])
     registry.register_version(
         component_instance=bootstrap_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(bootstrap_history)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=bootstrap_model.evaluate(bootstrap_history[features], bootstrap_history["throughput_mbps"]),
+        evaluation_metrics=bootstrap_model.evaluate(bootstrap_history[features], bootstrap_history["dl_bler"]),
         status="production",
     )
-    print(f"[demo] registered production version: {registry.get_current_version('throughput').version_id}")
+    print(f"[demo] registered production version: {registry.get_current_version('dl_bler').version_id}")
 
     # 2. The LIVE D1 history the agent actually reads from — a genuinely different, larger
     # network population (network growth since the production model was trained).
@@ -136,17 +136,17 @@ def main() -> int:
     # pair — repeatedly evaluating the IDENTICAL pair produces a degenerate, perfectly-constant
     # rolling window, which the eps-stabilized min-max normalization then explodes into an absurd
     # score the moment a genuinely different point is evaluated afterward (documented in Module
-    # 17's own docstring). Sampled real throughput values plus synthetic noise scaled to this
-    # component's own established real-world error magnitude (Module 6's own real validation:
-    # held-out RMSE ~1.5 Mbps) gives genuine, realistic per-call variation.
+    # 17's own docstring). Sampled real dl_bler values plus synthetic noise scaled to this
+    # component's own established real-world error magnitude (docs/MODELS.md's own real CV
+    # validation: held-out RMSE ~0.011) gives genuine, realistic per-call variation.
     fidelity_evaluator = FidelityEvaluator(settings.fidelity)
     rng = np.random.default_rng(42)
     n_warm = settings.fidelity.min_history_for_normalization + 1
     for i in range(n_warm):
         chunk = history.sample(n=min(50, len(history)), random_state=i)
-        y_true_chunk = chunk["throughput_mbps"].reset_index(drop=True)
-        y_pred_chunk = y_true_chunk + rng.normal(0, 1.0 + 0.3 * i, size=len(y_true_chunk))
-        fidelity_evaluator.evaluate("throughput", y_true_chunk, y_pred_chunk, update_window=True)
+        y_true_chunk = chunk["dl_bler"].reset_index(drop=True)
+        y_pred_chunk = y_true_chunk + rng.normal(0, 0.01 + 0.003 * i, size=len(y_true_chunk))
+        fidelity_evaluator.evaluate("dl_bler", y_true_chunk, y_pred_chunk, update_window=True)
 
     # An LLM client is used opportunistically here ONLY for the optional training-window sizing
     # hint (prompt.md §23 "MAY use LLM reasoning") — recalibration itself never needs one.
@@ -162,8 +162,8 @@ def main() -> int:
     print("\n[demo] calling RecalibrationAgent.recalibrate() ...")
     agent = RecalibrationAgent(settings, store, registry, fidelity_evaluator=fidelity_evaluator, llm_client=llm_client)
     result = agent.recalibrate(
-        lambda: ThroughputModel.from_settings(settings),
-        "throughput_mbps",
+        lambda: DlBlerModel.from_settings(settings),
+        "dl_bler",
         window_hours=48,
         held_out_fraction=0.2,
         use_llm_window_reasoning=llm_client is not None,
@@ -183,14 +183,14 @@ def main() -> int:
     print("\n[demo] calling VerificationAgent.verify() to decide ACCEPT/REJECT...")
     window_df = select_recent_window(store.get_history(), 48)
     _, held_out_df = time_split(window_df, 0.2)
-    eval_target = held_out_df["throughput_mbps"]
+    eval_target = held_out_df["dl_bler"]
     candidate_predictions = result.candidate_component.predict(held_out_df)
 
     rag_kb = RagKnowledgeBase.from_settings(settings)
     verification_agent = VerificationAgent(settings, registry, fidelity_evaluator, llm_client=llm_client)
     verification_result = verification_agent.verify(
         result.version, held_out_df, eval_target, candidate_predictions,
-        production_component_factory=lambda: ThroughputModel.from_settings(settings),
+        production_component_factory=lambda: DlBlerModel.from_settings(settings),
         drift_context="manual recalibration demo run",
         rag_knowledge_base=rag_kb,
     )
@@ -198,7 +198,7 @@ def main() -> int:
     print(f"\n[demo] === verification result ===")
     print(f"  decision      = {verification_result.decision}")
     print(f"  explanation   = {verification_result.explanation}")
-    final_production = registry.get_current_version("throughput")
+    final_production = registry.get_current_version("dl_bler")
     print(f"  production is now: {final_production.version_id} (adaptation_type={final_production.adaptation_type})")
 
     print("\n[demo] OK — one full real recalibration cycle completed.")

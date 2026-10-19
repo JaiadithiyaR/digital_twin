@@ -58,9 +58,9 @@ LLM:           model, tier, caching active (yes/no), total cost per mode, budget
 | static | 1 | $0.000000 | 0 (no LLM — triggers logged only) | — |
 | periodic_retrain | 1 | $0.000000 | 0 (deterministic scheduled retrain, no LLM) | — |
 | rule_based | 1 | $0.009351 | — (codegen + explanation roles only; decision is deterministic) | 59.4% |
-| full_system | 3 (seeds 1/2/3) | $0.056064 | 44 real decision calls (0 fallbacks) | 66.9% |
+| full_system | 3 (seeds 1/2/3) | $0.079801 | 44 real decision calls (0 fallbacks) | 56.7% |
 
-- **Budget used**: **$0.065415 of the configured $20.00 cap** (≈0.33%) — well within budget
+- **Budget used**: **$0.089152 of the configured $20.00 cap** (≈0.45%) — well within budget
   across every mode, every seed.
 
 ```
@@ -72,7 +72,7 @@ BASELINES:     table of comparison metrics per mode (from comparison.csv); any i
 | static | 1 | 0.7942 (±0.0000) | 14 | 0 | 0 | 0 | 0.0% | No |
 | periodic_retrain | 1 | 0.8328 (±0.0000) | 21 | 21 | 3 | 18 | 0.0% | No |
 | rule_based | 1 | 0.7980 (±0.0000) | 14 | 9 | 1 | 8 | 0.0% | No |
-| full_system | 3 | 0.7428 (±0.0904) | 44 | 38 | 4 | 34 | 0.0% | No |
+| full_system | 3 | 0.7299 (±0.0817) | 44 | 41 | 4 | 37 | 0.0% | No |
 
 No run was invalid (the `full_system` invalidity rule — fallback rate > 10% — never tripped;
 0 fallbacks across all 44 real decision calls). All 4 modes replayed the real OAI **TEST split
@@ -186,8 +186,8 @@ TESTS:         commands + pass/fail counts
 
 **Total: 550 passed, 0 failed**, across all 3 suites this phase.
 
-Two real, genuine bugs were found and fixed *while confirming these numbers* (not pre-existing
-failures papered over):
+Five real, genuine bugs were found and fixed *while confirming these numbers*, running real
+baseline experiments, and cleaning up the codebase — not pre-existing failures papered over:
 
 1. **`src/llm/google_client.py`** — `httpx.RemoteProtocolError` ("server disconnected without
    sending a response") was not in `_TRANSIENT_TRANSPORT_EXCEPTIONS`, so a transient network
@@ -203,3 +203,36 @@ failures papered over):
    NaN-intolerant hardcoded "LLM-generated" fixture candidates / a global (not per-session)
    40-row head-cut in the others, which the richer feature set's legitimate early-session NaNs
    now exposed. All fixed at the test level (no production-code change needed for these four).
+3. **`baselines/_lib.py` — `expand_scope` unconditionally broken.** The harness's expand_scope
+   dispatch called `agent.expand_scope(expand_scope_context=..., ...)` without the required
+   `example_component_factory` positional argument — a 100%-reproducible `TypeError` every time
+   `expand_scope` was selected (confirmed: hit for real in `full_system` seed 2). Fixed by passing
+   the already-built `factory` lambda.
+4. **`baselines/_lib.py` — recalibration crash on a previously-regenerated component.** The
+   `factory` lambda unconditionally called `cls.from_settings(settings)`, but a hot-swapped
+   regenerate/expand_scope class only guarantees a no-arg constructor (`src/main.py` already
+   branches on this correctly — `_component_class_for`/`_dynamic_component_classes`; this harness
+   file had no equivalent branch). Confirmed via a real crash: a regenerated `dl_rlc_delay`
+   candidate's own LLM-authored `from_settings()` blindly forwarded config params shaped for
+   XGBoost into `HistGradientBoostingRegressor` (which doesn't accept `n_estimators`), crashing
+   the next `recalibrate` attempt on that component. Fixed by branching on whether `cls` is one
+   of the 7 original classes, mirroring `src/main.py` exactly.
+5. **`baselines/_lib.py` — an `OrchestratorError` could crash the whole run.** Unlike
+   `src/main.py`'s `run_prediction_and_fidelity_cycle()` (which already wraps
+   `dt_orchestrator.run_predictions()` in `try/except OrchestratorError`), the baseline harness's
+   copy of this function had no such guard. Hit for real: a hot-swapped `dl_throughput` regenerate
+   candidate declared its dependency's `_pred` columns directly in `REQUIRED_FEATURES` instead of
+   properly via `DEPENDENCIES` — tolerated by the sandbox's own training/eval harness (which
+   populates dependency-shaped columns regardless of which attribute names them) but not by the
+   live orchestrator (which only auto-wires columns declared via `DEPENDENCIES`) — crashing the
+   *next* prediction cycle and killing the whole `run_all.py` process mid-seed-3. Fixed by adding
+   the identical guard `src/main.py` already has. **This is a genuine, general architectural risk
+   worth flagging**: the sandbox's conformance check validates `COMPONENT_NAME`/`OUTPUT_FIELD`
+   but never checks that a candidate's `DEPENDENCIES`/`REQUIRED_FEATURES` split is consistent with
+   how the live orchestrator actually wires data — production (`src/main.py`) degrades gracefully
+   when this happens (skips that cycle's fidelity, logs a warning, keeps running); nothing
+   currently prevents such a candidate from being accepted in the first place.
+
+Items 3-5 were caught, fixed, and verified by re-running the affected baseline experiments to
+completion (`full_system`'s 3 seeds all completed cleanly after the fixes — see BASELINES above,
+numbers already reflect the corrected runs) — not just fixed in the abstract.

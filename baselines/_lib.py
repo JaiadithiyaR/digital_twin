@@ -17,12 +17,15 @@ Fairness rules (phase13 §4), enforced here, not just documented:
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
 import time as _time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -42,7 +45,7 @@ from src.dt_models.dl_prb import DlPrbModel
 from src.dt_models.dl_rlc_delay import DlRlcDelayModel
 from src.dt_models.dl_throughput import DlThroughputModel
 from src.dt_models.model_registry import DTModelRegistry
-from src.dt_models.orchestrator import DTOrchestrator
+from src.dt_models.orchestrator import DTOrchestrator, OrchestratorError
 from src.dt_models.ul_bler import UlBlerModel
 from src.dt_models.ul_prb import UlPrbModel
 from src.dt_models.ul_throughput import UlThroughputModel
@@ -141,7 +144,17 @@ def run_prediction_and_fidelity_cycle(
     if len(history_so_far) < 10:
         return result
     recent = history_so_far.tail(window_size).reset_index(drop=True)
-    predictions = dt_orchestrator.run_predictions(recent)
+    try:
+        predictions = dt_orchestrator.run_predictions(recent)
+    except OrchestratorError as exc:
+        # Mirrors src/main.py's own identical guard: a hot-swapped regenerate/expand_scope
+        # candidate can declare a dependency's _pred column directly in REQUIRED_FEATURES
+        # instead of DEPENDENCIES — the sandbox's training/eval harness tolerates this (it
+        # populates dependency-shaped columns regardless of which attribute names them), but the
+        # live orchestrator only auto-wires columns declared via DEPENDENCIES, so this fails here
+        # at the next prediction cycle. Skip this cycle's fidelity rather than crash the run.
+        logger.warning("DT prediction cycle failed", extra={"component": "baselines", "error": str(exc)})
+        return result
 
     for name, preds in predictions.items():
         y_true = recent[name].to_numpy(dtype=float)
@@ -207,7 +220,16 @@ def run_one_adaptation(
     start = _time.monotonic()
     component = trigger.component
     cls = type(dt_registry.get(component))
-    factory = lambda: cls.from_settings(settings)  # noqa: E731
+    # A hot-swapped regenerate/expand_scope class only guarantees a no-arg constructor (the
+    # sandbox's conformance contract) — never a from_settings(settings) classmethod the way the
+    # 7 hand-authored originals provide, mirroring src/main.py's own _component_class_for split.
+    # Found by a real crash: a regenerated dl_rlc_delay candidate's own from_settings() blindly
+    # forwarded config params shaped for XGBoost into HistGradientBoostingRegressor, which
+    # doesn't accept them — cls() bypasses that buggy classmethod entirely.
+    if component in CLASSES and cls is CLASSES[component]:
+        factory = lambda: cls.from_settings(settings)  # noqa: E731
+    else:
+        factory = lambda: cls()  # noqa: E731
     output_fields = {name: CLASSES[name].OUTPUT_FIELD for name in ORDER}
     old_version = model_registry.get_current_version(component)
 
@@ -248,6 +270,7 @@ def run_one_adaptation(
         else:  # expand_scope — only reachable if a rule/decision genuinely selects it
             agent = ExpandScopeAgent(settings, d1_store, model_registry, dt_registry, llm_client_codegen, sandbox, static_prefix=static_prefix)
             agent_result = agent.expand_scope(
+                factory,
                 expand_scope_context=f"baseline harness ({decision_meta.get('source', 'unknown')}): expand_scope triggered by {component!r}",
                 rag_knowledge_base=rag_kb, cache_key=cache_key,
             )

@@ -7,7 +7,7 @@ ALREADY-EXISTING component).
 
 What this script does, all real, nothing mocked:
     1. Builds a real, single live D1 history via the real Module 2/3/4 pipeline and registers one
-       EXISTING component (`ThroughputModel`) into a real `DTModelRegistry`/`ModelRegistry` —
+       EXISTING component (`DlBlerModel`) into a real `DTModelRegistry`/`ModelRegistry` —
        expand-scope needs an existing component only as a pattern-reference example (prompt.md
        §27 step 3), not as something it modifies.
     2. Constructs a REAL `GoogleClient` (requires a real GOOGLE_API_KEY/GEMINI_API_KEY — this
@@ -25,11 +25,11 @@ What this script does, all real, nothing mocked:
        fidelity be well-defined (never fabricated); ACCEPT registers it as production, REJECT
        leaves it as an unpromoted candidate.
 
-The worked example is real network-domain motivation — SINR quality prediction from mobility/
-load features, genuinely useful (proactive handover/resource-allocation signal) and genuinely
-novel among the five existing DT components (all five currently treat SINR as an INPUT, none
-predicts it) — the same example this project's own `tests/unit/test_expand_scope_agent.py`
-documents, kept consistent here rather than inventing an unrelated one.
+The worked example is real network-domain motivation — PDCP SDU volume / uplink SNR asymmetry
+are genuinely real, currently-unmodelled KPIs in this OAI export (`docs/MODELS.md`'s own "KPIs
+available but not modelled" section documents both as real expand-scope candidates); the LLM's
+own design call still genuinely decides what to build — the context below only motivates it,
+never dictates a specific outcome.
 
 Every run wipes and rebuilds its own dedicated storage under `data/demo_expand_scope/` — never the
 main application's real storage or the other two single-agent demo scripts' directories.
@@ -58,8 +58,8 @@ from src.adaptation.verification_agent import VerificationAgent  # noqa: E402
 from src.common.config import load_secrets, load_settings  # noqa: E402
 from src.common.logging import setup_logging  # noqa: E402
 from src.dt_models.d1_model_store import D1Store  # noqa: E402
+from src.dt_models.dl_bler import DlBlerModel  # noqa: E402
 from src.dt_models.model_registry import DTModelRegistry  # noqa: E402
-from src.dt_models.throughput import ThroughputModel  # noqa: E402
 from src.fidelity.evaluator import FidelityEvaluator  # noqa: E402
 from src.llm.google_client import GoogleClient  # noqa: E402
 from src.rag.rag_kb import RagKnowledgeBase  # noqa: E402
@@ -109,18 +109,18 @@ def main() -> int:
     history = store.get_history()
     print(f"[demo] live D1 history now has {len(history)} rows")
 
-    features = list(ThroughputModel.REQUIRED_FEATURES)
+    features = list(DlBlerModel.REQUIRED_FEATURES)
     model_registry = ModelRegistry(models_dir=DEMO_DIR / "models", index_path=DEMO_DIR / "models" / "index.json")
     dt_model_registry = DTModelRegistry()
-    example_model = ThroughputModel.from_settings(settings)
-    example_model.train(history[features], history["throughput_mbps"])
+    example_model = DlBlerModel.from_settings(settings)
+    example_model.train(history[features], history["dl_bler"])
     model_registry.register_version(
         component_instance=example_model,
         adaptation_type="bootstrap",
         parent_version_id=None,
         training_window={"n_rows": len(history)},
         evaluation_window={"n_rows": 0},
-        evaluation_metrics=example_model.evaluate(history[features], history["throughput_mbps"]),
+        evaluation_metrics=example_model.evaluate(history[features], history["dl_bler"]),
         status="production",
     )
     dt_model_registry.register(example_model)
@@ -152,16 +152,17 @@ def main() -> int:
           "(design + implementation) and runs a real sandboxed subprocess; may take a while...")
     try:
         result = agent.expand_scope(
-            lambda: ThroughputModel.from_settings(settings),
+            lambda: DlBlerModel.from_settings(settings),
             window_hours=96,
             held_out_fraction=0.2,
             # The LLM's own design proposal may legitimately choose to depend on an existing
-            # component (e.g. "throughput") — this maps every currently-registered component to
+            # component (e.g. "dl_bler") — this maps every currently-registered component to
             # its OUTPUT_FIELD so `with_dependency_ground_truth` can populate that column,
             # whichever dependency (if any) the design actually proposes.
             dependency_output_fields={c.COMPONENT_NAME: c.OUTPUT_FIELD for c in dt_model_registry.list_components()},
-            expand_scope_context="SINR readings show anomalous degradation patterns not explained by any "
-                                  "existing component's predictions — a new capability may be needed",
+            expand_scope_context="Uplink/downlink channel-quality asymmetry and PDCP-layer payload volume "
+                                  "are not explained by any existing component's predictions — a new "
+                                  "capability may be needed",
             rag_knowledge_base=rag_kb,
         )
     except ExpandScopeError as exc:

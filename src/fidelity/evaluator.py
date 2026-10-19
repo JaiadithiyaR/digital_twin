@@ -94,6 +94,15 @@ class FidelityEvaluator:
         component_windows = self._windows.setdefault(component, {})
         return component_windows.setdefault(metric_name, deque(maxlen=self._window_length))
 
+    def history_length(self, component: str) -> int:
+        """How many points this component's rolling window has accumulated so far. All four
+        metrics' deques are always appended together in `evaluate()`, so any one of them (here
+        "rmse") represents the component's history length. Lets a caller (e.g. `src/main.py`)
+        decide whether — and how much — to backfill from already-available real history before
+        `min_history_for_normalization` would otherwise require several more real evaluation
+        cycles spaced out over time."""
+        return len(self._windows.get(component, {}).get("rmse", ()))
+
     def evaluate(self, component: str, y_true, y_pred, update_window: bool = True) -> FidelityResult:
         """Compute one component's deterministic fidelity result for one `(y_true, y_pred)`
         evaluation window. Raises `metrics.FidelityComputationError` for invalid inputs (empty,

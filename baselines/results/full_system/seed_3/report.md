@@ -9,206 +9,204 @@
 
 | component | mean actual | mean predicted | RMSE | MAE | mean F_c |
 |---|---|---|---|---|---|
-| dl_bler | 0.0611 | 0.0614 | 0.0017 | 0.0008 | 0.7505 |
-| dl_prb | 19.2771 | 19.3186 | 1.2997 | 0.7209 | 0.8042 |
-| dl_rlc_delay | 0.2572 | 0.5390 | 0.6579 | 0.2818 | 0.7575 |
-| dl_throughput | 0.2200 | 0.2209 | 0.0149 | 0.0068 | 0.8048 |
-| ul_bler | 0.0075 | 0.0074 | 0.0005 | 0.0002 | 0.7500 |
-| ul_prb | 0.9126 | 0.9108 | 0.0501 | 0.0288 | 0.8679 |
-| ul_throughput | 0.0144 | 0.0145 | 0.0003 | 0.0002 | 0.8690 |
+| dl_bler | 0.0916 | 0.0922 | 0.0020 | 0.0012 | 0.7504 |
+| dl_prb | 28.9014 | 28.9023 | 1.5888 | 1.0200 | 0.7562 |
+| dl_rlc_delay | 0.3858 | 0.7999 | 0.8057 | 0.4140 | 0.7576 |
+| dl_throughput | 0.3299 | 0.3310 | 0.0182 | 0.0101 | 0.7638 |
+| ul_bler | 0.0113 | 0.0111 | 0.0006 | 0.0003 | 0.7500 |
+| ul_prb | 1.2255 | 1.2192 | 0.0611 | 0.0396 | nan |
+| ul_throughput | 0.0190 | 0.0192 | 0.0003 | 0.0002 | nan |
 
 ## Adaptation Events
 
-### Event 1 — dl_bler — 2026-10-08T10:48:47.137639+00:00
+### Event 1 — dl_bler — 2026-10-09T06:00:36.269059+00:00
 
 - **Trigger**: type=external_drift, severity=0.2368105065960997, fidelity_at_trigger=None
-- **Decision**: strategy=recalibrate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: The affected component dl_bler experienced an external drift trigger (severity 0.2368) due to shifts in underlying RF link dynamics, as evidenced by an elevated mean dl_bler of 0.3094 alongside significant PRB allocation (dl_prb = 127.24) across 7 active UEs in the cell. The existing feature set and model pipeline structure remain valid, but the model parameters require updating to reflect recent telemetry trends.
-- **Reasoning**: External drift on dl_bler indicates feature distribution shift rather than missing domain variables or structural invalidity. Recalibrating the model over recent training data will adjust model weights to match current channel conditions without requiring an architectural regeneration or feature scope expansion.
-- **References**: ['digital_twin/internal:docs/oai_twin.md', 'policies/internal:config/settings.yaml']
+- **Decision**: strategy=recalibrate, source=full_system, confidence=0.91, llm_or_fallback=llm
+- **Root cause**: External drift was detected on the dl_bler component with a severity of 0.2368. Telemetry shows a high downlink BLER (0.3094) along with high cell UE contention (7 UEs) and high requested PRB ratio (49.67%). Because dl_bler is an upstream radio-link KPI depending on channel conditions and scheduling parameters whose baseline structural feature relationships remain valid, the fidelity shift is driven by staleness in learned model parameters under the shifted channel environment.
+- **Reasoning**: Since the feature structure for MAC-layer downlink block error rate remains intact and valid, retraining the existing pipeline on recent 24-hour telemetry window data via recalibration will restore prediction fidelity without needing full model architecture regeneration.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=dl_bler-v2
-- **Verification**: None -> None => REJECT (The recalibration attempt for component 'dl_bler' (candidate version dl_bler-v2) was REJECTED by the deterministic verification gate. Although the model artifact was generated, loaded successfully, passed interface consistency, and produced valid finite predictions on the evaluation target set (5,173 rows), the fidelity check failed (fidelity_improved=FAIL). Specifically, the FidelityScore could not be reliably computed for either the baseline or candidate due to insufficient rolling evaluation history. Under the system's fail-safe adaptation policy, unverified fidelity improvements cannot be promoted to production. (1. All prerequisite code and interface structural checks passed: artifact presence, schema identity ('dl_bler' / 'dl_bler_pred'), non-empty predictions, and production baseline evaluability.
-2. The adaptation failed the 'fidelity_improved' rule because the FidelityScore before and/or after adaptation was non-computable due to inadequate rolling history length.
-3. Safe operational standards dictate an automatic REJECT when fidelity delta cannot be deterministically verified against the required threshold (verification_delta=0.01).))
-- version dl_bler-v1 -> dl_bler-v1, duration=12.51s
+- **Verification**: None -> None => REJECT (The recalibration candidate for the dl_bler component was rejected because the deterministic fidelity check failed. Although the candidate model passed all structural, interface, and evaluation checks—generating valid predictions across 5,173 rows—the FidelityScore before and/or after could not be computed due to insufficient rolling history in the evaluation window. Under the system's safety policy, when fidelity improvement cannot be verified quantitatively against the production baseline, a fail-safe REJECT decision is enforced. (1. Artifact presence, interface identity, evaluation execution, and prediction validity checks all passed successfully for dl_bler-v2.
+2. Fidelity score evaluation failed because rolling history was insufficient to compute a valid FidelityScore metric for comparison.
+3. The deterministic verification gate triggered a fail-safe REJECT decision due to unquantifiable fidelity improvement.))
+- version dl_bler-v1 -> dl_bler-v1, duration=13.06s
 
-### Event 2 — dl_throughput — 2026-10-08T10:49:03.449220+00:00
+### Event 2 — dl_throughput — 2026-10-09T06:00:53.638114+00:00
 
 - **Trigger**: type=external_drift, severity=0.5821620360643678, fidelity_at_trigger=None
 - **Decision**: strategy=recalibrate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: An external drift trigger was detected for dl_throughput with severity 0.5822. The recent network state shows high requested PRB ratio (49.77) and elevated cell UE count (7.0), indicating shift in radio resource demand and cell load distribution, which stale model parameters fail to accurately map to downlink throughput.
-- **Reasoning**: The feature schema and dependency graph for dl_throughput remain valid, but parameter recalibration on recent training split data is sufficient to adjust for the environmental shift in PRB demand and UE density without requiring structural regeneration.
-- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
+- **Root cause**: An external drift event with severity 0.5822 was detected for the dl_throughput component. Recent network telemetry indicates moderate radio link degradation (dl_bler: 0.1131) and high cell resource pressure (requested_prb_ratio_lag1: 49.77, ue_count_cell_lag1: 7.0), causing a shift in statistical relationships. The feature space and dependency structure remain valid, but model weights require retraining on recent telemetry.
+- **Reasoning**: External drift without structural failure in feature dependencies indicates stale model parameters. Recalibrating the model over the recent training window is sufficient to regain fidelity before considering architectural changes.
+- **References**: ['digital_twin/internal:docs/oai_twin.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=dl_throughput-v2
-- **Verification**: None -> None => REJECT (The recalibration adaptation for the dl_throughput component was REJECTED by the deterministic verification gate. Although the candidate model artifact was successfully generated, met all interface signature checks, and produced valid finite predictions across all 5,173 test rows, the fidelity improvement check failed. Specifically, the FidelityScore before and/or after calibration could not be computed due to insufficient rolling history, triggering the system's fail-safe policy requiring proven fidelity improvement prior to deployment. (Candidate artifact exists and is structurally valid, passing all schema, interface, and output validity checks. The adaptation failed exclusively on the fidelity improvement criteria because FidelityScore metrics were uncomputable due to inadequate rolling evaluation context, leading to an automatic fail-safe rejection.))
-- version dl_throughput-v1 -> dl_throughput-v1, duration=14.06s
+- **Verification**: None -> None => REJECT (The recalibration candidate for 'dl_throughput' was rejected because the system was unable to compute a valid FidelityScore comparison between the candidate and production models. Although the candidate model artifact was generated, satisfied interface checks, and produced valid finite predictions on the evaluation set (5,173 rows), the evaluation metric requires a minimum rolling history window that was not met by the evaluation sample. In accordance with the system's fail-safe verification policy, any candidate whose fidelity improvement cannot be deterministically proven above the verification_delta threshold (0.01) must be REJECTED. (1. All deterministic prerequisite checks passed (artifact presence, interface consistency, execution completion, and non-NaN outputs).
+2. Fidelity comparison failed because FidelityScore before and/or after was non-computable due to insufficient rolling history in the evaluation slice.
+3. Fail-safe safety policy triggered automatically to reject the candidate due to unverified fidelity performance.))
+- version dl_throughput-v1 -> dl_throughput-v1, duration=15.83s
 
-### Event 3 — dl_rlc_delay — 2026-10-08T10:49:21.542707+00:00
+### Event 3 — dl_rlc_delay — 2026-10-09T06:01:13.345686+00:00
 
 - **Trigger**: type=external_drift, severity=0.479051298140834, fidelity_at_trigger=None
 - **Decision**: strategy=recalibrate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: External drift was detected on component 'dl_rlc_delay' with a severity of 0.4791. Recent telemetry shows elevated queueing/transmission delay (0.9126 ms) amidst high cell PRB demand (49.07 requested PRB ratio, 7 active UEs) and high downlink block-error rate (dl_bler = 0.3175). Since the core feature relationship between dl_throughput, dl_bler, and dl_rlc_delay remains structurally sound according to the dependency graph, the observed performance degradation is due to stale model parameters under changing traffic and channel conditions rather than a structural failure.
-- **Reasoning**: Recalibrating the model on recent training data will adjust parameter weights to reflect current RLC queue dynamics and high BLER conditions without requiring an architectural rebuild or scope expansion.
-- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
+- **Root cause**: An external drift event (severity 0.4791) was detected for the dl_rlc_delay component. Based on recent telemetry, average downlink PRB utilization is high (102.63 PRBs/s) alongside an elevated downlink BLER (0.3175) and cell UE count (7.0), causing shifted distribution dynamics in RLC queueing and transmission delays. Because this is the first adaptation trigger without prior failed attempts and the fundamental input-output relationship remains within the feature space of the model, recalibrating the model parameters on recent data is the most appropriate initial response.
+- **Reasoning**: External drift indicates distribution shift in telemetry features (e.g. high PRB usage and MAC layer block error rate impacting RLC delays). Recalibration updates model weights using recent data to adjust to current network load without requiring architectural redesign or scope expansion.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=dl_rlc_delay-v2
-- **Verification**: None -> None => REJECT (The recalibrated candidate model for 'dl_rlc_delay' (version v2) successfully passed initial verification checks, including candidate artifact verification, interface identity matching, non-null prediction validation, and baseline alignment over 5,173 evaluation rows. However, the adaptation was deterministically rejected during the final performance gate because the FidelityScore before and/or after adaptation could not be calculated (fidelity_before=None, fidelity_after=None) due to insufficient rolling history in the evaluation dataset. Because the framework strictly enforces a fail-safe rule requiring a verified improvement margin exceeding the verification_delta threshold of 0.01 before promoting a model, uncomputable fidelity metrics trigger an automatic REJECT decision. (1. Deterministic gate decision: REJECT due to fidelity_improved=FAIL.
-2. All preliminary structural and interface checks passed (artifact presence, output field alignment, output finiteness, and baseline evaluability).
-3. Both baseline and candidate FidelityScores were returned as None due to insufficient rolling window history in the evaluation evaluation set, preventing margin comparison against the 0.01 verification threshold.))
-- version dl_rlc_delay-v1 -> dl_rlc_delay-v1, duration=14.42s
+- **Verification**: None -> None => REJECT (The recalibrated candidate artifact for 'dl_rlc_delay' (version v2) passed all baseline structural and interface checks (artifact presence, schema consistency, finite evaluation outputs, and production evaluation parity). However, the adaptation was REJECTED because the FidelityScore could not be computed for the evaluation window due to insufficient rolling history for the before or after state. Per the fail-safe policy, an unverified fidelity improvement results in an automatic rejection. (1. All structural, schema, and interface consistency tests PASSED (5,173 valid evaluation rows evaluated against baseline v1).
+2. The 'fidelity_improved' check FAILED because the rolling history window was insufficient to calculate a definitive FidelityScore margin relative to the verification_delta threshold of 0.01.
+3. The system correctly applied a fail-safe REJECT decision to ensure candidate model stability prior to system integration.))
+- version dl_rlc_delay-v1 -> dl_rlc_delay-v1, duration=13.25s
 
-### Event 4 — dl_prb — 2026-10-08T10:49:40.006075+00:00
+### Event 4 — dl_prb — 2026-10-09T06:01:30.521991+00:00
 
 - **Trigger**: type=external_drift, severity=0.7345771514092145, fidelity_at_trigger=None
 - **Decision**: strategy=recalibrate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: The affected component dl_prb exhibits severe external drift (severity 0.7346). Recent network state data indicates high physical resource block usage (dl_prb = 58.9156) driven by high requested PRB ratio (48.9435) and elevated cell UE count (7.0). The model's existing feature structure is still valid for radio resource consumption prediction, but the underlying traffic and scheduling parameters have shifted relative to historical baseline data.
-- **Reasoning**: External drift without fundamental structural changes in the KPI dependency chain or missing features indicates parameter staleness. Recalibrating the model on recent data windows will update the learned parameters to accurately reflect current PRB allocation dynamics.
-- **References**: ['policies/internal:config/settings.yaml', 'digital_twin/internal:docs/oai_twin.md']
+- **Root cause**: The affected component `dl_prb` exhibits external drift with high severity (0.7346). Under recent network conditions, the requested PRB ratio lag (`requested_prb_ratio_lag1` = 48.94) and average cell UE count (`ue_count_cell_lag1` = 7.0) indicate shifts in PRB allocation demands, causing the current production model's learned parameters for `dl_prb` to become stale relative to active radio resource scheduling dynamics. Recalibrating the model over recent data will re-fit the learned weights to the current allocation patterns.
+- **Reasoning**: Because the model pipeline structure for physical resource block (`dl_prb`) allocation remains mathematically appropriate for the O-RAN/OAI RAN layer features, but parameters have drifted due to changed network load and UE scheduling conditions, retraining via `recalibrate` is the minimal and most effective strategy.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=dl_prb-v2
-- **Verification**: None -> None => REJECT (The recalibration candidate for 'dl_prb' (v2) was rejected by the deterministic verification gate because the fidelity score improvement check failed (fidelity_improved=FAIL). Specifically, the FidelityScore before and/or after evaluation was not computable due to insufficient rolling history within the held-out evaluation set (5,173 rows). Per system safety policy, when fidelity improvement cannot be quantitatively verified, the system enforces a fail-safe REJECT decision. (1. Artifact & Interface Checks: Candidate artifact dl_prb-v2.joblib was successfully generated and interface identity consistency checks passed (component_name='dl_prb', output_field='dl_prb_pred').
-2. Execution & Data Validity: Both evaluation target and candidate prediction sets contained 5,173 finite rows, successfully passing invalid output checks.
-3. Gate Failure: The fidelity_improved check failed because rolling history was insufficient to calculate baseline or candidate FidelityScore metrics, triggering the fail-safe rejection rule (verification_delta=0.01 margin required).))
-- version dl_prb-v1 -> dl_prb-v1, duration=12.92s
+- **Verification**: None -> None => REJECT (The recalibration candidate `dl_prb-v2` for component `dl_prb` was rejected by the deterministic verification gate. Although the artifact was successfully generated, passed schema and non-null checks, and ran evaluation over 5,173 rows, the fidelity improvement check failed (`fidelity_improved=FAIL`). Specifically, the FidelityScore before and/or after evaluation could not be reliably computed due to insufficient rolling history in the test evaluation window. Under the system's fail-safe adaptation policy, unquantifiable fidelity changes mandate an automated rejection to prevent unverified model promotion into production. (1. Artifact Verification: `candidate_artifact_present`, `interface_identity_consistent`, `evaluation_ran`, and `no_invalid_output` all PASSED for 5,173 evaluation rows.
+2. Verification Failure: `fidelity_improved` failed because rolling history metrics required for calculating the FidelityScore were missing or incomplete for one or both model versions.
+3. Decision Outcome: REJECT enforced by the deterministic gate due to strict fail-safe rules requiring quantifiable metric improvement exceeding `verification_delta=0.01`.))
+- version dl_prb-v1 -> dl_prb-v1, duration=14.58s
 
-### Event 5 — dl_prb — 2026-10-08T10:49:56.529577+00:00
+### Event 5 — dl_prb — 2026-10-09T06:01:49.142919+00:00
 
 - **Trigger**: type=external_drift, severity=0.5167401826213637, fidelity_at_trigger=None
 - **Decision**: strategy=regenerate, source=full_system, confidence=0.88, llm_or_fallback=llm
-- **Root cause**: The affected component `dl_prb` experienced an external drift trigger with a severity of 0.5167. A prior `recalibrate` strategy was executed and REJECTed by the deterministic verification gate. Furthermore, recent network telemetry shows a high requested PRB ratio (`requested_prb_ratio_lag1` = 48.9435) and active UEs (`ue_count_cell_lag1` = 7.0), while actual `dl_prb` usage remains low (0.0290). Because simple retraining (recalibration) failed to fix the performance gap, the model architecture/pipeline is no longer able to capture the relationship under this load regime, requiring component regeneration.
-- **Reasoning**: Recalibration was previously attempted and rejected by the verification gate. According to adaptation policy, when parameter retraining (recalibrate) fails to improve model fidelity following drift, regenerating the component model pipeline from scratch is necessary to learn the updated structural relationships.
-- **References**: ['policies/internal:config/settings.yaml', 'digital_twin/internal:docs/oai_twin.md']
+- **Root cause**: The previous adaptation attempt using recalibration for the 'dl_prb' component failed (verification_result=REJECT). Additionally, telemetry reveals high resource contention with requested_prb_ratio_lag1 at ~48.94 and 7 active UEs in the cell, while current PRB allocation (dl_prb=0.029) is extremely low. Simple model recalibration cannot capture these structural non-linear traffic dynamics, necessitating an architectural rebuild/regeneration.
+- **Reasoning**: Recalibration was previously attempted and rejected by the deterministic verification gate. Per system adaptation policies, when parameter tuning fails to resolve external drift under significant resource load shifts, regenerating the model architecture is required to learn new functional mappings.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=dl_prb-v3
-- **Verification**: None -> None => REJECT (The regeneration attempt for component 'dl_prb' (candidate model dl_prb-v3.joblib) was REJECTED by the deterministic verification gate. Although the candidate model artifact was generated successfully, maintained interface identity, produced valid finite predictions, and completed evaluation, the fidelity check failed (fidelity_improved=FAIL). Specifically, the FidelityScore before and/or after evaluation could not be computed due to insufficient rolling history on the evaluated test set. Following the system's fail-safe adaptation policy, any candidate whose fidelity improvement cannot be explicitly verified must be rejected. (1. Artifact & Interface Check: Candidate artifact dl_prb-v3.joblib was successfully built and passed interface consistency checks (COMPONENT_NAME='dl_prb', output_field='dl_prb_pred').
-2. Model Evaluation: 5,173 test rows were processed without invalid or non-finite outputs.
-3. Fail-Safe Rejection Gate: FidelityScore computation returned non-computable (None) due to inadequate rolling history length, triggering a mandatory safety rejection under the deterministic verification delta policy (verification_delta=0.01).))
-- version dl_prb-v1 -> dl_prb-v1, duration=31.88s
+- **Verification**: None -> None => REJECT (The regeneration attempt for the dl_prb component was rejected by the deterministic verification gate. Although the candidate model (dl_prb-v3.joblib) successfully passed artifact presence, interface consistency, execution evaluation, and valid finite-output checks, the overall fidelity score could not be computed due to insufficient rolling history in the evaluation dataset. Per the system's deterministic safety policy, when baseline or candidate fidelity scores are non-computable, the system cannot verify a strictly positive improvement exceeding the verification_delta threshold (0.01). Consequently, the decision defaults to a fail-safe REJECT, keeping production version dl_prb-v1 active. (Candidate code execution, interface validation, and raw model evaluation passed with 5,173 valid finite prediction rows. However, fidelity_improved failed because the FidelityScore before and/or after evaluation returned None due to insufficient rolling history windows, triggering an automatic fail-safe rejection.))
+- version dl_prb-v1 -> dl_prb-v1, duration=28.79s
 
-### Event 6 — dl_rlc_delay — 2026-10-08T10:50:32.591474+00:00
+### Event 6 — dl_rlc_delay — 2026-10-09T06:02:21.757809+00:00
 
 - **Trigger**: type=external_drift, severity=0.5867985714381407, fidelity_at_trigger=None
 - **Decision**: strategy=regenerate, source=full_system, confidence=0.91, llm_or_fallback=llm
-- **Root cause**: An external drift event (severity 0.5868) affected 'dl_rlc_delay', likely driven by high cell load (requested_prb_ratio_lag1 = 48.87, ue_count = 7) and non-linear RLC SDU buffer queueing dynamics. A previous recalibration attempt was rejected during verification, indicating that simple parameter retraining on the existing model pipeline is insufficient to capture the changed RAN queueing behaviour.
-- **Reasoning**: Because the prior recalibration attempt failed validation, retraining the current weights cannot resolve the structural fidelity drift. Regenerating the model architecture for dl_rlc_delay is required to learn updated functional representations of RAN delay under high resource utilization.
+- **Root cause**: The affected component `dl_rlc_delay` suffered an external_drift event with severity 0.5868. A previous recalibration attempt was rejected by the verification gate (`verification_result=REJECT`), indicating that retraining learned parameters on recent data is insufficient to capture the altered underlying queueing dynamics. Furthermore, telemetry shows high requested PRB ratio (48.87) with 7 active UEs despite low throughput, suggesting non-linear congestion effects that require regenerating the model pipeline/architecture rather than simple recalibration.
+- **Reasoning**: Recalibration has already failed and been rejected by the verification gate. According to adaptation policy, when parameter tuning (recalibrate) fails to resolve drift, regenerating the model architecture/pipeline is required to handle structural shifts in feature interaction.
 - **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
 - **Candidate**: version=dl_rlc_delay-v3
-- **Verification**: None -> None => REJECT (The regeneration candidate for the dl_rlc_delay component was rejected during deterministic verification due to an uncomputable fidelity score. While all preliminary structural checks passed—including artifact existence, interface consistency, finite output checks, and baseline evaluation—the system failed the fidelity improvement check (fidelity_improved=FAIL). Specifically, the fidelity score before and/or after adaptation could not be calculated due to insufficient rolling history across the evaluation period. Per the system's fail-safe adaptation policy, any candidate whose fidelity improvement cannot be deterministically verified must be rejected. (1. Preliminary deterministic validation passed: candidate model artifact dl_rlc_delay-v3.joblib existed, interface naming matched, predictions were non-null/finite across 5,173 evaluation rows, and production baseline dl_rlc_delay-v1 was evaluated on the same set.
-2. Fidelity check failed: FidelityScore before/after could not be computed due to insufficient rolling window history in the evaluation dataset.
-3. Fail-safe decision: Without verifiable fidelity improvement exceeding the required verification_delta (0.01), the candidate was deterministically rejected to ensure operational safety.))
-- version dl_rlc_delay-v1 -> dl_rlc_delay-v1, duration=58.64s
+- **Verification**: None -> None => REJECT (The regeneration adaptation candidate dl_rlc_delay-v3 was REJECTED because the fidelity score improvement could not be evaluated. Specifically, there was insufficient rolling history during the evaluation window to compute a valid FidelityScore for either the baseline (dl_rlc_delay-v1) or the candidate model. Per system adaptation safety policy, if the fidelity improvement cannot be verified quantitatively against the production threshold (verification_delta=0.01), the system fails safe and rejects the candidate. (1. All deterministic interface and execution checks passed: candidate artifact exists, interface identity matched 'dl_rlc_delay', model output had 5,173 valid finite prediction rows, and baseline model was evaluable.
+2. The decision failed on the fidelity_improved check due to uncomputable FidelityScore metrics from insufficient rolling history.
+3. The component 'dl_rlc_delay' is downstream of 'dl_throughput' and 'dl_bler' in the Digital Twin dependency graph and is scheduled last.))
+- version dl_rlc_delay-v1 -> dl_rlc_delay-v1, duration=34.62s
 
-### Event 7 — dl_bler — 2026-10-08T10:51:35.674124+00:00
+### Event 7 — dl_bler — 2026-10-09T06:03:00.094459+00:00
 
 - **Trigger**: type=external_drift, severity=0.28420116374879145, fidelity_at_trigger=None
 - **Decision**: strategy=regenerate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: The affected component dl_bler experienced an external drift trigger (severity 0.2842). A previous recalibration attempt was REJECTED, indicating that retraining learned parameters on existing model architecture is insufficient to capture the underlying shift in radio link quality characteristics or interference dynamics. Regenerating the model architecture from scratch is necessary to adapt to the changed behavior.
-- **Reasoning**: Recalibration previously failed and was rejected by the verification gate for dl_bler. Per adaptation escalation policies, when parameter retrain (recalibrate) fails to resolve drift, regenerating the model architecture is the appropriate next level strategy to handle persistent feature pattern shifts.
-- **References**: ['digital_twin/internal:CLAUDE.md']
+- **Root cause**: The previous recalibration attempt for dl_bler failed (REJECTed by the verification gate), indicating that simple parameter retraining on the existing model pipeline is insufficient to handle the detected external drift under current network dynamics (e.g., active cell UE load of 7 UEs and high requested PRB ratio). Since recalibrating failed and scope expansion is not warranted for a core base KPI, the model architecture itself must be regenerated to capture the updated radio link error behavior.
+- **Reasoning**: A prior recalibration action was rejected, proving that recalibrating learned parameters on the same architecture cannot resolve the drift. Per standard self-adaptation policy, when retraining fails, rebuilding the component model structure via regeneration is the appropriate step.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
 - **Candidate**: version=dl_bler-v3
-- **Verification**: None -> None => REJECT (The deterministic verification gate rejected the regenerated candidate model (dl_bler-v3) because fidelity scores could not be successfully calculated. Specifically, the system encountered insufficient rolling history when attempting to compute FidelityScore for the baseline or candidate predictions across the 5,173 evaluation rows. In accordance with the fail-safe adaptation policy (fidelity_improved=FAIL), any candidate whose fidelity improvement cannot be definitively verified against the production model (dl_bler-v1) is safely rejected to ensure operational stability. (1. All initial deterministic validation checks passed, including candidate artifact non-emptiness, interface identity consistency ('dl_bler' / 'dl_bler_pred'), prediction finiteness, and dataset length alignment (5,173 rows).
-2. The fidelity check failed (fidelity_improved=FAIL) due to uncomputable FidelityScore values resulting from insufficient rolling history context during evaluation.
-3. Following safety protocols, unverified fidelity improvements trigger an automatic deterministic REJECT to prevent potentially unstable models from reaching production.))
-- version dl_bler-v1 -> dl_bler-v1, duration=39.30s
+- **Verification**: None -> None => REJECT (The regeneration candidate for component 'dl_bler' was rejected by the deterministic verification gate because the FidelityScore could not be computed for evaluation. Under the system's fail-safe adaptation rules, if either the baseline or candidate fidelity score cannot be evaluated—in this case due to insufficient rolling history in the evaluation window—the system cannot verify any improvement exceeding the required verification_delta threshold of 0.01. Consequently, the candidate is safely rejected and production remains unchanged. (1. Rejection triggered by fidelity_improved check failure: FidelityScores (before/after) are uncomputable (None).
+2. Candidate artifact exists and passed initial interface and valid prediction sanity checks (5,173 valid finite prediction rows).
+3. Rejection is governed by fail-safe verification policy requiring explicit proof of fidelity improvement exceeding the 0.01 margin.))
+- version dl_bler-v1 -> dl_bler-v1, duration=38.20s
 
-### Event 8 — ul_bler — 2026-10-08T10:52:19.037884+00:00
+### Event 8 — ul_bler — 2026-10-09T06:03:42.240332+00:00
 
 - **Trigger**: type=external_drift, severity=0.6962159966701554, fidelity_at_trigger=None
-- **Decision**: strategy=recalibrate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: External drift was detected on uplink block error rate (ul_bler) with a severity of 0.6962. Telemetry indicates significant uplink resource requests (requested_prb_ratio_lag1 ~49.02, ue_count_cell_lag1 = 7) relative to low actual throughput. This mismatch in radio link conditions and uplink allocation trends has caused the existing ul_bler statistical model to experience distributional drift, making parameter recalibration over recent data necessary.
-- **Reasoning**: External drift indicates that while the underlying dependency graph and feature set for uplink BLER remain valid, the learned parameters no longer match recent radio channel dynamics. Recalibrating (retraining on the 24-hour window) is the appropriate low-overhead intervention to restore model accuracy.
-- **References**: ['policies/internal:config/settings.yaml', 'digital_twin/internal:docs/oai_twin.md']
+- **Decision**: strategy=recalibrate, source=full_system, confidence=0.88, llm_or_fallback=llm
+- **Root cause**: External drift detected in the uplink block error rate (ul_bler) with severity 0.6962. Telemetry indicates active cell load with 7 UEs and high requested PRB ratio (49.02%), leading to altered uplink interference and radio link propagation dynamics. The model structure for ul_bler remains valid, but its learned parameters are stale relative to current channel conditions.
+- **Reasoning**: External drift in MAC-layer UL BLER is best addressed by recalibrating (retraining) the existing component pipeline on recent operational data to capture shifted interference distributions without changing model architecture.
+- **References**: ['digital_twin/internal:docs/oai_twin.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=ul_bler-v2
-- **Verification**: None -> None => REJECT (The recalibration attempt for the 'ul_bler' component was rejected by the deterministic verification gate. Although the candidate artifact was generated successfully, maintained interface consistency, and produced valid predictions across all 5,173 test rows, the fidelity evaluation check failed (fidelity_improved=FAIL). Specifically, the FidelityScore before and/or after evaluation could not be computed due to insufficient rolling history in the evaluation dataset. Per system safety rules, when fidelity improvement cannot be deterministically verified, the system defaults to a fail-safe REJECT decision. (1. Candidate model artifact 'ul_bler-v2.joblib' exists, is non-empty, and passed interface consistency checks.
-2. Evaluation ran across 5,173 rows with zero NaN/infinite predictions from the candidate model.
-3. Recalibration failed verification because FidelityScore was uncomputable (insufficient rolling history for metric calculation), triggering a fail-safe deterministic rejection.))
-- version ul_bler-v1 -> ul_bler-v1, duration=12.76s
+- **Verification**: None -> None => REJECT (The candidate recalibration artifact for component 'ul_bler' (v2) passed all baseline integrity, schema consistency, and output validation checks. However, the candidate was rejected under the fail-safe acceptance policy because the FidelityScore before and/or after evaluation could not be computed due to insufficient rolling history in the evaluation dataset. Without a computable fidelity score margin exceeding the required verification delta (0.01), improvement cannot be deterministically verified, triggering an automatic safety rejection. (1. All initial deterministic validation checks passed (artifact presence, interface identity, row alignment at 5,173 samples, finite predictions, baseline evaluability).
+2. Evaluation failed the 'fidelity_improved' gate because rolling history was insufficient to calculate the FidelityScore for comparison.
+3. Safe operation was enforced via deterministic fail-safe REJECT, keeping production version 'ul_bler-v1' active.))
+- version ul_bler-v1 -> ul_bler-v1, duration=13.99s
 
-### Event 9 — ul_bler — 2026-10-08T10:52:38.408952+00:00
+### Event 9 — ul_bler — 2026-10-09T06:04:02.396032+00:00
 
 - **Trigger**: type=external_drift, severity=0.9734602747664127, fidelity_at_trigger=None
-- **Decision**: strategy=regenerate, source=full_system, confidence=0.92, llm_or_fallback=llm
-- **Root cause**: None
-- **Reasoning**: None
-- **References**: None
-- **Candidate**: version=None
-- **Verification**: None -> None => None (None)
-- version ul_bler-v1 -> None, duration=128.10s
-- **Error**: LLM code generation failed for 'ul_bler': transient transport error calling Google AI: [Errno -3] Temporary failure in name resolution
+- **Decision**: strategy=regenerate, source=full_system, confidence=0.91, llm_or_fallback=llm
+- **Root cause**: The ul_bler component suffered severe external drift (severity 0.9735), and a previous recalibration attempt was REJECTED by the verification gate. A simple model retraining (recalibrate) was insufficient to handle the structural distribution shift in UL channel dynamics or telemetry patterns, requiring model architecture/pipeline regeneration.
+- **Reasoning**: Given that recalibration has already failed to pass the deterministic verification gate for ul_bler under high external drift severity, repeating recalibration is unlikely to succeed. Regenerating the model component allows building a fresh model architecture better equipped to capture the shifted uplink block error rate distribution.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
+- **Candidate**: version=ul_bler-v3
+- **Verification**: 0.7501567203221264 -> 0.7516539696943318 => REJECT (The candidate model for component 'ul_bler' generated via regeneration was rejected because it failed the deterministic fidelity improvement threshold. Although the candidate achieved a slight increase in FidelityScore from 0.7502 to 0.7517 (+0.0015), it did not meet the required verification_delta margin of 0.01 above the production baseline (required score >= 0.7602). All structural, interface, and execution safety checks passed successfully, but the marginal accuracy gain was insufficient to justify replacing the existing production model. (Fidelity increased slightly (+0.0015 from 0.7502 to 0.7517) but failed the required verification_delta threshold of 0.01. All sanity and structural checks passed (candidate_artifact_present, interface_identity_consistent, evaluation_ran, no_invalid_output, production_baseline_evaluable).))
+- version ul_bler-v1 -> ul_bler-v1, duration=44.81s
 
-### Event 10 — dl_throughput — 2026-10-08T10:54:50.449078+00:00
+### Event 10 — dl_throughput — 2026-10-09T06:04:51.027245+00:00
 
 - **Trigger**: type=external_drift, severity=0.3139860020343368, fidelity_at_trigger=0.7638167280546575
-- **Decision**: strategy=regenerate, source=full_system, confidence=0.91, llm_or_fallback=llm
-- **Root cause**: None
-- **Reasoning**: None
-- **References**: None
-- **Candidate**: version=None
-- **Verification**: None -> None => None (None)
-- version dl_throughput-v1 -> None, duration=116.35s
-- **Error**: regeneration for 'dl_throughput' produced no accepted candidate after 2 attempt(s): stage=conformance error=ValueError: candidate.py defines no attribute named 'DlThroughputModel'
+- **Decision**: strategy=regenerate, source=full_system, confidence=0.85, llm_or_fallback=llm
+- **Root cause**: The component 'dl_throughput' suffered from external_drift resulting in degraded performance. A previous attempt to 'recalibrate' was REJECTED by the verification gate, indicating that simple retraining on recent data is insufficient to capture changed non-linear relations or feature shifts. Regenerating the model pipeline from scratch is required to adapt to the modified network conditions under high PRB demand and UE density.
+- **Reasoning**: Previous recalibration attempt failed (REJECTED), demonstrating that retraining learned parameters on existing model architecture does not restore required fidelity delta. Regeneration is the mandated strategy when recalibration fails.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'policies/internal:config/settings.yaml']
+- **Candidate**: version=dl_throughput-v3
+- **Verification**: 0.7716901728630785 -> 0.9065370845638588 => ACCEPT (The candidate model generation for component 'dl_throughput' was successfully accepted by the deterministic verification gate. The model achieved a FidelityScore of 0.9065, significantly exceeding the previous baseline fidelity of 0.7717 by 0.1348, which easily surpasses the required verification_delta margin of 0.01. Furthermore, all deterministic checks passed without issue: candidate artifacts were verified, interface standards were met, output predictions were finite across all 5173 test rows, and the model architecture aligns with downstream component requirements. (1. FidelityScore improved from 0.7717 to 0.9065 (a net increase of +0.1348, exceeding the minimum threshold delta of 0.01).
+2. All 6 deterministic gate checks passed (candidate artifact presence, interface consistency, non-empty evaluation datasets, prediction finiteness, production baseline evaluability, and fidelity gain).
+3. Re-generation of the 'dl_throughput' model successfully captured primary source relationships while maintaining system-wide target schema consistency.))
+- version dl_throughput-v1 -> dl_throughput-v3, duration=45.84s
 
-### Event 11 — ul_prb — 2026-10-08T10:57:14.007712+00:00
+### Event 11 — ul_prb — 2026-10-09T06:05:43.362328+00:00
 
-- **Trigger**: type=external_drift, severity=0.47130966518183137, fidelity_at_trigger=0.9993734489428555
-- **Decision**: strategy=recalibrate, source=full_system, confidence=0.92, llm_or_fallback=llm
-- **Root cause**: The affected component ul_prb experienced an external drift trigger with a severity of 0.4713, despite currently maintaining a high per-component fidelity score of 0.9994. Telemetry indicates shift in uplink radio resource usage (ul_prb average at 0.3165 with requested_prb_ratio_lag1 at 48.9435 and ue_count_cell_lag1 at 7.0). The underlying feature relationships and model architecture for uplink PRB prediction remain sound, but the model parameters need updating to adapt to the recent shift in network traffic and resource request patterns.
-- **Reasoning**: Because the model structure for ul_prb is intact and component fidelity remains high, a recalibration (retraining on the recent 24-hour window) is sufficient to adjust learned parameters to the detected external distribution shift without requiring architectural regeneration or feature scope expansion.
+- **Trigger**: type=external_drift, severity=0.47130966518183137, fidelity_at_trigger=None
+- **Decision**: strategy=recalibrate, source=full_system, confidence=0.88, llm_or_fallback=llm
+- **Root cause**: The affected component ul_prb experienced external drift (severity 0.4713) under shifted uplink scheduling conditions, as indicated by a high requested PRB ratio (requested_prb_ratio_lag1 = 48.9435) and 7 active UEs per cell. The underlying model structure for uplink PRB allocation remains valid, but the learned feature weights are stale due to changed traffic demand patterns.
+- **Reasoning**: External drift without architectural failure or unrepresented state variables indicates parameter staleness. Recalibrating the model over recent 24-hour training windows will align weights with current uplink PRB demand dynamics.
 - **References**: ['digital_twin/internal:docs/oai_twin.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=ul_prb-v2
-- **Verification**: 0.9919704478461338 -> 0.9697553280662201 => REJECT (The candidate recalibrated model for 'ul_prb' was REJECTED because it failed the required fidelity improvement threshold. The production baseline achieved a FidelityScore of 0.9920, whereas the candidate recalibrated model achieved a lower FidelityScore of 0.9698. According to the adaptation policy, a candidate must outperform the production model by at least the verification delta (0.01) to be accepted (requiring a score > 1.0020). Since the candidate's fidelity actually regressed by ~0.0222, the deterministic gate failed the fidelity_improved check and kept the production version in service. (1. Production model 'ul_prb-v1' fidelity score: 0.9920.
-2. Candidate model 'ul_prb-v2' fidelity score: 0.9698.
-3. Required acceptance threshold: 1.0020 (fidelity_before + verification_delta 0.01).
-4. All structural, schema, and safety verification checks passed (candidate_artifact_present, interface_identity_consistent, evaluation_ran, no_invalid_output, production_baseline_evaluable).
-5. The rejection was strictly driven by the deterministic fidelity_improved check failing due to performance regression.))
-- version ul_prb-v1 -> ul_prb-v1, duration=14.23s
+- **Verification**: 0.9919704478461338 -> 0.9697553280662201 => REJECT (The candidate recalibrated model for 'ul_prb' (ul_prb-v2.joblib) was REJECTED because it failed the deterministic fidelity improvement check. While all structural, isolation, and interface checks passed, the candidate achieved a FidelityScore of 0.9698, which is lower than the production baseline score of 0.9920. Under the system's adaptation policy (verification_delta=0.01), a candidate must outperform the production baseline by at least 0.01 to be accepted. (1. Baseline Fidelity: 0.9920 (ul_prb-v1).
+2. Candidate Fidelity: 0.9698 (ul_prb-v2).
+3. Required Threshold: > 1.0020 (Baseline + verification_delta 0.01).
+4. Structural Verification: All prerequisite checks (artifact presence, interface identity consistency, evaluation execution, non-NaN/finite predictions) PASSED.
+5. Outcome: REJECTED due to fidelity degradation (-0.0222 delta vs baseline).))
+- version ul_prb-v1 -> ul_prb-v1, duration=15.11s
 
-### Event 12 — ul_prb — 2026-10-08T10:57:32.371802+00:00
+### Event 12 — ul_prb — 2026-10-09T06:06:08.357003+00:00
 
-- **Trigger**: type=external_drift, severity=0.030346007662471197, fidelity_at_trigger=0.999722506119868
-- **Decision**: strategy=regenerate, source=full_system, confidence=0.88, llm_or_fallback=llm
-- **Root cause**: The affected component ul_prb experienced external drift and a previous recalibration attempt was rejected by the verification gate because fidelity decreased (from 0.992 to 0.970). Given high requested_prb_ratio_lag1 (48.94) and cell UE count (7.0), the parameter-only recalibration is insufficient to capture the non-linear uplink resource demand shifts, requiring model regeneration.
-- **Reasoning**: Recalibration previously failed to beat the verification threshold and lowered fidelity score. Under the system's policy, when recalibration fails to capture behavioral shift under external drift, regenerating the model architecture/pipeline is the appropriate strategy.
-- **References**: ['digital_twin/internal:docs/oai_twin.md', 'digital_twin/internal:CLAUDE.md']
+- **Trigger**: type=external_drift, severity=0.030346007662471197, fidelity_at_trigger=None
+- **Decision**: strategy=regenerate, source=full_system, confidence=0.92, llm_or_fallback=llm
+- **Root cause**: The `ul_prb` component experienced an external drift trigger with a severity of 0.0303. A prior recalibration attempt was rejected by the verification gate because fidelity decreased from 0.9920 to 0.9698. Analysis of recent telemetry reveals high requested PRB ratio (48.94) and elevated uplink PRB consumption (0.3225) across 7 active UEs. Retraining on recent data failed to resolve the fidelity loss, indicating that simple recalibration of existing parameters is insufficient to capture the underlying shift in uplink resource scheduling dynamics.
+- **Reasoning**: Recalibration was previously attempted and explicitly rejected due to decreased fidelity score. Per the digital twin adaptation policy, when parameter recalibration fails to improve model performance during persistent drift, the architecture/pipeline must be regenerated to capture non-linear relationships in uplink PRB allocation under high contention.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
 - **Candidate**: version=ul_prb-v3
-- **Verification**: 0.9919704478461338 -> 0.8672875908375304 => REJECT (The regenerated candidate for 'ul_prb' was rejected because it failed the performance verification step. Although all functional, artifact, and interface checks passed, the candidate achieved a FidelityScore of 0.8673, which represents a noticeable performance regression compared to the production model's baseline FidelityScore of 0.9920. To be accepted, the candidate needed to exceed 1.0020 (baseline + verification_delta of 0.01). (1. Artifact, interface identity, and prediction validity checks all passed successfully with 5,173 evaluation rows processed.
-2. Fidelity dropped significantly from 0.9920 (production) to 0.8673 (candidate).
-3. The candidate failed the mandatory deterministic threshold check (fidelity_improved=FAIL), resulting in an automated REJECT decision.))
-- version ul_prb-v1 -> ul_prb-v1, duration=38.08s
+- **Verification**: 0.9919704478461338 -> 0.8805385859406911 => REJECT (The regenerated candidate for 'ul_prb' (v3) was REJECTED because it failed the deterministic fidelity improvement gate. Although the candidate passed all prerequisite structural, interface, and execution sanity checks (artifact existence, interface identity consistency, evaluation execution, and finite prediction checks), its evaluation FidelityScore dropped to 0.8805 compared to the baseline production model's score of 0.9920. To meet the acceptance criteria, the candidate was required to achieve a FidelityScore strictly greater than 1.0020 (baseline + verification_delta of 0.01). (1. Quantitative Degradation: Candidate FidelityScore (0.8805) represented a significant performance drop of ~0.1114 compared to the existing production model (0.9920).
+2. Failed Gate: Verification check 'fidelity_improved' evaluated to FAIL as FidelityScore_new (0.8805) <= FidelityScore_old (0.9920) + verification_delta (0.01).
+3. Structural Integrity Passed: All pre-evaluation sanity checks (candidate_artifact_present, interface_identity_consistent, evaluation_ran, no_invalid_output, production_baseline_evaluable) PASSED across 5,173 evaluated target rows.))
+- version ul_prb-v1 -> ul_prb-v1, duration=34.60s
 
-### Event 13 — dl_prb — 2026-10-08T10:58:14.581332+00:00
+### Event 13 — dl_prb — 2026-10-09T06:06:46.907706+00:00
 
-- **Trigger**: type=external_drift, severity=0.09085271350425783, fidelity_at_trigger=0.7566900173887696
-- **Decision**: strategy=recalibrate, source=full_system, confidence=0.85, llm_or_fallback=llm
-- **Root cause**: The dl_prb component experienced external drift with a severity of 0.0909. A previous attempt to regenerate the model architecture was rejected by the verification gate. Given that the underlying feature relationships remain intact but recent network telemetry exhibits shifted operational dynamics (e.g., requested PRB ratio around 48.87 with 7 connected UEs), recalibrating the model parameters on recent data is appropriate.
-- **Reasoning**: Regeneration was previously attempted and REJECTed by the deterministic gate. Attempting another structural regeneration without updated candidate code patterns is unlikely to pass verification. Recalibrating learned parameters on recent training/tuning distributions provides a lower-risk adaptation to absorb the observed external drift for dl_prb.
-- **References**: ['digital_twin/internal:CLAUDE.md', 'policies/internal:config/settings.yaml']
-- **Candidate**: version=dl_prb-v4
-- **Verification**: 0.7499975343251859 -> 0.9243369427505485 => ACCEPT (The recalibration adaptation for the dl_prb component was ACCEPTED after successfully passing all deterministic verification gates. Re-training the model on the updated 24-hour training window improved the baseline FidelityScore from 0.7500 to 0.9243 on the evaluation dataset. This gain of 0.1743 significantly exceeds the required verification_delta margin of 0.01. Furthermore, all structural checks passed: the model artifact was properly serialized at /home/harie06/dt_adaptation/baselines/results/full_system/seed_3/models/dl_prb/dl_prb-v4.joblib, interface signatures remained consistent, predictions were finite across all 5,173 test rows, and baseline comparisons were successfully computed. (1. FidelityScore increased from 0.7500 to 0.9243 (+0.1743), easily passing the minimum required threshold gain of 0.01.
-2. All deterministic verification checks passed (candidate_artifact_present, interface_identity_consistent, evaluation_ran, no_invalid_output, production_baseline_evaluable, fidelity_improved).
-3. Re-training over the updated data window successfully mitigated model drift in predicting downlink PRB utilization without schema or interface violations.))
-- version dl_prb-v1 -> dl_prb-v4, duration=14.24s
-
-### Event 14 — dl_rlc_delay — 2026-10-08T10:58:32.839061+00:00
-
-- **Trigger**: type=external_drift, severity=0.9314638547413545, fidelity_at_trigger=0.7577836840502997
-- **Decision**: strategy=expand_scope, source=full_system, confidence=0.88, llm_or_fallback=llm
+- **Trigger**: type=external_drift, severity=0.09085271350425783, fidelity_at_trigger=None
+- **Decision**: strategy=expand_scope, source=full_system, confidence=0.85, llm_or_fallback=llm
 - **Root cause**: None
 - **Reasoning**: None
 - **References**: None
 - **Candidate**: version=None
 - **Verification**: None -> None => None (None)
-- version dl_rlc_delay-v1 -> None, duration=0.00s
-- **Error**: ExpandScopeAgent.expand_scope() missing 1 required positional argument: 'example_component_factory'
+- version dl_prb-v1 -> None, duration=33.65s
+- **Error**: no valid component design produced after 2 attempt(s): required_features ['dl_bler_pred'] are not available D1 columns
 
-### Event 15 — ul_prb — 2026-10-08T10:58:37.465204+00:00
+### Event 14 — dl_rlc_delay — 2026-10-09T06:07:24.369450+00:00
 
-- **Trigger**: type=external_drift, severity=0.29816309065742475, fidelity_at_trigger=0.9939767345342616
-- **Decision**: strategy=recalibrate, source=full_system, confidence=0.95, llm_or_fallback=llm
-- **Root cause**: The affected component ul_prb experienced external drift (severity 0.2982), but its base fidelity remains very high (0.9940). A previous attempt to 'regenerate' the architecture was explicitly REJECTED by the verification gate because candidate fidelity dropped from 0.992 to 0.867. Given high cell load (requested_prb_ratio_lag1 = 49.019, ue_count_cell_lag1 = 7.0) causing parameter drift, retraining the existing architecture on recent telemetry data (recalibrate) is required rather than restructuring the model.
-- **Reasoning**: Because regenerate was rejected and degraded fidelity significantly while ul_prb's current baseline fidelity is still high (0.9940), the existing model pipeline structure remains sound. Recalibrating learned parameters on recent window data will address the external drift without architectural regression.
-- **References**: ['policies/internal:config/settings.yaml', 'digital_twin/internal:docs/oai_twin.md']
+- **Trigger**: type=external_drift, severity=0.9314638547413545, fidelity_at_trigger=None
+- **Decision**: strategy=expand_scope, source=full_system, confidence=0.91, llm_or_fallback=llm
+- **Root cause**: An external drift event with high severity (0.9315) occurred on dl_rlc_delay. A prior adaptation attempt using 'regenerate' was REJECTed by the verification gate. Telemetry reveals high requested_prb_ratio_lag1 (48.868) and multiple active UEs (ue_count_cell_lag1=7.0), indicating severe RAN congestion/buffer bloat impacting RLC SDU delay. Because structural model regeneration failed to pass verification, the current feature schema lacks representation of cell-level scheduling pressure and buffer dynamics, requiring scope expansion to incorporate new features.
+- **Reasoning**: Regeneration was previously attempted and rejected by the verification gate, ruling it out under typical retry dynamics when underlying feature representations are insufficient. Recalibration only retrains on existing stale parameters. The presence of high PRB request ratios and cell UE count shows that queueing delay in the RLC layer is driven by queueing/scheduling congestion metrics not fully captured by existing inputs, making 'expand_scope' the appropriate strategy.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'digital_twin/internal:docs/oai_twin.md']
+- **Candidate**: version=channel_quality-v1
+- **Verification**: None -> None => REJECT (The candidate component 'channel_quality' was deterministically REJECTED due to multiple critical validation failures. First, it failed interface identity consistency because the model factory expected COMPONENT_NAME='dl_rlc_delay' with OUTPUT_FIELD='dl_rlc_delay_pred', whereas the candidate declared component='channel_quality' and output_field='wb_cqi_avg_lag1_pred'. Second, fidelity improvement could not be demonstrated: no baseline existed and the candidate's FidelityScore was non-computable due to insufficient rolling evaluation history, preventing valid score comparison under the required verification delta threshold. (1. Interface Identity Mismatch: Candidate output field ('wb_cqi_avg_lag1_pred') and name ('channel_quality') collided with the target factory contract ('dl_rlc_delay_pred' / 'dl_rlc_delay').
+2. Fidelity Evaluation Failure: FidelityScore was non-computable owing to insufficient rolling window data, failing the fidelity improvement check.
+3. Artifact & Output Integrity: Candidate model artifact generation and output finiteness checks passed successfully (5,173 rows evaluated), but structural and fidelity policy gates forced a rejection.))
+- version dl_rlc_delay-v1 -> dl_rlc_delay-v1, duration=83.06s
+
+### Event 15 — ul_prb — 2026-10-09T06:08:53.810558+00:00
+
+- **Trigger**: type=external_drift, severity=0.29816309065742475, fidelity_at_trigger=None
+- **Decision**: strategy=recalibrate, source=full_system, confidence=0.88, llm_or_fallback=llm
+- **Root cause**: The affected component ul_prb experienced external drift (severity 0.2982), but a recent attempt to rebuild the model architecture via 'regenerate' failed verification (rejected due to a drop in fidelity score from 0.992 to 0.881). The high requested_prb_ratio_lag1 (49.02) and active UE count (7.0) indicate shifting traffic demand and uplink resource allocation patterns. Since structural regeneration degraded baseline performance, the existing model architecture remains valid but its parameters require retrain-based alignment with recent telemetry state.
+- **Reasoning**: Regeneration failed previously with significant performance loss (fidelity reduced from 0.992 to 0.881), proving that structural changes are counterproductive. Recalibrating retrains model weights on recent 24-hour window data while preserving the model architecture, directly addressing the external telemetry drift.
+- **References**: ['digital_twin/internal:CLAUDE.md', 'policies/internal:config/settings.yaml']
 - **Candidate**: version=ul_prb-v4
-- **Verification**: 0.9964957635233116 -> 0.9879756171594203 => REJECT (The candidate recalibration for component 'ul_prb' was REJECTED because it failed the required fidelity improvement check. The candidate achieved a FidelityScore of 0.9880, which is lower than the production baseline score of 0.9965 and does not meet the minimum required improvement margin (verification_delta = 0.01). All preliminary deterministic checks (artifact presence, interface identity consistency, finite output evaluation) passed successfully, but the model performance degraded compared to the production baseline. (1. Production Baseline FidelityScore: 0.9965.
-2. Candidate Recalibration FidelityScore: 0.9880.
-3. Required Threshold: > 1.0065 (Baseline + verification_delta of 0.01).
-4. Deterministic Checks Passed: Candidate artifact existence, interface identity consistency, dataset row match (5173 rows), and output validity (all finite).
-5. Primary Failure Cause: Fidelity improvement check failed (`fidelity_improved=FAIL`), indicating performance degradation post-recalibration.))
-- version ul_prb-v1 -> ul_prb-v1, duration=15.57s
+- **Verification**: 0.9919704478461338 -> 0.9697553280662201 => REJECT (The recalibration candidate 'ul_prb-v4' was rejected by the deterministic verification gate because it failed the strict performance improvement check (fidelity_improved=FAIL). The existing production model 'ul_prb-v1' achieved a high FidelityScore of 0.9920 (0.99197), whereas the recalibrated candidate achieved a lower FidelityScore of 0.9698 (0.96976). To be accepted, the candidate needed to exceed the production score plus the required verification delta of 0.01 (a minimum target of ~1.0020). Because the candidate caused a degradation in overall prediction fidelity on the held-out set rather than an improvement, the system safely rejected the candidate and retained 'ul_prb-v1' in production. (1. All initial integrity, interface, artifact, and safety checks passed (candidate_artifact_present, interface_identity_consistent, evaluation_ran, no_invalid_output, production_baseline_evaluable).
+2. Candidate FidelityScore (0.9698) fell short of the production FidelityScore (0.9920) by 0.0222, resulting in a failure of the fidelity_improved check against the verification_delta margin (0.01).
+3. Rejection ensures the active production model remains on the higher-performing baseline ('ul_prb-v1') without risking model performance degradation.))
+- version ul_prb-v1 -> ul_prb-v1, duration=12.73s

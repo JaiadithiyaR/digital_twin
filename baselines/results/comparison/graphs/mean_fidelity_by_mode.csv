@@ -2,4 +2,4 @@ mode,mean_unified_fidelity,mean_unified_fidelity_std
 static,0.7942414105,0.0
 periodic_retrain,0.8328140018,0.0
 rule_based,0.7979686628,0.0
-full_system,0.7428003535666666,0.09038727250180362
+full_system,0.7299035870333334,0.08173391830603076
