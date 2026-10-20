@@ -20,7 +20,8 @@ motivation, the root cause, and the fix — no invented numbers, nothing papered
 - **Licensing and packaging:** MIT `LICENSE`; `pyproject.toml` now has its own lint rules and an
   up-to-date description; `requirements-lock.txt` pins the exact tested versions;
   `.gitattributes` normalizes line endings.
-- **CI and docs:** a GitHub Actions workflow runs ruff and the unit tests. `README.md` was
+- **CI and docs:** a GitHub Actions workflow (ruff + unit tests) is prepared locally but not yet
+  pushed: the push token lacked GitHub's `workflow` scope. `README.md` was
   rewritten for public users (current architecture diagram, quick start, results), and the
   `manual.md` setup sections were made machine-independent.
 - **Cleanup:** 2 real lint issues fixed — an undefined name in a test and a dead variable.
