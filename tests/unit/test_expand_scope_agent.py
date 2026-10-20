@@ -14,7 +14,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from src.adaptation.expand_scope_agent import (
@@ -24,7 +23,7 @@ from src.adaptation.expand_scope_agent import (
     _ProposedComponentDesign,
 )
 from src.common.config import load_settings
-from src.data.oai_dataset import ALL_FEATURES
+from src.data.oai_dataset import ALL_FEATURES, OBSERVABLE_KPI_COLUMNS
 from src.dt_models.d1_model_store import D1Store
 from src.dt_models.dl_bler import DlBlerModel
 from src.dt_models.model_registry import DTModelRegistry
@@ -36,10 +35,10 @@ from src.sandbox.executor import SandboxExecutor
 from src.telemetry.schema import CleanTelemetryRecord, RecordQuality
 
 SETTINGS = load_settings()
-# A new, genuinely-novel target: an existing raw feature column, never one of the 7 existing
-# component targets — mirrors prompt.md's own worked example (SINR: a raw INPUT no existing
-# component predicts) using this OAI schema's real columns instead.
-_NEW_TARGET_COLUMN = "wb_cqi_avg_lag1"
+# A new, genuinely-novel target: a same-second observable MAC KPI no existing component predicts
+# (its lagged/rolling versions are inputs) — mirrors prompt.md's own worked example (SINR: a raw
+# INPUT no existing component predicts) using this OAI schema's real columns instead.
+_NEW_TARGET_COLUMN = "wb_cqi_avg"
 _NEW_REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1")
 
 VALID_DESIGN = _ProposedComponentDesign(
@@ -150,9 +149,11 @@ def _clean_record(session_id: int, cell_id: int, ts_1s: datetime, **overrides) -
         "ul_prb": float(np.random.uniform(1, 20)), "dl_bler": float(np.random.uniform(0, 0.3)),
         "ul_bler": float(np.random.uniform(0, 0.2)),
     }
+    observables = {col: float(np.random.uniform(0, 15)) for col in OBSERVABLE_KPI_COLUMNS}
     base = dict(
         run_id=1, cell_id=cell_id, session_id=session_id, ue_id=session_id, slice_id=1,
         ts_1s=ts_1s, features=features, targets=targets, source="MOCK", quality=RecordQuality(),
+        observables=observables,
     )
     base.update(overrides)
     return CleanTelemetryRecord(**base)
@@ -261,6 +262,79 @@ def test_design_rejected_when_required_features_unavailable(tmp_path):
     agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
     with pytest.raises(ExpandScopeError, match="not available D1 columns"):
         agent.expand_scope(_example_factory(), window_hours=48)
+
+
+def test_design_rejected_when_required_features_include_the_target_itself(tmp_path):
+    """Target leakage: reading its own target as input would score near-perfect fidelity, and a
+    brand-new component has no baseline for verification to compare against."""
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    leaky = VALID_DESIGN.model_copy(update={"required_features": (*_NEW_REQUIRED_FEATURES, _NEW_TARGET_COLUMN)})
+    llm = _FakeLLMClient(designs=[leaky, leaky])
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    with pytest.raises(ExpandScopeError, match="target leakage"):
+        agent.expand_scope(_example_factory(), window_hours=48)
+
+
+def test_design_rejected_when_target_is_already_predicted_by_an_existing_component(tmp_path):
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    duplicate = VALID_DESIGN.model_copy(update={"target_column": "dl_bler"})  # -> "dl_bler_pred", taken
+    llm = _FakeLLMClient(designs=[duplicate, duplicate])
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    with pytest.raises(ExpandScopeError, match="already predicted by an existing component"):
+        agent.expand_scope(_example_factory(), window_hours=48)
+
+
+def test_design_rejected_when_target_is_a_lagged_past_value(tmp_path):
+    """A `_lag1` column is a past value already used as an input — not a new phenomenon."""
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    lagged = VALID_DESIGN.model_copy(update={"target_column": "wb_cqi_avg_lag1"})
+    llm = _FakeLLMClient(designs=[lagged, lagged])
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    with pytest.raises(ExpandScopeError, match="not a same-second measured KPI"):
+        agent.expand_scope(_example_factory(), window_hours=48)
+
+
+def test_design_rejected_when_required_features_include_a_same_second_measurement(tmp_path):
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    leaky = VALID_DESIGN.model_copy(update={"required_features": (*_NEW_REQUIRED_FEATURES, "pusch_snr_avg")})
+    llm = _FakeLLMClient(designs=[leaky, leaky])
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    with pytest.raises(ExpandScopeError, match="SAME second"):
+        agent.expand_scope(_example_factory(), window_hours=48)
+
+
+def test_no_unpredicted_kpi_left_raises_before_any_llm_call(tmp_path):
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    history = store.get_history()
+    for column in OBSERVABLE_KPI_COLUMNS:  # every observable is empty, and every target predicted
+        history[column] = np.nan
+    store._history_df = history  # noqa: SLF001 - test fixture shaping only
+
+    class _Predicts:
+        def __init__(self, name):
+            self.COMPONENT_NAME, self.OUTPUT_FIELD, self.DEPENDENCIES, self.REQUIRED_FEATURES = name, f"{name}_pred", (), ()
+
+    dt_model_registry.list_components = lambda: [_Predicts(t) for t in ("dl_throughput", "ul_throughput", "dl_rlc_delay", "dl_prb", "ul_prb", "dl_bler", "ul_bler")]
+    llm = _FakeLLMClient()
+    agent = _agent(tmp_path, store, registry, dt_model_registry, llm)
+    with pytest.raises(ExpandScopeError, match="no unpredicted same-second KPI"):
+        agent.expand_scope(_example_factory(), window_hours=48)
+    assert llm.design_calls == []
+
+
+def test_design_prompt_offers_only_unpredicted_same_second_targets(tmp_path):
+    store = _build_store(tmp_path)
+    registry, dt_model_registry = _registry_with_dl_bler(tmp_path, store)
+    llm = _FakeLLMClient()
+    _agent(tmp_path, store, registry, dt_model_registry, llm).expand_scope(_example_factory(), window_hours=48)
+    targets_line = next(line for line in llm.design_calls[0].splitlines() if line.startswith("target_column MUST"))
+    assert "'wb_cqi_avg'" in targets_line and "'dl_bler'" not in targets_line  # dl_bler is already predicted
+    assert "_lag1" not in targets_line
 
 
 def test_design_self_correction_succeeds_on_second_attempt(tmp_path):

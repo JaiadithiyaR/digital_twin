@@ -1,5 +1,8 @@
 # Phase 13 — Final Report
 
+> **Superseded (2026-10-20).** The baseline numbers in this report came from the pre-audit harness (look-ahead leakage, per-mode self-normalized scores, injected mock drift). They are kept for history only. Current protocol and results: [baselines/README.md](baselines/README.md), [README.md](README.md#results-the-4-step-ablation).
+
+
 Executed against `claude_code_prompt_phase13.md`, in order, §1 through §8. No §0 blocker was hit
 (LLM available throughout with real budget headroom; no required run file was missing/`.partial`;
 `rankpi_kpi/` confirmed a genuine duplicate, not irreplaceable). Full real numbers below — nothing
@@ -147,7 +150,7 @@ OPEN ISSUES:   each Phase-12 item → fixed / reported / not fixed (why)
 ```
 
 1. **989MB `rankpi_kpi/` duplicate check** → **reported**. Confirmed a genuine duplicate of
-   `/home/harie06/oai_db/data/rankpi_kpi` via file-list/size/sha256-sample comparison. Kept
+   `/path/to/oai_db/data/rankpi_kpi` via file-list/size/sha256-sample comparison. Kept
    git-ignored, not moved or deleted (per instruction — report only).
 2. **`docs/architecture_diagram.drawio`** → **fixed**. Rewritten for the OAI architecture; see
    DOCS above.

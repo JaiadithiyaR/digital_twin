@@ -70,6 +70,14 @@ MAC_FEATURE_BASES: tuple[str, ...] = (
     "ul_bler",
 )
 
+# Same-second MAC KPIs carried through to D1 as OBSERVABLE ground truth — the only measured
+# quantities besides the 7 targets that a NEW (expand-scope) component can learn to predict
+# (their lagged/rolling versions are already inputs). They are never model inputs: a same-second
+# value is leakage, so `feature_columns()` excludes them and the adaptation agents strip them from
+# the data a candidate may read (only an expand-scope candidate gets its own target back, as the
+# label). dl_bler_avg/ul_bler_avg are omitted: they ARE the dl_bler/ul_bler targets.
+OBSERVABLE_KPI_COLUMNS: tuple[str, ...] = tuple(f"{b}_avg" for b in MAC_FEATURE_BASES if b not in ("dl_bler", "ul_bler"))
+
 MAX_GAP_SECONDS = 2.0
 
 # Phase 13 (claude_code_prompt_phase13.md §1.3): "For each target and for the 10 MAC features
@@ -484,6 +492,13 @@ def build_run_table(oai_root: Path, run_id: int) -> tuple[pd.DataFrame, RunLoadR
     # against) + slice_id as a plain categorical passthrough.
     out = targets.merge(features, on=["run_id", "session_id", "ts_1s"], how="left", suffixes=("", "_feat"))
     out = out.drop(columns=[c for c in out.columns if c.endswith("_feat")])
+    mac = tables["mac_ue_1s"]
+    observable_cols = [c for c in OBSERVABLE_KPI_COLUMNS if c in mac.columns]
+    if observable_cols:
+        observables = mac[["run_id", "session_id", "ts_1s", *observable_cols]].drop_duplicates(
+            subset=["run_id", "session_id", "ts_1s"], keep="last"
+        )
+        out = out.merge(observables, on=["run_id", "session_id", "ts_1s"], how="left")
     out = out.sort_values(["run_id", "session_id", "ts_1s"]).reset_index(drop=True)
 
     for col in TARGET_COLUMNS:
@@ -518,7 +533,7 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
     written `feature_schema.json` and by the leakage test (prompt2.md Step 3's own leakage rule)."""
     cols = []
     for c in df.columns:
-        if c in TARGET_COLUMNS or c in LEAKAGE_SAFE_STATIC_COLUMNS:
+        if c in TARGET_COLUMNS or c in OBSERVABLE_KPI_COLUMNS or c in LEAKAGE_SAFE_STATIC_COLUMNS:
             continue
         if _is_leakage_safe_feature_name(c):
             cols.append(c)
@@ -559,6 +574,7 @@ def build_dataset(oai_root: Path, splits: dict[str, list[int]]) -> DatasetBuildR
     schema = {
         "targets": {c: TARGET_UNITS[c] for c in TARGET_COLUMNS},
         "features": feat_cols,
+        "observables": [c for c in OBSERVABLE_KPI_COLUMNS if c in next(iter(run_tables.values())).columns],
         "lag_seconds": 1,
         "identity_columns": sorted(LEAKAGE_SAFE_STATIC_COLUMNS),
         "splits": splits,

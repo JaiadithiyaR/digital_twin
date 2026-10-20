@@ -179,6 +179,39 @@ def test_get_history_filters_by_ue_and_cell(tmp_path):
     assert len(store.get_history(ue_id=1, cell_id=2)) == 1
 
 
+def test_redelivered_tick_replaces_rather_than_duplicates_history_even_across_restart(tmp_path):
+    """A restarted replay re-sends ticks D1 already persisted — history must stay one row per
+    (run_id, session_id, ts_1s), keeping the latest delivery."""
+    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    store = _store(tmp_path)
+    store.append_history([_clean_record(ts_1s=ts, targets={"dl_throughput": 10.0})])
+    restarted = _store(tmp_path)
+    restarted.append_history([
+        _clean_record(ts_1s=ts, targets={"dl_throughput": 11.0}),
+        _clean_record(ts_1s=ts, session_id=99),  # a genuinely different session at the same second
+    ])
+
+    history = restarted.get_history()
+    assert len(history) == 2
+    assert history.loc[history["session_id"] != 99, "dl_throughput"].tolist() == [11.0]
+
+
+def test_rate_limited_persistence_keeps_memory_current_and_flush_writes_the_tail(tmp_path):
+    store = D1Store(
+        current_state_path=tmp_path / "current.parquet", history_path=tmp_path / "history.parquet",
+        quarantine_path=tmp_path / "quarantine.parquet", history_retention_rows=500,
+        persist_min_interval_seconds=3600.0,
+    )
+    store.append_history([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))])  # first write persists
+    store.append_history([_clean_record(ts_1s=datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC))])  # within interval: memory only
+
+    assert len(store.get_history()) == 2  # readers are never behind
+    assert len(_store(tmp_path).get_history()) == 1  # disk lags by design
+
+    store.flush()
+    assert len(_store(tmp_path).get_history()) == 2
+
+
 def test_append_history_with_empty_list_is_a_noop(tmp_path):
     store = _store(tmp_path)
     store.append_history([])

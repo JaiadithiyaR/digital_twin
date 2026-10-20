@@ -105,6 +105,9 @@ class StorageConfig(BaseModel):
     d1_history_path: str
     d1_quarantine_path: str
     history_retention_rows: int
+    # Minimum seconds between D1 Parquet rewrites (0 = write-through). In-memory D1 state is
+    # always current; this only bounds how often the whole table is re-serialized to disk.
+    persist_min_interval_seconds: float = 0.0
 
 
 class ModelSpec(BaseModel):
@@ -136,19 +139,34 @@ class MkMmdConfig(BaseModel):
     gamma: float | None
 
 
+class ComponentPolicyOverride(BaseModel):
+    """Per-component override of the default adaptation policy. An unset field inherits the
+    default (`trigger_threshold` / `trigger_min_consecutive_evaluations`)."""
+
+    model_config = {"extra": "forbid"}
+
+    threshold: float | None = Field(default=None, gt=0)
+    min_consecutive_evaluations: int | None = Field(default=None, ge=1)
+
+
 class FidelityConfig(BaseModel):
     epsilon: float
     rolling_window_length: int
     min_history_for_normalization: int
     metrics: list[str]
     mk_mmd: MkMmdConfig
-    # Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a). `unified_weights`
-    # null means equal weighting across all currently-enabled components — never hardcode unequal
-    # weights in code (prompt.md §16a's own explicit rule).
+    # Unified Fidelity Score (prompt.md §16a) — a system-health REPORTING aggregate only; it no
+    # longer drives adaptation. `unified_weights` null means equal weighting across all
+    # currently-defined components — never hardcode unequal weights in code.
     unified_weights: dict[str, float] | None
     unified_min_components: int
+    # Per-component adaptation policy (src/fidelity/component_policy.py): component c is adapted
+    # when its own FidelityScore_c < its threshold for its min-consecutive count of fresh
+    # evaluation cycles. These two are the defaults for every component...
     trigger_threshold: float
     trigger_min_consecutive_evaluations: int  # debounce/hysteresis — a single bad cycle must never fire the trigger
+    # ...and this optionally overrides either one per component id (unlisted -> defaults).
+    component_policies: dict[str, ComponentPolicyOverride] = {}
 
 
 class MockDriftConfig(BaseModel):
@@ -183,12 +201,18 @@ class DecisionAgentConfig(BaseModel):
 class RecalibrationConfig(BaseModel):
     training_window_hours: int
     min_training_rows: int
+    # Train on the original TRAIN pool (the data production was bootstrapped on) PLUS the recent
+    # window, recent rows up-weighted — instead of the recent window alone, which early in a run is
+    # a few hundred rows and can never match a model trained on the full pool.
+    include_reference_data: bool = True
+    recent_sample_weight: float = Field(default=5.0, gt=0)
 
 
 class RegenerationConfig(BaseModel):
     max_llm_iterations: int  # self-correction attempts: generate -> sandbox rejects -> retry with feedback
     training_window_hours: int
     min_training_rows: int
+    include_reference_data: bool = True  # same reasoning as recalibration (no weighting — the generated code trains itself)
 
 
 class ExpandScopeConfig(BaseModel):
@@ -199,10 +223,16 @@ class ExpandScopeConfig(BaseModel):
 
 class AdaptationConfig(BaseModel):
     lock_policy: Literal["queue", "coalesce", "defer"]
-    # Must be false — this orchestrator's dispatch loop is single-threaded (one adaptation cycle
-    # at a time across all components); true would need a worker-thread redesign that isn't
-    # built, so it fails fast at startup rather than silently being ignored.
+    # Different components adapt concurrently on worker threads (never two adaptations of the
+    # same component). false = one adaptation at a time, still off the fidelity loop's thread.
     allow_concurrent_components: bool
+    max_concurrent_adaptations: int = Field(default=2, ge=1)
+    # Adaptation loop: a REJECTed (or failed) attempt is retried — with the rejection details fed
+    # back to the decision agent and the agents — until a candidate is ACCEPTed, the component
+    # recovers above its threshold, or this many attempts have been made.
+    max_adaptation_attempts: int = Field(default=4, ge=1)
+    # stop(): how long to wait for in-flight adaptations before recording them as interrupted.
+    shutdown_wait_seconds: float = Field(default=20.0, ge=0)
     recalibration: RecalibrationConfig
     regeneration: RegenerationConfig
     expand_scope: ExpandScopeConfig
@@ -216,9 +246,12 @@ class SandboxConfig(BaseModel):
 
 
 class PeriodicRetrainBaselineConfig(BaseModel):
-    interval_cycles: int
     # phase13 §4: "all components retrained every N seconds of replayed data" — every one of the
     # 7 real OAI components is recalibrated on this fixed schedule, never a single hardcoded one.
+    interval_seconds: int = Field(gt=0)
+    # Blind retraining deploys every retrained model unconditionally (ablation step 1); set true
+    # to put the scheduled candidates through the same verification gate as the adaptive modes.
+    use_verification_gate: bool = False
 
 
 class RuleBasedBaselineConfig(BaseModel):
@@ -233,7 +266,8 @@ class BaselinesConfig(BaseModel):
     adapts at all); 'full_system' is just the already-configured real system, run once per
     `seeds` entry."""
 
-    cycles: int
+    window_seconds: int = Field(default=60, gt=0)  # one evaluation/decision window of replayed DATA time
+    max_windows: int | None = Field(default=None, ge=1)  # None = the whole TEST run
     seeds: list[int]
     periodic_retrain: PeriodicRetrainBaselineConfig
     rule_based: RuleBasedBaselineConfig
@@ -312,6 +346,10 @@ class LoggingConfig(BaseModel):
     level: str
     format: Literal["json", "text"]
     log_dir: str
+    # Dedicated, human-auditable logs written by the live orchestrator (paths relative to repo root):
+    component_fidelity_log: str = "logs/component_fidelity.csv"  # one row per component per fidelity cycle
+    adaptation_decisions_log: str = "logs/adaptation_decisions.jsonl"  # one line per handled trigger, incl. failures
+    console_transcript_dir: str | None = "logs/console"  # plain-text copy of each run's console output; null disables
 
 
 class LifecycleConfig(BaseModel):
@@ -361,22 +399,6 @@ class Settings(BaseModel):
             )
         return self
 
-    @model_validator(mode="after")
-    def _forbid_unsupported_concurrent_components(self) -> "Settings":
-        """Phase 13 §2 fail-fast guard: `adaptation.allow_concurrent_components=true` has no
-        actual multi-threaded-per-component dispatch implementation behind it (the orchestrator's
-        single dispatch loop processes one adaptation cycle, across ALL components, at a time) —
-        raising here is honest-failure-at-startup instead of silently ignoring a config value that
-        would otherwise do nothing, exactly the discipline `_forbid_retired_ns3_component_ids`
-        above already established for a different setting."""
-        if self.adaptation.allow_concurrent_components:
-            raise ValueError(
-                "config/settings.yaml adaptation.allow_concurrent_components=true is not "
-                "implemented — this orchestrator's dispatch loop only ever runs one adaptation "
-                "cycle at a time, across all components; set this back to false."
-            )
-        return self
-
     def resolve_path(self, relative: str) -> Path:
         """Resolve a config-declared path against the repository root."""
         return REPO_ROOT / relative
@@ -405,6 +427,11 @@ def load_settings(path: Path | None = None) -> Settings:
     settings_path = path or DEFAULT_SETTINGS_PATH
     with settings_path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
+    # The raw OAI export lives outside the repo at a machine-specific path, so it is set per
+    # machine via OAI_ROOT (environment or .env) rather than committed in settings.yaml.
+    load_dotenv(REPO_ROOT / ".env", override=False)
+    if os.environ.get("OAI_ROOT"):
+        raw.setdefault("data", {})["oai_root"] = os.environ["OAI_ROOT"]
     return Settings.model_validate(raw)
 
 

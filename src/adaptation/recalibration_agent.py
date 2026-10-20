@@ -18,6 +18,7 @@ default. Training and evaluation are always deterministic code regardless.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
@@ -31,6 +32,7 @@ from src.adaptation.data_selection import (
     select_recent_window,
     time_split,
     with_dependency_ground_truth,
+    with_reference_data,
 )
 from src.fidelity.evaluator import FidelityEvaluator
 from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
@@ -163,6 +165,8 @@ class RecalibrationAgent:
         window_hours: float | None = None,
         held_out_fraction: float = 0.2,
         use_llm_window_reasoning: bool = False,
+        reference_history: pd.DataFrame | None = None,
+        recent_sample_weight: float = 1.0,
     ) -> RecalibrationResult:
         """Retrain `component_factory()`'s component on a recent D1 telemetry window and
         register the result as a new candidate version.
@@ -174,6 +178,9 @@ class RecalibrationAgent:
         dependency's `OUTPUT_FIELD` name (e.g. `{"throughput": "throughput_mbps_pred"}`), so a
         dependent component can be recalibrated too — trained on the SAME "ground truth for
         upstream dependencies" convention every DT component (Modules 6-10) already uses.
+        `reference_history` (optional): rows added to the TRAINING side only (e.g. the original
+        TRAIN pool production was bootstrapped on), with the recent window's rows weighted
+        `recent_sample_weight` — the held-out evaluation window is always purely recent.
         """
         candidate = component_factory()
         component_name = candidate.COMPONENT_NAME
@@ -217,6 +224,24 @@ class RecalibrationAgent:
         ]
         train_df, held_out_df = time_split(window_df, held_out_fraction)
 
+        reference_rows = 0
+        if reference_history is not None and len(reference_history):
+            try:
+                reference = with_dependency_ground_truth(reference_history, candidate.DEPENDENCIES, dependency_output_fields)
+            except DataSelectionError as exc:
+                raise RecalibrationError(f"reference data unusable: {exc}") from exc
+            missing = [c for c in [*input_columns, target_column] if c not in reference.columns]
+            if missing:
+                raise RecalibrationError(f"reference data lacks column(s) {missing[:5]}")
+            reference = reference[[*input_columns, target_column]]
+            reference_rows = len(reference)
+        else:
+            reference = None
+        fit_df, fit_weights = with_reference_data(train_df[[*input_columns, target_column]], reference, recent_sample_weight)
+        weight_kwargs: dict[str, Any] = {}
+        if fit_weights is not None and "sample_weight" in inspect.signature(candidate.train).parameters:
+            weight_kwargs["sample_weight"] = fit_weights
+
         # 6. call the existing generic train() interface (Module 5's DTComponent contract).
         # `train()` legitimately raises ValueError on an all-NaN training slice (e.g. a window
         # landing on sessions too young for the richer lag/rolling features to be populated yet
@@ -227,7 +252,7 @@ class RecalibrationAgent:
         # without affecting telemetry or the next trigger) rather than an uncaught ValueError that
         # crashes the whole orchestrator.
         try:
-            candidate.train(train_df[input_columns], train_df[target_column])
+            candidate.train(fit_df[input_columns], fit_df[target_column], **weight_kwargs)
         except ValueError as exc:
             raise RecalibrationError(
                 f"candidate training failed for {component_name!r} over the last "
@@ -250,7 +275,10 @@ class RecalibrationAgent:
             "end": iso(train_df["ts_1s"].max()) if len(train_df) else None,
             "n_rows": len(train_df),
             "window_hours": resolved_window_hours,
-            "provenance": "d1_history",
+            "provenance": "d1_history" if not reference_rows else "d1_history+reference",
+            "reference_rows": reference_rows,
+            "recent_sample_weight": recent_sample_weight if reference_rows else None,
+            "sample_weighted": bool(weight_kwargs),
             "ue_id": ue_id,
             "cell_id": cell_id,
         }

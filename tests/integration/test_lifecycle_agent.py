@@ -30,10 +30,9 @@ from src.adaptation.recalibration_agent import RecalibrationAgent
 from src.adaptation.regeneration_agent import RegenerationAgent
 from src.adaptation.verification_agent import VerificationAgent
 from src.common.config import load_settings
-from src.dt_models.model_registry import DTModelRegistry
-from src.data.oai_dataset import ALL_FEATURES
-from src.dt_models.dl_bler import DlBlerModel
 from src.drift.drift_detector import DriftDetectorInterface
+from src.dt_models.dl_bler import DlBlerModel
+from src.dt_models.model_registry import DTModelRegistry
 from src.fidelity.evaluator import FidelityEvaluator
 from src.fidelity.trigger import trigger_from_drift_event
 from src.registry.model_registry import ModelRegistry
@@ -87,7 +86,7 @@ class RebuiltDlBler(DTComponent):
 
 _EXPAND_DESIGN = _ProposedComponentDesign(
     component_name="cqi_quality",
-    target_column="wb_cqi_avg_lag1",
+    target_column="wb_cqi_avg",
     dependencies=(),
     required_features=("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1"),
     purpose="Predict channel quality indicator from load and mobility for proactive scheduling.",
@@ -104,7 +103,7 @@ class CqiQualityModel(DTComponent):
     COMPONENT_NAME = "cqi_quality"
     DEPENDENCIES = ()
     REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1")
-    OUTPUT_FIELD = "wb_cqi_avg_lag1_pred"
+    OUTPUT_FIELD = "wb_cqi_avg_pred"
 
     def __init__(self):
         self._model = LinearRegression()

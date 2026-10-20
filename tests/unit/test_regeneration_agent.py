@@ -15,10 +15,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 
-from src.adaptation.regeneration_agent import RegenerationAgent, RegenerationError, _GeneratedComponentCode
+from src.adaptation.regeneration_agent import RegenerationAgent, RegenerationError
 from src.common.config import load_settings
 from src.data.oai_dataset import ALL_FEATURES
 from src.dt_models.d1_model_store import D1Store

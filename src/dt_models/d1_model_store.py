@@ -14,12 +14,13 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from src.data.oai_dataset import TARGET_COLUMNS
+from src.data.oai_dataset import OBSERVABLE_KPI_COLUMNS, TARGET_COLUMNS
 from src.dt_models.component_registry import ComponentDescriptor, ComponentRegistry
 from src.synchronization.d1_interface import D1StateSink
 from src.telemetry.schema import CleanTelemetryRecord, QuarantinedRecord
@@ -33,10 +34,11 @@ logger = logging.getLogger(__name__)
 # feature_schema.json), so D1's column list is assembled from the first batch of records seen.
 IDENTITY_COLUMNS: tuple[str, ...] = ("run_id", "cell_id", "session_id", "ue_id", "slice_id", "ts_1s")
 NON_FEATURE_COLUMNS: tuple[str, ...] = (
-    *IDENTITY_COLUMNS, *TARGET_COLUMNS, "source", "quality_missing_fields",
+    *IDENTITY_COLUMNS, *TARGET_COLUMNS, *OBSERVABLE_KPI_COLUMNS, "source", "quality_missing_fields",
 )
 
 QUARANTINE_COLUMNS: tuple[str, ...] = ("raw_json", "reason", "source", "received_at")
+_HISTORY_IDENTITY: tuple[str, ...] = ("run_id", "session_id", "ts_1s")
 
 
 def _record_to_row(record: CleanTelemetryRecord) -> dict[str, Any]:
@@ -56,6 +58,7 @@ def _record_to_row(record: CleanTelemetryRecord) -> dict[str, Any]:
     }
     row.update({k: (float("nan") if v is None else v) for k, v in record.targets.items()})
     row.update({k: (float("nan") if v is None else v) for k, v in record.features.items()})
+    row.update({k: (float("nan") if v is None else v) for k, v in record.observables.items()})
     return row
 
 
@@ -108,12 +111,22 @@ class D1Store(D1StateSink):
         quarantine_path: Path,
         history_retention_rows: int,
         registry: ComponentRegistry | None = None,
+        persist_min_interval_seconds: float = 0.0,
     ) -> None:
         self._current_state_path = current_state_path
         self._history_path = history_path
         self._quarantine_path = quarantine_path
         self._history_retention_rows = history_retention_rows
         self._lock = threading.Lock()
+        # Every write re-serializes a WHOLE table (Parquet has no append), and on a slow
+        # filesystem that cost — not the in-memory update — caps ingestion: observed ~1s per
+        # rewrite on a WSL /mnt/c mount, throttling a live replay to ~16 rows/s and degrading as
+        # history grows. In-memory state is always updated immediately (readers never lag); only
+        # the disk write is rate-limited. 0 = write-through on every call. `flush()` writes
+        # anything outstanding (called at orchestrator shutdown).
+        self._persist_min_interval_seconds = persist_min_interval_seconds
+        self._dirty_tables: set[str] = set()
+        self._last_persist_at = float("-inf")
 
         # Persistent: reload existing state on construction so a process restart resumes rather
         # than silently starting from an empty Digital Twin (prompt.md §10 "persistent" layer).
@@ -153,7 +166,33 @@ class D1Store(D1StateSink):
             history_path=settings.resolve_path(storage.d1_history_path),
             quarantine_path=settings.resolve_path(storage.d1_quarantine_path),
             history_retention_rows=storage.history_retention_rows,
+            persist_min_interval_seconds=storage.persist_min_interval_seconds,
         )
+
+    # --- persistence ----------------------------------------------------------------------
+
+    def _persist_locked(self, table: str) -> None:
+        self._dirty_tables.add(table)
+        if time.monotonic() - self._last_persist_at >= self._persist_min_interval_seconds:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
+        tables = {
+            "current": (self._current_state_df, self._current_state_path),
+            "history": (self._history_df, self._history_path),
+            "quarantine": (self._quarantine_df, self._quarantine_path),
+        }
+        for table in sorted(self._dirty_tables):
+            df, path = tables[table]
+            _atomic_write_parquet(df, path)
+        self._dirty_tables.clear()
+        self._last_persist_at = time.monotonic()
+
+    def flush(self) -> None:
+        """Write any rate-limited, not-yet-persisted changes to disk now."""
+        with self._lock:
+            if self._dirty_tables:
+                self._flush_locked()
 
     # --- D1StateSink (Module 3's write contract) -----------------------------------------
 
@@ -177,7 +216,7 @@ class D1Store(D1StateSink):
                 .sort_values(["run_id", "cell_id", "session_id"], kind="stable")
                 .reset_index(drop=True)
             )
-            _atomic_write_parquet(self._current_state_df, self._current_state_path)
+            self._persist_locked("current")
         logger.info(
             "D1 current state updated",
             extra={"component": "d1", "records": len(records), "distinct_keys": len(self._current_state_df)},
@@ -189,10 +228,15 @@ class D1Store(D1StateSink):
         new_rows = pd.DataFrame([_record_to_row(r) for r in records])
         with self._lock:
             combined = _concat_preserving_dtypes(self._history_df, new_rows)
+            # One row per (run_id, session_id, ts_1s) — the unit of analysis. A re-delivered
+            # tick (e.g. a restarted replay re-sending rows already persisted) replaces its
+            # earlier copy instead of duplicating it, which would otherwise corrupt every
+            # downstream window/lag computation over history.
+            combined = combined.drop_duplicates(subset=list(_HISTORY_IDENTITY), keep="last")
             if len(combined) > self._history_retention_rows:
                 combined = combined.sort_values("ts_1s", kind="stable").tail(self._history_retention_rows)
             self._history_df = combined.reset_index(drop=True)
-            _atomic_write_parquet(self._history_df, self._history_path)
+            self._persist_locked("history")
         logger.info(
             "D1 history appended", extra={"component": "d1", "records": len(records), "total_history_rows": len(self._history_df)}
         )
@@ -203,7 +247,7 @@ class D1Store(D1StateSink):
         new_rows = pd.DataFrame([_quarantined_to_row(q) for q in quarantined])
         with self._lock:
             self._quarantine_df = _concat_preserving_dtypes(self._quarantine_df, new_rows)
-            _atomic_write_parquet(self._quarantine_df, self._quarantine_path)
+            self._persist_locked("quarantine")
         logger.info(
             "D1 quarantine recorded",
             extra={"component": "d1", "records": len(quarantined), "total_quarantine_rows": len(self._quarantine_df)},

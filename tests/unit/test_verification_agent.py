@@ -29,13 +29,13 @@ from src.adaptation.verification_agent import (
     _LLMVerificationReasoning,
 )
 from src.common.config import load_settings
-from src.dt_models.base import DTComponent
 from src.data.oai_dataset import ALL_FEATURES
+from src.dt_models.base import DTComponent
 from src.dt_models.dl_bler import DlBlerModel
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RetrievedChunk
-from src.registry.model_registry import ModelRegistry
+from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 
 SETTINGS = load_settings()
 VERIFICATION_DELTA = SETTINGS.adaptation.verification_delta
@@ -417,6 +417,53 @@ def test_no_production_baseline_rejects_when_candidate_fidelity_not_yet_computab
     assert registry.get_current_version(_TinyComponent.COMPONENT_NAME) is None
 
 
+def _random_walk(n: int, seed: int) -> np.ndarray:
+    return np.cumsum(np.random.default_rng(seed).normal(0, 1, n))
+
+
+def test_new_component_beating_persistence_is_accepted_with_a_fresh_live_evaluator(tmp_path):
+    """The live evaluator has NO history for a brand-new component; with a persistence reference
+    the gate is still computable (isolated shared reference) and a clearly better model passes."""
+    registry = _registry(tmp_path)
+    _, version = _register_tiny_candidate(registry)
+    agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))  # fresh, unwarmed
+
+    y = _random_walk(400, seed=1)
+    persistence = np.concatenate([[np.nan], y[:-1]])  # y_(t-1); first row unscorable
+    candidate = y + np.random.default_rng(2).normal(0, 0.1, len(y))  # far closer than persistence
+    result = agent.verify(version, pd.DataFrame({"x": y}), y, candidate, baseline_predictions=persistence)
+
+    assert result.decision == "ACCEPT", [c.detail for c in result.checks if not c.passed]
+    assert result.fidelity_before is not None and result.fidelity_after > result.fidelity_before + SETTINGS.adaptation.verification_delta
+    assert any(c.name == "reference_baseline_evaluable" and c.passed for c in result.checks)
+    assert registry.get_current_version(_TinyComponent.COMPONENT_NAME).version_id == version.version_id
+
+
+def test_new_component_no_better_than_persistence_is_rejected(tmp_path):
+    registry = _registry(tmp_path)
+    _, version = _register_tiny_candidate(registry)
+    agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))
+
+    y = _random_walk(400, seed=3)
+    persistence = np.concatenate([[np.nan], y[:-1]])
+    candidate = np.full_like(y, float(np.mean(y)))  # predicting the mean of a random walk loses to persistence
+    result = agent.verify(version, pd.DataFrame({"x": y}), y, candidate, baseline_predictions=persistence)
+
+    assert result.decision == "REJECT"
+    assert any(c.name == "fidelity_improved" and not c.passed for c in result.checks)
+    assert registry.get_current_version(_TinyComponent.COMPONENT_NAME) is None
+
+
+def test_reference_baseline_with_too_few_rows_rejects_fail_safe(tmp_path):
+    registry = _registry(tmp_path)
+    _, version = _register_tiny_candidate(registry)
+    agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))
+    y = np.array([1.0, 2.0, 3.0, 4.0])
+    result = agent.verify(version, pd.DataFrame({"x": y}), y, y + 0.01, baseline_predictions=np.array([np.nan, 1.0, 2.0, 3.0]))
+    assert result.decision == "REJECT"
+    assert any(c.name == "reference_baseline_evaluable" and not c.passed for c in result.checks)
+
+
 # --- rule 9: the LLM/RAG reasoning layer can inform the explanation but must never override --------
 
 
@@ -594,3 +641,56 @@ def test_rag_none_is_reported_as_not_available(tmp_path):
     agent = VerificationAgent(SETTINGS, registry, FidelityEvaluator(SETTINGS.fidelity))
     context = agent._retrieve_rag_context("dl_bler", None)  # noqa: SLF001 - focused unit test
     assert context == "not available"
+
+
+# --- unscorable held-out rows (residual first-tick NaN, missing ground truth) ---------------------
+
+
+def _better_candidate_setup(tmp_path, seed: int):
+    registry = _registry(tmp_path)
+    prod_version = _register(registry, _bad_dl_bler_model(seed=seed), status="production")
+    candidate_model = _good_dl_bler_model(seed=seed + 1)
+    candidate_version = _register(
+        registry, candidate_model, status="candidate", adaptation_type="recalibrate", parent_version_id=prod_version.version_id
+    )
+    evaluator = FidelityEvaluator(SETTINGS.fidelity)
+    _prewarm(evaluator, "dl_bler")
+    return registry, candidate_model, candidate_version, VerificationAgent(SETTINGS, registry, evaluator)
+
+
+def test_rows_without_a_lag1_anchor_or_ground_truth_are_excluded_not_rejected(tmp_path):
+    """A residual component legitimately predicts NaN where y_{t-1} is unknown (a session's first
+    tick) — for production AND candidate alike — and a held-out row can lack ground truth. Neither
+    may turn a genuinely better candidate into a REJECT, nor crash verify()."""
+    registry, candidate_model, candidate_version, agent = _better_candidate_setup(tmp_path, seed=140)
+    eval_features = _synthetic_features(150, seed=142)
+    eval_target = _synthetic_target(eval_features, 0.3, seed=143)
+    eval_features.loc[:2, "dl_bler_lag1"] = np.nan  # no anchor -> both models predict NaN here
+    eval_target.iloc[5] = np.nan  # no ground truth for this row
+    candidate_preds = candidate_model.predict(eval_features)
+    assert candidate_preds.isna().sum() == 3
+
+    result = agent.verify(
+        candidate_version, eval_features, eval_target, candidate_preds,
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
+    )
+
+    assert result.decision == "ACCEPT", [c for c in result.checks if not c.passed]
+    assert registry.get_current_version("dl_bler").version_id == candidate_version.version_id
+
+
+def test_candidate_nan_where_production_predicts_is_still_rejected(tmp_path):
+    registry, candidate_model, candidate_version, agent = _better_candidate_setup(tmp_path, seed=150)
+    eval_features = _synthetic_features(150, seed=152)
+    eval_target = _synthetic_target(eval_features, 0.3, seed=153)
+    candidate_preds = candidate_model.predict(eval_features).to_numpy().copy()
+    candidate_preds[10] = np.nan  # production can score this row, the candidate can't
+
+    result = agent.verify(
+        candidate_version, eval_features, eval_target, candidate_preds,
+        production_component_factory=lambda: DlBlerModel.from_settings(SETTINGS),
+    )
+
+    assert result.decision == "REJECT"
+    assert any(c.name == "no_invalid_output" and not c.passed for c in result.checks)
+    assert registry.get_version("dl_bler", candidate_version.version_id).status == "rejected"

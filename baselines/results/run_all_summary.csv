@@ -1,2 +1,7 @@
-mode,seed,cycles,run_ids,n_triggers,n_adaptations,n_accepted,n_rejected,n_decisions,n_fallbacks,fallback_rate,invalid,incomplete_reason,mean_unified_fidelity,total_duration_seconds,budget_spent_usd,out_dir
-full_system,3,15,[8],15,14,1,13,15,0,0.0,False,,0.7551688876512722,442.1255808740011,0.0330169,/home/harie06/dt_adaptation/baselines/results/full_system
+mode,seed,window_seconds,n_windows,run_ids,n_triggers,n_attempts,n_adaptations,n_accepted,n_rejected,n_deployed_ungated,n_agent_failures,n_decisions,n_fallbacks,fallback_rate,invalid,incomplete_reason,mean_unified_fidelity_runtime,adaptation_wall_seconds,adaptation_cpu_seconds,budget_spent_usd,out_dir
+static,1,60,62,[8],3,0,0,0,0,0,0,0,0,0.0,False,,0.7950904426582125,0.0,0.0,0.0,baselines/results/static
+periodic_retrain,1,60,62,[8],3,42,0,0,0,42,0,0,0,0.0,False,,0.8112634006272242,518.5841370279959,4779.26,0.0,baselines/results/periodic_retrain
+full_system,1,60,62,[8],3,4,4,3,1,0,0,4,0,0.0,False,,0.7933484270418046,144.97543270600727,198.9300000000003,0.0098150999999999,baselines/results/full_system/seed_1
+full_system,2,60,62,[8],3,4,4,3,1,0,0,4,0,0.0,False,,0.7943751371106381,104.11764326199771,108.600000000004,0.0083368,baselines/results/full_system/seed_2
+full_system,3,60,62,[8],3,4,4,3,1,0,0,4,0,0.0,False,,0.7937709756904643,100.07042943299166,105.04999999999929,0.00617805,baselines/results/full_system/seed_3
+rule_based,1,60,62,[8],3,7,7,2,5,0,0,0,0,0.0,False,,0.7931974124763804,255.25791514499,148.61000000000007,0.0163262,baselines/results/rule_based

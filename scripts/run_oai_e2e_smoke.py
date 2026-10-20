@@ -12,7 +12,7 @@ Module 19 lifecycle record. Permanent, repo-tracked, same convention as
 
 **Why the trigger is "forced" rather than waited for**: prompt2.md Step 7 explicitly asks for "at
 least one forced trigger." This script builds one real `AdaptationTrigger` by hand — never through
-the mock drift source, and never by waiting for the fidelity-based trigger's own debounce window
+any drift source (external drift is permanently disabled), and never by waiting for the per-component fidelity policy's own debounce window
 to happen to fire — and enqueues it directly onto the orchestrator's own real trigger queue, so
 this run deterministically exercises the full downstream pipeline on every invocation regardless
 of what the smoke-test run's own replayed fidelity happens to look like on a given pass. Every stage downstream
@@ -93,6 +93,12 @@ def main() -> int:
                     "reports_dir": str(smoke_dir / "maintenance_reports"),
                 }
             ),
+            "logging": settings.logging.model_copy(
+                update={
+                    "component_fidelity_log": str(smoke_dir / "component_fidelity.csv"),
+                    "adaptation_decisions_log": str(smoke_dir / "adaptation_decisions.jsonl"),
+                }
+            ),
         }
     )
     expected_run_ids = [smoke_settings.data.splits.smoke_test_run]
@@ -103,7 +109,7 @@ def main() -> int:
     )
 
     print("[smoke] initializing the full wired system against the real OAI smoke-test-run replay source...")
-    orchestrator = ContinuousOrchestrator(smoke_settings, secrets, drift_severity_range_override=(0.05, 0.2))
+    orchestrator = ContinuousOrchestrator(smoke_settings, secrets)
     orchestrator.initialize()
     print(f"[smoke] llm_available={orchestrator.llm_client is not None} rag_available={orchestrator.rag_kb.is_available}")
 
@@ -115,7 +121,7 @@ def main() -> int:
     orchestrator.telemetry_source.start(run_ids=expected_run_ids)
 
     orchestrator.start()
-    print(f"[smoke] telemetry sync (real OaiReplaySource, speed=0, run {expected_run_ids}) + drift consumption started in the background")
+    print(f"[smoke] telemetry sync (real OaiReplaySource, speed=0, run {expected_run_ids}) started in the background")
 
     try:
         print(
@@ -159,7 +165,7 @@ def main() -> int:
 
         # --- the forced trigger (prompt2.md Step 7's explicit requirement) -----------------------
         # The fidelity-warming loop above can itself have already enqueued a genuine, naturally-
-        # fired fidelity-based trigger (Module 12's own check_fidelity_trigger) ahead of the forced
+        # fired per-component fidelity trigger (ComponentAdaptationPolicy) ahead of the forced
         # one below — real, not a bug, but it would make max_drift_events=1 pick that one up
         # INSTEAD of the forced trigger, defeating the determinism this script exists to provide.
         # Drained (never silently lost — logged) so the forced trigger below is guaranteed to be
@@ -180,7 +186,7 @@ def main() -> int:
             component=FORCED_TRIGGER_COMPONENT,
             severity=FORCED_TRIGGER_SEVERITY,
             timestamp=datetime.now(timezone.utc),
-            trigger_type="external_drift",
+            trigger_type="fidelity_degradation",  # internal only — external drift is permanently disabled
             metadata={"forced": True, "reason": "prompt2.md Step 7 end-to-end smoke test"},
         )
         orchestrator._enqueue_trigger(forced_trigger)  # noqa: SLF001 - this script's own deliberate forced injection

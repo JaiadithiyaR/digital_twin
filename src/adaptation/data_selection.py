@@ -7,9 +7,10 @@ had — genuinely shared, not agent-specific.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -72,6 +73,20 @@ def with_dependency_ground_truth(
             )
         df[output_field] = df[ground_truth_col]
     return df
+
+
+def with_reference_data(
+    recent_train_df: pd.DataFrame, reference_df: pd.DataFrame | None, recent_weight: float = 1.0,
+) -> tuple[pd.DataFrame, np.ndarray | None]:
+    """Training set = reference rows (e.g. the original TRAIN pool production was bootstrapped
+    on) followed by the recent window's training rows, plus per-row weights (reference 1.0,
+    recent `recent_weight`) — or the recent rows alone and `None` when there is no reference.
+    Only the training side is ever augmented; held-out evaluation stays purely recent."""
+    if reference_df is None or len(reference_df) == 0:
+        return recent_train_df, None
+    combined = pd.concat([reference_df, recent_train_df], ignore_index=True, sort=False)
+    weights = np.concatenate([np.ones(len(reference_df)), np.full(len(recent_train_df), float(recent_weight))])
+    return combined, weights
 
 
 def iso(value: Any) -> str:

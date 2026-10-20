@@ -1,9 +1,10 @@
 [project]
 name = "ai-self-adaptive-digital-twin"
-version = "0.1.0"
-description = "AI-Driven Self-Adaptive Network Digital Twin platform (NS-3/5G-LENA telemetry, dynamic DT, PPO-driven adaptation, LLM-assisted regeneration/expand-scope, agentic verification, RAG, lifecycle management)."
+version = "0.2.0"
+description = "AI-driven self-adaptive digital twin of a real 5G OAI RAN: replayed OAI KPI telemetry, 7 dependency-aware KPI prediction components, deterministic per-component fidelity, an LLM+RAG decision agent, sandboxed recalibrate/regenerate/expand-scope agents, a deterministic verification gate, hot swap, and lifecycle auditing."
 requires-python = ">=3.12"
 readme = "README.md"
+license = { text = "MIT" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -12,6 +13,17 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# LLM-generated candidate models saved as results are reproduced verbatim, never linted.
+extend-exclude = ["baselines/results", "baselines/results_archive_*", "archive", "data"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Entry-point scripts put the repo on sys.path / pick a matplotlib backend before importing.
+"scripts/*" = ["E402"]
+"baselines/*" = ["E402"]
+"tests/*" = ["E402"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from baselines import run_all  # noqa: E402
@@ -29,6 +31,12 @@ from src.common.config import load_secrets, load_settings  # noqa: E402
 
 SETTINGS = load_settings()
 SECRETS = load_secrets()
+
+# Bootstraps on the real OAI TRAIN split and replays run 7 from it.
+pytestmark = pytest.mark.skipif(
+    not SETTINGS.resolve_path("data/processed/oai/train.parquet").exists(),
+    reason="data/processed/oai/train.parquet not built — run scripts/build_oai_dataset.py",
+)
 
 _GENERIC_CANDIDATE_TEMPLATE = '''
 import pandas as pd
@@ -119,7 +127,7 @@ def test_rule_based_mode_over_a_short_run7_slice_produces_the_required_outputs(t
         }
         summary = run_all.run_mode(
             "rule_based", mode_cfg, seed=1, n_seeds=1, settings=SETTINGS, secrets=SECRETS,
-            train_df=train_df, static_prefix=static_prefix, cycles=5, rag_kb=None,
+            train_df=train_df, static_prefix=static_prefix, max_windows=5, rag_kb=None,
             replay_run_ids=[7], fake_llm_client=_FakeLLMClient(),
         )
     finally:

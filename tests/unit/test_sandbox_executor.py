@@ -8,12 +8,10 @@ be proven correct for real.
 
 from __future__ import annotations
 
-import os
 import time
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.common.config import load_settings
 from src.sandbox.executor import SandboxExecutor
@@ -105,6 +103,23 @@ def test_valid_candidate_is_accepted_with_real_metrics_and_artifact(tmp_path):
     assert result.required_features == ("a", "b")
     assert result.artifact_bytes is not None and len(result.artifact_bytes) > 0
     assert result.eval_predictions is not None and len(result.eval_predictions) == 15
+
+
+def test_same_second_measurements_never_reach_the_candidate(tmp_path):
+    """A candidate that reads its own same-second label (here `dl_bler`, or the observable
+    `wb_cqi_avg`) must fail — those columns are stripped before the sandbox sees the data."""
+    train_X, train_y, eval_X, eval_y = _small_dataset()
+    leaky = VALID_SOURCE.replace('REQUIRED_FEATURES = ("a", "b")', 'REQUIRED_FEATURES = ("a", "dl_bler")')
+    for column in ("dl_bler", "wb_cqi_avg"):
+        source = leaky.replace('"dl_bler"', f'"{column}"')
+        result = _executor(tmp_path).run_candidate(
+            source_code=source, class_name="Rebuilt", expected_component_name="throughput",
+            expected_output_field="throughput_mbps_pred", target_column="t",
+            train_features=train_X.assign(**{column: train_y.to_numpy()}), train_target=train_y,
+            eval_features=eval_X.assign(**{column: eval_y.to_numpy()}), eval_target=eval_y,
+        )
+        assert result.accepted is False and result.stage == "train", (column, result.stage, result.error)
+        assert column in (result.error or "")
 
 
 def test_syntax_error_rejected_without_spawning_a_subprocess(tmp_path):

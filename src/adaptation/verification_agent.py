@@ -21,9 +21,11 @@ Two layers, kept structurally separate:
 Candidate predictions are supplied as plain data (never a live instance to `.predict()` on) —
 the sandbox boundary Regeneration/Expand-Scope already established. The production ("before")
 baseline IS re-evaluated here, via an optional `production_component_factory`, on the exact same
-held-out data as the candidate. A brand-new (expand-scope) component has no baseline: the gate
-then requires only that the candidate's own FidelityScore is well-defined (not
-`insufficient_history`) — REJECT fail-safe otherwise, never a fabricated old score.
+held-out data as the candidate. A brand-new (expand-scope) component has no production model: its
+"old" side is a naive reference predictor supplied as data (persistence `y_{t-1}`), and the same
+`new > old + delta` gate applies, both scored against one shared, isolated normalization
+reference (`_score_against_reference`). Without a reference baseline, the gate requires only a
+well-defined candidate FidelityScore — REJECT fail-safe otherwise, never a fabricated old score.
 
 Normalization sharing: production is evaluated with `update_window=True` immediately before the
 candidate with `update_window=False`, on the same `FidelityEvaluator` window — production and
@@ -146,13 +148,19 @@ class VerificationAgent:
         candidate_predictions: "pd.Series | np.ndarray",
         *,
         production_component_factory: "Callable[[], DTComponent] | None" = None,
+        baseline_predictions: "pd.Series | np.ndarray | None" = None,
         drift_context: str | None = None,
         rag_knowledge_base: "RagKnowledgeBase | None" = None,
         cache_key: str | None = None,
     ) -> VerificationResult:
         """Verify `candidate_version` (must currently have `status == "candidate"`) and act on
         the result: promotes it to production on ACCEPT, marks it rejected on REJECT. Always
-        returns a `VerificationResult` recording exactly why."""
+        returns a `VerificationResult` recording exactly why.
+
+        `baseline_predictions` (plain data, used only when the component has NO production version
+        — a brand-new expand-scope component): a naive reference predictor on the same rows,
+        normally persistence `y_{t-1}`. The candidate must then beat it by `verification_delta`
+        under the unchanged fidelity formula — see `_score_against_reference`."""
         if candidate_version.status != "candidate":
             raise VerificationError(
                 f"version {candidate_version.version_id!r} for component "
@@ -194,35 +202,11 @@ class VerificationAgent:
                 interface_detail = f"production_component_factory() raised: {exc}"
         checks.append(DeterministicCheckResult("interface_identity_consistent", interface_ok, interface_detail))
 
-        # --- "tests pass" / "evaluation succeeded" / "no invalid output" -------------------------
         length_ok = len(eval_target_arr) > 0 and len(eval_target_arr) == len(candidate_preds_arr)
-        checks.append(
-            DeterministicCheckResult(
-                "evaluation_ran",
-                length_ok,
-                f"eval_target has {len(eval_target_arr)} row(s), candidate_predictions has {len(candidate_preds_arr)} row(s)",
-            )
-        )
-        output_finite = length_ok and bool(np.all(np.isfinite(candidate_preds_arr)))
-        checks.append(
-            DeterministicCheckResult(
-                "no_invalid_output",
-                output_finite,
-                "all candidate predictions are finite"
-                if output_finite
-                else "candidate predictions are empty, length-mismatched, or contain NaN/Inf",
-            )
-        )
-
-        # --- recompute RMSE/MAE/Wasserstein/MK-MMD/FidelityScore — the ONLY deterministic
-        # authority for this formula (Module 12); never trusts the candidate's own self-reported
-        # evaluation_metrics/fidelity_before/fidelity_after for this decision.
-        fidelity_before: float | None = None
-        fidelity_after: float | None = None
-        fidelity_before_result: FidelityResult | None = None
-        fidelity_after_result: FidelityResult | None = None
         baseline_version = self._model_registry.get_current_version(component)
 
+        # --- production ("before") predictions on the SAME held-out rows ------------------------
+        production_preds: np.ndarray | None = None
         if baseline_version is not None and production_component_factory is None:
             checks.append(
                 DeterministicCheckResult(
@@ -238,18 +222,10 @@ class VerificationAgent:
                 production_instance = production_component_factory()  # type: ignore[misc]
                 self._model_registry.load_artifact_into(production_instance, baseline_version)
                 production_preds = np.asarray(production_instance.predict(eval_features), dtype=float)
-                fidelity_before_result = self._fidelity_evaluator.evaluate(
-                    component, eval_target_arr, production_preds, update_window=True
-                )
-                fidelity_before = fidelity_before_result.fidelity_score
-                checks.append(
-                    DeterministicCheckResult(
-                        "production_baseline_evaluable",
-                        True,
-                        f"production version {baseline_version.version_id} evaluated on the same held-out set",
-                    )
-                )
+                if len(production_preds) != len(eval_target_arr):
+                    raise ValueError(f"returned {len(production_preds)} predictions for {len(eval_target_arr)} rows")
             except Exception as exc:
+                production_preds = None
                 checks.append(
                     DeterministicCheckResult(
                         "production_baseline_evaluable",
@@ -258,20 +234,142 @@ class VerificationAgent:
                     )
                 )
 
-        if length_ok and output_finite:
-            fidelity_after_result = self._fidelity_evaluator.evaluate(
-                component, eval_target_arr, candidate_preds_arr, update_window=False
+        # --- which held-out rows can be scored at all ----------------------------------------------
+        # A row with no ground truth can't be scored, and a row the production model itself can't
+        # predict (a residual component's legitimately-NaN first tick of a session, no y_{t-1}
+        # anchor) isn't comparable — both are excluded for BOTH models alike, the same masking the
+        # live fidelity cycle applies. The candidate must still be finite on every scored row.
+        reference_preds: np.ndarray | None = None
+        if baseline_version is None and baseline_predictions is not None:
+            reference = np.asarray(baseline_predictions, dtype=float)
+            if len(reference) == len(eval_target_arr):
+                reference_preds = reference
+            else:
+                checks.append(
+                    DeterministicCheckResult(
+                        "reference_baseline_evaluable", False,
+                        f"baseline_predictions has {len(reference)} row(s) for {len(eval_target_arr)} target row(s)",
+                    )
+                )
+
+        scored_mask = np.isfinite(eval_target_arr) if length_ok else np.zeros(0, dtype=bool)
+        if production_preds is not None:
+            scored_mask = scored_mask & np.isfinite(production_preds)
+        if reference_preds is not None and length_ok:
+            scored_mask = scored_mask & np.isfinite(reference_preds)
+        n_scored = int(scored_mask.sum())
+
+        # --- "tests pass" / "evaluation succeeded" / "no invalid output" -------------------------
+        evaluation_ok = length_ok and n_scored >= 2  # MK-MMD needs >= 2 samples per side
+        checks.append(
+            DeterministicCheckResult(
+                "evaluation_ran",
+                evaluation_ok,
+                f"eval_target has {len(eval_target_arr)} row(s), candidate_predictions has "
+                f"{len(candidate_preds_arr)} row(s), {n_scored} scorable row(s) (finite ground truth"
+                + (" and production prediction" if production_preds is not None else "")
+                + ")",
             )
-            fidelity_after = fidelity_after_result.fidelity_score
+        )
+        output_finite = evaluation_ok and bool(np.all(np.isfinite(candidate_preds_arr[scored_mask])))
+        checks.append(
+            DeterministicCheckResult(
+                "no_invalid_output",
+                output_finite,
+                "all candidate predictions on scorable rows are finite"
+                if output_finite
+                else "candidate predictions are empty, length-mismatched, or contain NaN/Inf on scorable rows",
+            )
+        )
+
+        # --- recompute RMSE/MAE/Wasserstein/MK-MMD/FidelityScore — the ONLY deterministic
+        # authority for this formula (Module 12); never trusts the candidate's own self-reported
+        # evaluation_metrics/fidelity_before/fidelity_after for this decision.
+        fidelity_before: float | None = None
+        fidelity_after: float | None = None
+        fidelity_before_result: FidelityResult | None = None
+        fidelity_after_result: FidelityResult | None = None
+        scored_target = eval_target_arr[scored_mask] if evaluation_ok else None
+
+        if production_preds is not None and evaluation_ok:
+            try:
+                fidelity_before_result = self._fidelity_evaluator.evaluate(
+                    component, scored_target, production_preds[scored_mask], update_window=True
+                )
+                fidelity_before = fidelity_before_result.fidelity_score
+                checks.append(
+                    DeterministicCheckResult(
+                        "production_baseline_evaluable",
+                        True,
+                        f"production version {baseline_version.version_id} evaluated on the same "  # type: ignore[union-attr]
+                        f"{n_scored} held-out row(s)",
+                    )
+                )
+            except Exception as exc:
+                checks.append(
+                    DeterministicCheckResult(
+                        "production_baseline_evaluable",
+                        False,
+                        f"failed to evaluate current production version {baseline_version.version_id}: {exc}",  # type: ignore[union-attr]
+                    )
+                )
+
+        if output_finite:
+            try:
+                fidelity_after_result = self._fidelity_evaluator.evaluate(
+                    component, scored_target, candidate_preds_arr[scored_mask], update_window=False
+                )
+                fidelity_after = fidelity_after_result.fidelity_score
+            except Exception as exc:
+                checks.append(DeterministicCheckResult("candidate_evaluable", False, f"fidelity evaluation failed: {exc}"))
 
         verification_delta = self._settings.adaptation.verification_delta
         fidelity_delta: float | None = None
 
-        if baseline_version is None:
+        if baseline_version is None and reference_preds is not None:
+            # A brand-new component: there is no production model, so the "old" side of the gate
+            # is the naive reference predictor (persistence). Both are scored on the same rows
+            # against ONE shared, isolated normalization reference — the live evaluator has no
+            # history for a never-before-seen component, which would make the gate unpassable.
+            scored = (
+                self._score_against_reference(component, scored_target, reference_preds[scored_mask], candidate_preds_arr[scored_mask])
+                if output_finite else None
+            )
+            if scored is not None:
+                fidelity_before_result, fidelity_after_result = scored
+                fidelity_before = fidelity_before_result.fidelity_score
+                fidelity_after = fidelity_after_result.fidelity_score
+            checks.append(
+                DeterministicCheckResult(
+                    "reference_baseline_evaluable", fidelity_before is not None,
+                    f"no production version exists for {component!r}; reference (persistence) baseline scored on "
+                    f"{n_scored} row(s)" if fidelity_before is not None else
+                    "reference (persistence) baseline could not be scored (too few rows for a normalization reference)",
+                )
+            )
+            if fidelity_before is not None and fidelity_after is not None:
+                fidelity_delta = fidelity_after - fidelity_before
+                passed = fidelity_after > fidelity_before + verification_delta
+                checks.append(
+                    DeterministicCheckResult(
+                        "fidelity_improved", passed,
+                        f"new component FidelityScore ({fidelity_after:.4f}) {'>' if passed else 'is NOT >'} "
+                        f"persistence baseline y_(t-1) ({fidelity_before:.4f}) + verification_delta ({verification_delta})",
+                    )
+                )
+            else:
+                checks.append(
+                    DeterministicCheckResult(
+                        "fidelity_improved", False,
+                        "FidelityScore of the new component and/or its reference baseline is not computable — fail-safe REJECT",
+                    )
+                )
+        elif baseline_version is None:
             # No prior production version exists for this component at all (the expand-scope
             # case, or a component whose production version has since been rolled back to
-            # nothing) — the primary regression criterion is structurally inapplicable. Accepting
-            # requires only that the candidate's own FidelityScore be well-defined.
+            # nothing) and no reference baseline was supplied — the primary regression criterion
+            # is structurally inapplicable. Accepting requires only that the candidate's own
+            # FidelityScore be well-defined.
             if fidelity_after is not None:
                 checks.append(
                     DeterministicCheckResult(
@@ -356,6 +454,28 @@ class VerificationAgent:
             explanation=explanation,
             llm_used=llm_used,
         )
+
+    def _score_against_reference(
+        self, component: str, y_true: np.ndarray, reference: np.ndarray, candidate: np.ndarray
+    ) -> tuple[FidelityResult, FidelityResult] | None:
+        """FidelityScore of a reference predictor and of a candidate on the same rows, normalized
+        against ONE shared rolling window built from both models' errors on consecutive chunks of
+        those rows (alternately, so neither side defines the scale alone). Uses a fresh, isolated
+        `FidelityEvaluator` — the formula is Module 12's, unchanged; only the reference window is
+        built here because a new component has no live history. None if there are too few rows
+        for `min_history_for_normalization` chunks of >= 2 rows each (MK-MMD needs 2 per side)."""
+        n_chunks = self._settings.fidelity.min_history_for_normalization
+        if len(y_true) < 2 * n_chunks:
+            return None
+        evaluator = FidelityEvaluator(self._settings.fidelity)
+        for idx in np.array_split(np.arange(len(y_true)), n_chunks):
+            evaluator.evaluate(component, y_true[idx], reference[idx], update_window=True)
+            evaluator.evaluate(component, y_true[idx], candidate[idx], update_window=True)
+        before = evaluator.evaluate(component, y_true, reference, update_window=False)
+        after = evaluator.evaluate(component, y_true, candidate, update_window=False)
+        if before.fidelity_score is None or after.fidelity_score is None:
+            return None
+        return before, after
 
     # --- agentic reasoning layer (informational only — see module docstring / rule 9) ------------
 

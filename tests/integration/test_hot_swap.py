@@ -23,6 +23,7 @@ from __future__ import annotations
 import time
 
 import pandas as pd
+import pytest
 
 from src.adaptation.decision_agent import DecisionOutput
 from src.adaptation.regeneration_agent import _GeneratedComponentCode
@@ -35,6 +36,13 @@ from src.main import ContinuousOrchestrator
 
 SETTINGS = load_settings()
 SECRETS = load_secrets()
+
+# initialize() bootstrap-trains the 7 components on the real OAI TRAIN split.
+pytestmark = pytest.mark.skipif(
+    not SETTINGS.resolve_path("data/processed/oai/train.parquet").exists(),
+    reason="data/processed/oai/train.parquet not built — run scripts/build_oai_dataset.py",
+)
+
 MIN_HISTORY_ROWS = 220
 ACCUMULATION_TIMEOUT_SECONDS = 60.0
 
@@ -120,11 +128,14 @@ def _fast_orchestrator(tmp_path) -> ContinuousOrchestrator:
         "telemetry": SETTINGS.telemetry.model_copy(
             update={"mock": SETTINGS.telemetry.mock.model_copy(update={"emit_interval_seconds": 0.05, "num_sessions": 10, })}
         ),
-        "drift": SETTINGS.drift.model_copy(update={"mock": SETTINGS.drift.mock.model_copy(update={"emit_interval_seconds": 5.0})}),
         "lifecycle": SETTINGS.lifecycle.model_copy(
             update={"records_path": str(tmp_path / "lifecycle.jsonl"), "reports_dir": str(tmp_path / "reports")}
         ),
         "rag": SETTINGS.rag.model_copy(update={"chroma_path": str(tmp_path / "chroma")}),
+        "logging": SETTINGS.logging.model_copy(update={  # keep run logs out of the repo's logs/
+            "component_fidelity_log": str(tmp_path / "component_fidelity.csv"),
+            "adaptation_decisions_log": str(tmp_path / "adaptation_decisions.jsonl"),
+        }),
     }
     fast_settings = SETTINGS.model_copy(update=overrides)
     orchestrator = ContinuousOrchestrator(fast_settings, SECRETS)
@@ -174,7 +185,7 @@ def test_accepted_regenerate_candidate_hot_swaps_into_live_serving(tmp_path):
             orchestrator.run_prediction_and_fidelity_cycle()
             time.sleep(0.05)
 
-        trigger = AdaptationTrigger(component="dl_bler", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="external_drift")
+        trigger = AdaptationTrigger(component="dl_bler", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="fidelity_degradation")
         orchestrator._run_adaptation_cycle(trigger)  # noqa: SLF001 - directly exercising the real cycle
     finally:
         orchestrator.stop()
@@ -225,7 +236,7 @@ def test_rejected_candidate_never_hot_swaps(tmp_path):
             assert time.monotonic() - wait_start < ACCUMULATION_TIMEOUT_SECONDS, "live D1 history never accumulated enough rows"
             time.sleep(0.1)
 
-        trigger = AdaptationTrigger(component="dl_bler", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="external_drift")
+        trigger = AdaptationTrigger(component="dl_bler", severity=0.5, timestamp=pd.Timestamp.now(tz="UTC"), trigger_type="fidelity_degradation")
         orchestrator._run_adaptation_cycle(trigger)  # noqa: SLF001
     finally:
         orchestrator.stop()

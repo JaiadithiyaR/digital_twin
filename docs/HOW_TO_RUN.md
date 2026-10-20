@@ -59,7 +59,7 @@ auto-skips unless a real `GOOGLE_API_KEY`/`GEMINI_API_KEY` is configured.
 ## 3. Build the real OAI dataset (one-time, before first bootstrap)
 
 Reads the read-only OAI export at `config.data.oai_root` (default
-`/home/harie06/oai_db/data/rankpi_kpi/`) and writes the model-ready, config-driven
+`/path/to/oai_db/data/rankpi_kpi/`) and writes the model-ready, config-driven
 train/val/test splits (`config.data.splits` — never hardcoded run ids) this system trains and
 replays from. Never copies the raw CSVs into this repo.
 
@@ -102,7 +102,7 @@ python -m src.main --mode demo                        # OAI-schema-shaped mock t
 python -m src.main --mode live                         # real OAI RAN KPI replay (SOURCE=OAI_RAN_REPLAY),
                                                         # streamed from data/processed/oai/ (step 3) in
                                                         # timestamp order at config.telemetry.replay.speed
-python -m src.main --mode demo --max-drift-events 1    # bounded run — stop after one adaptation cycle
+python -m src.main --mode demo --max-adaptations 1     # bounded run — stop after one adaptation cycle
 ```
 
 This is the real continuous loop (`ContinuousOrchestrator`): telemetry -> preprocessing ->
@@ -132,7 +132,7 @@ python scripts/run_oai_e2e_smoke.py
 
 # All four baseline experiment modes (static / periodic_retrain / rule_based / full) over the
 # same real OAI TEST-split replay/seed/fidelity settings, for comparison
-python scripts/run_baselines.py --mode full
+python baselines/run_all.py   # then: python baselines/stats.py
 ```
 
 Each prints: whether an LLM/RAG were available, live telemetry row accumulation progress, the

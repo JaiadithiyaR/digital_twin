@@ -16,7 +16,7 @@ validation/quarantine path is genuinely tested end to end — mirroring
 
 from __future__ import annotations
 
-import time
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -58,6 +58,10 @@ class MockDriftSource(DriftSource):
         self._realtime = realtime
         self._rng = np.random.default_rng(config.seed)
         self._closed = False
+        # Interruptible inter-event wait: close() must wake a consumer blocked between events
+        # promptly, not after a full emit_interval_seconds (30s by default) — otherwise the
+        # orchestrator's bounded stop() join times out.
+        self._close_event = threading.Event()
 
     @classmethod
     def from_settings(
@@ -114,7 +118,8 @@ class MockDriftSource(DriftSource):
             yield self._generate_event()
             emitted += 1
             if self._realtime and not self._closed and (self._max_events is None or emitted < self._max_events):
-                time.sleep(self._config.emit_interval_seconds)
+                self._close_event.wait(self._config.emit_interval_seconds)
 
     def close(self) -> None:
         self._closed = True
+        self._close_event.set()

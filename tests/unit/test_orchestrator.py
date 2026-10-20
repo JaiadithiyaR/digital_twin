@@ -142,3 +142,23 @@ def test_run_predictions_never_calls_predict_on_untrained_component_even_mid_cha
     orchestrator = DTOrchestrator(registry)
     with pytest.raises(OrchestratorError):
         orchestrator.run_predictions(pd.DataFrame())
+
+
+def test_dependency_output_field_listed_in_required_features_is_wired_not_demanded():
+    """An LLM-generated candidate may list its dependency's OUTPUT_FIELD in REQUIRED_FEATURES
+    too; the orchestrator must wire it from the dependency's prediction instead of demanding it
+    from the raw features (this broke every prediction cycle after such a hot swap)."""
+
+    class AdderListingItsDependencyColumn(DummyAdder):
+        REQUIRED_FEATURES = ("y", "a_pred")
+
+    doubler, adder = DummyDoubler(), AdderListingItsDependencyColumn()
+    doubler._trained = adder._trained = True
+    registry = DTModelRegistry()
+    registry.register(doubler)
+    registry.register(adder)
+    features = pd.DataFrame({"x": [1.0, 2.0], "y": [10.0, 20.0]})  # no "a_pred" column
+
+    result = DTOrchestrator(registry).run_predictions(features)
+
+    assert result["dummy_adder"].tolist() == [12.0, 24.0]

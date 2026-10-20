@@ -1,0 +1,113 @@
+
+=== Running mode='rule_based' seed=1 -> baselines/results/rule_based ===
+[rule_based-seed1] window 10/62  F_U=insufficient_history  lowest=-
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=dl_bler
+  trigger_type=fidelity_degradation severity=0.28922933461155886
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.4058032436210799 -> 0.434136365429445)
+  version dl_bler-v1 -> dl_bler-v2
+  duration_seconds=6.83
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=1 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.3122785336232017)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=48.23
+────────────────────────────────────────────────────────────────────────────────
+{"timestamp": "2026-10-20T11:15:17+0000", "level": "WARNING", "logger": "src.adaptation.regeneration_agent", "message": "regeneration candidate rejected by sandbox", "component": "regeneration_agent", "component_name": "ul_bler", "attempt": 1, "max_attempts": 2, "stage": "import", "error": "ImportError: cannot import name 'ResidualDTComponent' from 'src.dt_models.base' (src/dt_models/base.py)"}
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=2 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.27149558345284464)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=59.30
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=3 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.21896843558939616)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=39.70
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=4 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.11540903342458886)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=50.22
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=5 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.1644112140793711)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=22.85
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=1 strategy=regenerate
+  gate_result=ACCEPT  (0.35943147719976654 -> 0.4251544281665661)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v2
+  duration_seconds=28.14
+────────────────────────────────────────────────────────────────────────────────
+[rule_based-seed1] window 20/62  F_U=0.7978  lowest=dl_bler
+[rule_based-seed1] window 30/62  F_U=0.8228  lowest=ul_bler
+[rule_based-seed1] window 40/62  F_U=0.8261  lowest=ul_bler
+[rule_based-seed1] window 50/62  F_U=0.8181  lowest=ul_bler
+[rule_based-seed1] window 60/62  F_U=0.8245  lowest=dl_prb
+[rule_based-seed1] window 62/62  F_U=0.8262  lowest=ul_bler
+=== mode='rule_based' seed=1 complete: 2 accepted, 5 rejected, 0 deployed ungated over 62 windows ===
+
+All requested modes complete. Summary: baselines/results/run_all_summary.csv
+EXIT 0
+# Ablation statistics (run 8, 60 s windows)
+
+- Runs: static/seed1, periodic_retrain/seed1, rule_based/seed1, full_system/seed1, full_system/seed2, full_system/seed3
+- Common windows scored by every run: 62
+- Frozen normalization reference: pooled min/max of squared metrics over all runs (`frozen_reference.json`), epsilon=1e-08
+- Moving-block bootstrap: block=5 windows, 10000 resamples, seed=0
+
+## Mean windowed fidelity (frozen scale)
+
+            mode  n_runs  n_windows  mean_F_frozen  ci95_low  ci95_high  sd_across_windows  sd_across_runs  mean_norm_rmse  sd_norm_rmse  mean_norm_mae  sd_norm_mae  mean_norm_wasserstein  sd_norm_wasserstein  mean_norm_mk_mmd  sd_norm_mk_mmd  adaptation_wall_seconds  adaptation_cpu_seconds    llm_tokens  llm_cost_usd  n_attempts  n_accepted  n_rejected  n_deployed_ungated  n_agent_failures  n_triggers
+          static       1         62       0.819636  0.772999   0.858419           0.095747             NaN        0.082826      0.159675       0.110820     0.225548               0.086803             0.170129          0.441007        0.178429                 0.000000                0.000000      0.000000      0.000000         0.0         0.0         0.0                 0.0               0.0         3.0
+periodic_retrain       1         62       0.812190  0.767634   0.849022           0.093566             NaN        0.082597      0.159296       0.110832     0.225804               0.090457             0.178012          0.467354        0.196811               518.584137             4779.260000      0.000000      0.000000        42.0         0.0         0.0                42.0               0.0         3.0
+      rule_based       1         62       0.817365  0.772173   0.855786           0.094448             NaN        0.082676      0.159397       0.110524     0.224899               0.086582             0.169609          0.450759        0.182637               255.257915              148.610000 174662.000000      0.016326         7.0         2.0         5.0                 0.0               0.0         3.0
+     full_system       3         62       0.815530  0.770791   0.852503           0.092788        0.000179        0.082641      0.159353       0.110085     0.224166               0.085794             0.167885          0.459362        0.187604               116.387835              137.526667  92325.333333      0.008110         4.0         3.0         1.0                 0.0               0.0         3.0
+
+## Pairwise tests (Wilcoxon signed-rank, Holm-adjusted)
+
+     mode_a           mode_b  n_windows  mean_diff  ci95_low  ci95_high  n_nonzero     W            p      r_rb       p_holm  significant_0.05
+full_system           static         62  -0.004107 -0.005750  -0.002133         52  65.5 1.075071e-08 -0.904935 4.300284e-08              True
+full_system periodic_retrain         62   0.003340  0.001224   0.006454         55 357.0 5.393712e-04  0.536364 5.393712e-04              True
+full_system       rule_based         62  -0.001835 -0.002742  -0.000675         52  65.5 1.102766e-08 -0.904935 4.300284e-08              True
+ rule_based periodic_retrain         62   0.005175  0.003028   0.008337         52 143.0 6.613709e-07  0.792453 1.322742e-06              True
+
+Caveat: the Wilcoxon test assumes independent pairs; consecutive 60 s windows are autocorrelated, so its p-values are optimistic. The block-bootstrap CI of the mean difference accounts for that dependence and should be read as the primary evidence.
+
+Wrote baselines/results/stats
+            mode  n_runs  mean_unified_fidelity  mean_unified_fidelity_std  pct_time_above_threshold mean_recovery_time_windows  n_triggers  n_adaptations  n_accepted  n_rejected  total_adaptation_duration_seconds  n_llm_decisions  n_llm_fallbacks  fallback_rate  run_invalid_fallback_rate_too_high  llm_input_tokens  llm_output_tokens  llm_cached_tokens  llm_cache_hit_share  llm_cost_usd  llm_time_seconds  budget_spent_usd
+          static       1               0.795090                   0.000000                     100.0                       None           3              0           0           0                           0.000000                0                0            0.0                               False                 0                  0                  0             0.000000      0.000000          0.000000          0.000000
+periodic_retrain       1               0.811263                   0.000000                     100.0                       None           3              0           0           0                         518.584137                0                0            0.0                               False                 0                  0                  0             0.000000      0.000000          0.000000          0.000000
+      rule_based       1               0.793197                   0.000000                     100.0                       None           3              7           2           5                         255.257915                0                0            0.0                               False            159205              15457              77028             0.483829      0.016326        216.729690          0.016326
+     full_system       3               0.793832                   0.000516                     100.0                       None           9             12           9           3                         349.163505               12                0            0.0                               False            248312              28664             159558             0.642571      0.024330        337.835432          0.024330
+
+Wrote baselines/results/comparison/comparison.md, baselines/results/comparison/comparison.csv, and graphs under baselines/results/comparison/graphs
+Using MEASURED results from baselines/results/stats (frozen reference: 7 components)
+Writing figures to figures
+  wrote figures/fig1_fidelity_tracking.{pdf,png,csv}
+  wrote figures/fig2_metric_breakdown.{pdf,png,csv}
+  wrote figures/fig3_strategy_distribution.{pdf,png,csv}
+  wrote figures/fig4_cost_tradeoff.{pdf,png,csv}
+  wrote figures/fig5_recovery_and_gate.{pdf,png,csv}
+  wrote figures/fig6_significance.{pdf,png,csv}
+  wrote figures/fig7_kpi_tracking.{pdf,png,csv}
+ALLDONE

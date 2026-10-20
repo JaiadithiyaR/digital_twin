@@ -1,21 +1,26 @@
 {
   "mode":"full_system",
   "seed":1,
-  "cycles":15,
+  "window_seconds":60,
+  "n_windows":62,
   "run_ids":[
     8
   ],
-  "n_triggers":14,
-  "n_adaptations":14,
-  "n_accepted":1,
-  "n_rejected":13,
-  "n_decisions":14,
+  "n_triggers":3,
+  "n_attempts":4,
+  "n_adaptations":4,
+  "n_accepted":3,
+  "n_rejected":1,
+  "n_deployed_ungated":0,
+  "n_agent_failures":0,
+  "n_decisions":4,
   "n_fallbacks":0,
   "fallback_rate":0.0,
   "invalid":false,
   "incomplete_reason":null,
-  "mean_unified_fidelity":0.7960216944,
-  "total_duration_seconds":317.297585213,
-  "budget_spent_usd":0.0197483,
-  "out_dir":"\/home\/harie06\/dt_adaptation\/baselines\/results\/full_system\/seed_1"
+  "mean_unified_fidelity_runtime":0.793348427,
+  "adaptation_wall_seconds":144.975432706,
+  "adaptation_cpu_seconds":198.93,
+  "budget_spent_usd":0.0098151,
+  "out_dir":"baselines\/results\/full_system\/seed_1"
 }

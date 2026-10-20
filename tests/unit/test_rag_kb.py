@@ -13,9 +13,8 @@ import inspect
 import pytest
 
 from src.dt_models.d1_model_store import D1Store
-from src.registry.model_registry import ModelRegistry
 from src.rag.rag_kb import RagIngestor, RagKnowledgeBase, RagUnavailableError, chunk_text
-
+from src.registry.model_registry import ModelRegistry
 
 # --- chunk_text ------------------------------------------------------------------------------
 

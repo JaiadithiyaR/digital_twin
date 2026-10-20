@@ -1,5 +1,5 @@
-mode,n_runs,mean_unified_fidelity,mean_unified_fidelity_std,pct_time_above_threshold,mean_recovery_time_cycles,n_triggers,n_adaptations,n_accepted,n_rejected,total_adaptation_duration_seconds,n_llm_decisions,n_llm_fallbacks,fallback_rate,run_invalid_fallback_rate_too_high,llm_input_tokens,llm_output_tokens,llm_cached_tokens,llm_cache_hit_share,llm_cost_usd,llm_time_seconds,budget_spent_usd
-static,1,0.7942414105,0.0,100.0,,14,0,0,0,0.0,0,0,0.0,False,0,0,0,0.0,0.0,0.0,0.0
-periodic_retrain,1,0.8328140018,0.0,100.0,,21,21,3,18,241.235371576,0,0,0.0,False,0,0,0,0.0,0.0,0.0,0.0
-rule_based,1,0.7979686628,0.0,100.0,,14,9,1,8,227.937449787,0,0,0.0,False,118219,6986,70200,0.5938131772388533,0.009351300000000002,114.68916585099987,0.0093513
-full_system,3,0.7299035870333334,0.08173391830603076,100.0,1.0,44,41,4,37,1120.145925396,44,0,0.0,False,1056848,47678,599400,0.5671581911495315,0.07980100000000001,827.2459962379976,0.079801
+mode,n_runs,mean_unified_fidelity,mean_unified_fidelity_std,pct_time_above_threshold,mean_recovery_time_windows,n_triggers,n_adaptations,n_accepted,n_rejected,total_adaptation_duration_seconds,n_llm_decisions,n_llm_fallbacks,fallback_rate,run_invalid_fallback_rate_too_high,llm_input_tokens,llm_output_tokens,llm_cached_tokens,llm_cache_hit_share,llm_cost_usd,llm_time_seconds,budget_spent_usd
+static,1,0.7950904427,0.0,100.0,,3,0,0,0,0.0,0,0,0.0,False,0,0,0,0.0,0.0,0.0,0.0
+periodic_retrain,1,0.8112634006,0.0,100.0,,3,0,0,0,518.584137028,0,0,0.0,False,0,0,0,0.0,0.0,0.0,0.0
+rule_based,1,0.7931974125,0.0,100.0,,3,7,2,5,255.257915145,0,0,0.0,False,159205,15457,77028,0.4838290254703056,0.016326200000000003,216.72969000900048,0.0163262
+full_system,3,0.7938315132666666,0.0005160251981191798,100.0,,9,12,9,3,349.163505401,12,0,0.0,False,248312,28664,159558,0.6425706369406231,0.02432995,337.8354317420162,0.02432995

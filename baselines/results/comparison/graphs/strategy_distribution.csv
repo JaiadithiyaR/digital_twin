@@ -1,4 +1,3 @@
 strategy,rule_based,full_system
-expand_scope,5,4
-recalibrate,5,24
-regenerate,4,16
+recalibrate,1,9
+regenerate,6,3

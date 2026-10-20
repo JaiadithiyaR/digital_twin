@@ -22,10 +22,10 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import BaseModel
-
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
+from pydantic import BaseModel
+
 from src.common.config import load_settings
 from src.llm.google_client import (
     GoogleClient,

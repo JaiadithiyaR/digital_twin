@@ -21,7 +21,13 @@ from typing import Any
 import numpy as np
 
 from src.common.config import MockTelemetryConfig
-from src.data.oai_dataset import LAGS, MAC_FEATURE_BASES, ROLLING_WINDOWS_SECONDS, TARGET_COLUMNS
+from src.data.oai_dataset import (
+    LAGS,
+    MAC_FEATURE_BASES,
+    OBSERVABLE_KPI_COLUMNS,
+    ROLLING_WINDOWS_SECONDS,
+    TARGET_COLUMNS,
+)
 from src.telemetry.base import TelemetrySource
 
 _MOCK_RUN_ID = 0
@@ -107,13 +113,14 @@ class MockTelemetrySource(TelemetrySource):
             "dl_prb": dl_prb, "ul_prb": ul_prb, "dl_bler": dl_bler, "ul_bler": ul_bler,
         }
 
+        mac_avg_this_tick = {
+            "dl_curr_tbs": dl_curr_tbs, "dl_sched_rb": dl_sched_rb, "pusch_snr": pusch_snr,
+            "pucch_snr": pucch_snr, "wb_cqi": wb_cqi, "dl_mcs1": dl_mcs1, "ul_mcs1": ul_mcs1,
+            "phr": phr, "dl_bler": dl_bler, "ul_bler": ul_bler,
+        }
         features: dict[str, float] = {}
         for base in MAC_FEATURE_BASES:
-            avg_value = {
-                "dl_curr_tbs": dl_curr_tbs, "dl_sched_rb": dl_sched_rb, "pusch_snr": pusch_snr,
-                "pucch_snr": pucch_snr, "wb_cqi": wb_cqi, "dl_mcs1": dl_mcs1, "ul_mcs1": ul_mcs1,
-                "phr": phr, "dl_bler": dl_bler, "ul_bler": ul_bler,
-            }[base]
+            avg_value = mac_avg_this_tick[base]
             std_value = float(abs(rng.normal(0, 0.1 * (abs(avg_value) + 1e-6))))
             for raw_name, raw_value in ((f"{base}_avg", avg_value), (f"{base}_std", std_value)):
                 features.update(self._lag_and_rolling_features(session_history[raw_name], raw_value, raw_name))
@@ -149,6 +156,9 @@ class MockTelemetrySource(TelemetrySource):
         feature_keys = list(features.keys())
         if rng.random() < self._config.missing_feature_rate and feature_keys:
             del record[rng.choice(feature_keys)]
+        # Same-second observable MAC KPIs, exactly as the real dataset carries them (ground truth
+        # an expand-scope component may predict — never a feature).
+        record.update({name: mac_avg_this_tick[name.removesuffix("_avg")] for name in OBSERVABLE_KPI_COLUMNS})
 
         return record
 

@@ -59,6 +59,9 @@ class CleanTelemetryRecord(BaseModel):
     targets: dict[str, float | None]
     source: Literal["OAI_RAN_REPLAY", "MOCK"]
     quality: RecordQuality
+    # Same-second MAC KPIs (`oai_dataset.OBSERVABLE_KPI_COLUMNS`) — ground truth an expand-scope
+    # component may predict, never a model input. Optional: absent values are not data-quality issues.
+    observables: dict[str, float | None] = {}
 
     def target(self, name: str) -> float | None:
         return self.targets.get(name)

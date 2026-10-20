@@ -14,7 +14,23 @@ from src.adaptation.data_selection import (
     select_recent_window,
     time_split,
     with_dependency_ground_truth,
+    with_reference_data,
 )
+
+
+def test_with_reference_data_puts_reference_first_and_weights_recent_rows():
+    reference = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+    recent = pd.DataFrame({"x": [10.0, 11.0]})
+    combined, weights = with_reference_data(recent, reference, recent_weight=5.0)
+    assert combined["x"].tolist() == [1.0, 2.0, 3.0, 10.0, 11.0]
+    assert weights.tolist() == [1.0, 1.0, 1.0, 5.0, 5.0]
+
+
+def test_with_reference_data_without_a_reference_returns_recent_rows_unweighted():
+    recent = pd.DataFrame({"x": [10.0, 11.0]})
+    for reference in (None, pd.DataFrame({"x": []})):
+        combined, weights = with_reference_data(recent, reference, recent_weight=5.0)
+        assert combined is recent and weights is None
 
 
 def test_select_recent_window_excludes_rows_older_than_the_window():

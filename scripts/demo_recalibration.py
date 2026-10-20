@@ -195,7 +195,7 @@ def main() -> int:
         rag_knowledge_base=rag_kb,
     )
 
-    print(f"\n[demo] === verification result ===")
+    print("\n[demo] === verification result ===")
     print(f"  decision      = {verification_result.decision}")
     print(f"  explanation   = {verification_result.explanation}")
     final_production = registry.get_current_version("dl_bler")

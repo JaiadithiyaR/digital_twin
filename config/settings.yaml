@@ -12,7 +12,11 @@ environment: demo # "demo" | "live" — selects mock vs real (OAI replay) teleme
 # There is no database access anywhere in this system — only these already-exported flat CSVs.
 # ---------------------------------------------------------------------------
 data:
-  oai_root: "/home/harie06/oai_db/data/rankpi_kpi"
+  # Raw OAI CSV export, read only by scripts/build_oai_dataset.py (the processed tables in
+  # data/processed/oai/ are committed, so nobody needs the raw export just to run the system).
+  # Relative paths resolve against the repo root; set OAI_ROOT in .env to point at an export
+  # elsewhere on your machine (use a forward-slash/WSL path).
+  oai_root: "data/raw/rankpi_kpi"
   splits:
     # Run 10 was the originally-intended TEST split, but its CSV export is genuinely incomplete
     # (9/24 tables, all left as `.csv.partial`, export stalled ~6h with no process running) and
@@ -71,6 +75,10 @@ storage:
   d1_history_path: "data/artifacts/d1_history.parquet"
   d1_quarantine_path: "data/artifacts/d1_quarantine.parquet"
   history_retention_rows: 500000 # oldest rows pruned beyond this (historical analysis window)
+  # Min seconds between full D1 Parquet rewrites (0 = rewrite on every sync batch). Each rewrite
+  # re-serializes the whole table (~1s at 25k rows on a WSL /mnt/c mount), which otherwise caps
+  # live ingestion; in-memory D1 is always current, and stop() flushes anything outstanding.
+  persist_min_interval_seconds: 10.0
 
 # ---------------------------------------------------------------------------
 # Module 5–10 replacement — the 7 OAI KPI prediction components (prompt2.md Step 5). Dependency
@@ -120,14 +128,19 @@ fidelity:
   mk_mmd:
     kernel: rbf
     gamma: null # null => median-heuristic bandwidth
-  # Unified Fidelity Score + internal fidelity-based trigger (prompt.md §16a) — a system-health
-  # signal aggregating every component's FidelityScore_c into one number, and the deterministic
-  # (never LLM/PPO) trigger derived from it. Does NOT replace module 17's per-component acceptance
-  # gate.
-  unified_weights: null # null => equal weighting across all currently-enabled components (never hardcode unequal weights)
+  # Unified Fidelity Score (prompt.md §16a) — a system-health REPORTING aggregate of every
+  # component's FidelityScore_c. It no longer triggers adaptation (see the per-component policy below).
+  unified_weights: null # null => equal weighting across all currently-defined components (never hardcode unequal weights)
   unified_min_components: 2 # fewer well-defined component scores than this -> UnifiedFidelityScore is None (insufficient_history), same never-fabricate discipline as the per-component formula
-  trigger_threshold: 0.5 # trigger fires when UnifiedFidelityScore drops below this...
-  trigger_min_consecutive_evaluations: 3 # ...for this many consecutive evaluation cycles in a row (debounce/hysteresis — a single bad cycle must never fire a spurious adaptation)
+  # Per-component adaptation policy (src/fidelity/component_policy.py): each component c is
+  # adapted on its OWN FidelityScore_c, independently of every other component. The two values
+  # below are the defaults applied to every component:
+  trigger_threshold: 0.5 # component c is flagged when its FidelityScore_c drops below this...
+  trigger_min_consecutive_evaluations: 3 # ...for this many consecutive fresh evaluation cycles (debounce — a single bad cycle must never fire a spurious adaptation)
+  # Optional per-component overrides (unlisted components use the defaults above), e.g.
+  #   component_policies:
+  #     dl_rlc_delay: { threshold: 0.4, min_consecutive_evaluations: 4 }
+  component_policies: {}
 
 # ---------------------------------------------------------------------------
 # Module 11 — Drift detection interface (algorithm itself is external, prompt.md §0.19)
@@ -174,15 +187,29 @@ adaptation:
   # Phase 13 §2: at most one adaptation per component at a time; a second trigger for an
   # already-locked component is coalesced (merged, keeping the highest severity) rather than
   # queued as a separate cycle — see src/main.py's _enqueue_trigger/_pending_by_component.
-  lock_policy: coalesce # "queue" | "coalesce" | "defer" for a second drift event on a locked component
-  allow_concurrent_components: false # different components adapting concurrently — NOT implemented, must stay false (see Settings._forbid_unsupported_concurrent_components)
+  lock_policy: coalesce # "queue" | "coalesce" | "defer" for a second trigger on a component that is mid-adaptation
+  # Adaptations run on worker threads, so fidelity cycles never pause; different components can
+  # adapt at the same time (never two adaptations of the same component).
+  allow_concurrent_components: true
+  max_concurrent_adaptations: 2 # worker threads (each trains models / runs a sandbox / calls the LLM)
+  # Adaptation loop: a REJECTed or failed attempt is retried with the rejection details fed back to
+  # the decision agent and the adaptation agents, until a candidate is ACCEPTed, the component
+  # recovers above its threshold, or this many attempts have been made (then it stays flagged and
+  # its own policy re-triggers it later).
+  max_adaptation_attempts: 5
+  shutdown_wait_seconds: 20 # stop()/Ctrl-C: wait this long for in-flight adaptations, then record them as interrupted
   recalibration:
     training_window_hours: 24
     min_training_rows: 200
+    # Train on the original TRAIN pool + the recent window (recent rows weighted x recent_sample_weight),
+    # not the recent window alone (a few hundred rows early in a run can never match production).
+    include_reference_data: true
+    recent_sample_weight: 5.0
   regeneration:
     max_llm_iterations: 2 # LLM generates -> sandbox rejects -> LLM retries with the rejection reason as feedback, up to this many attempts
     training_window_hours: 48 # wider than recalibration's default — rebuilding a pipeline from scratch reasonably wants more history than a lightweight refit
     min_training_rows: 200
+    include_reference_data: true # the generated pipeline is trained on the TRAIN pool + recent window
   expand_scope:
     max_llm_iterations: 2 # shared retry budget for BOTH the design-proposal step (invalid name/target/dependencies) and the implementation-generation step (sandbox rejection)
     training_window_hours: 48 # a brand-new component has no prior deployment to lean on, same "wants more history" reasoning as regeneration
@@ -218,10 +245,12 @@ rag:
 # fidelity settings as the full system, for a fair comparison.
 # ---------------------------------------------------------------------------
 baselines:
-  cycles: 15 # prediction+fidelity cycles per mode run (config-driven — CLI --cycles overrides it)
+  window_seconds: 60 # one evaluation/decision window = 60 s of replayed DATA time (run 8 -> 62 windows); identical for every mode
+  max_windows: null # null = the whole TEST run; CLI --max-windows overrides it (smoke runs)
   seeds: [1, 2, 3] # phase13 §4: full_system is run once per seed, mean +/- std reported
   periodic_retrain:
-    interval_cycles: 20 # recalibrate ALL 7 components on a fixed schedule every N prediction+fidelity cycles — config-driven, never hardcoded
+    interval_seconds: 600 # recalibrate ALL 7 components every 10 min of replayed data, regardless of fidelity
+    use_verification_gate: false # blind retraining: deploy unconditionally (ablation step 1)
   rule_based:
     # Deterministic severity thresholds (never an LLM call) mapping a trigger's severity to a
     # strategy — the same closed 3-strategy enum Module 13 itself is constrained to.
@@ -241,7 +270,10 @@ llm:
   # real key (2026-09-24), not assumed. Never a hardcoded deprecated model ID — this is the ONLY
   # place it's set.
   model: "gemini-3.6-flash"
-  max_tokens: 8000
+  # Output cap per call — thinking tokens count toward it on Gemini thinking models. 8000 cut a
+  # regenerate response off mid-JSON in a live run (structured-output retry needed); code
+  # generation needs headroom. Only tokens actually generated are billed.
+  max_tokens: 32768
   # Unlike the old Anthropic Messages API, google-genai's GenerateContentConfig DOES expose a
   # real temperature control (verified directly against the installed SDK's types.py, not
   # assumed) — low temperature genuinely reduces sampling randomness on this provider.
@@ -257,7 +289,7 @@ llm:
   timeout_seconds: 90
   # Phase 13 §3.3 — explicit context caching of the static prompt prefix (one cache per
   # experiment run; deleted at the end of the run, including on error — see
-  # scripts/run_baselines.py). Caching is a pure transport/cost optimization: the assembled
+  # baselines/run_all.py). Caching is a pure transport/cost optimization: the assembled
   # prompt the model actually sees is always byte-identical to the uncached version (see
   # tests/unit/test_google_client.py's dedicated test).
   caching:
@@ -289,7 +321,10 @@ llm:
 logging:
   level: INFO
   format: json # "json" | "text"
-  log_dir: "logs"
+  log_dir: "logs" # full structured JSON log: logs/digital_twin.log (rotating)
+  component_fidelity_log: "logs/component_fidelity.csv" # one row per component per fidelity cycle (score, threshold, policy state)
+  adaptation_decisions_log: "logs/adaptation_decisions.jsonl" # one line per handled trigger — including skipped/failed attempts
+  console_transcript_dir: "logs/console" # plain-text copy of each `python -m src.main` run's console output (null disables)
 
 # ---------------------------------------------------------------------------
 # Module 19 — Lifecycle management / evaluation

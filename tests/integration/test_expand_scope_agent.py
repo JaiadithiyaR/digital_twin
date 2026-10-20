@@ -23,9 +23,8 @@ import time
 
 import pandas as pd
 
-from src.adaptation.expand_scope_agent import ExpandScopeAgent, _GeneratedComponentCode, _ProposedComponentDesign
+from src.adaptation.expand_scope_agent import ExpandScopeAgent, _ProposedComponentDesign
 from src.common.config import load_settings
-from src.data.oai_dataset import ALL_FEATURES
 from src.dt_models.base import DTComponent
 from src.dt_models.d1_model_store import D1Store
 from src.dt_models.dl_bler import DlBlerModel
@@ -39,10 +38,10 @@ from src.telemetry.preprocessing import TelemetryPreprocessor
 
 SETTINGS = load_settings()
 
-# A genuinely new target: a real raw feature column, never one of the 7 existing component
+# A genuinely new target: a same-second observable MAC KPI, never one of the 7 existing component
 # targets — mirrors prompt.md's own SINR worked example (a raw INPUT no existing component
 # predicts) using this OAI schema's real columns.
-_NEW_TARGET_COLUMN = "wb_cqi_avg_lag1"
+_NEW_TARGET_COLUMN = "wb_cqi_avg"
 _NEW_REQUIRED_FEATURES = ("dl_curr_tbs_avg_lag1", "pusch_snr_avg_lag1", "ue_count_cell_lag1", "bsr_avg_lag1")
 
 VALID_SOURCE = f"""

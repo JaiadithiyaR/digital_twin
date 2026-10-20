@@ -10,6 +10,7 @@ xgboost>=2.1
 
 # Charting (scripts/visualize_metrics.py only, not used in any deterministic module)
 matplotlib>=3.8
+seaborn>=0.13  # scripts/generate_ieee_figures.py styling (optional at runtime; matplotlib-only fallback)
 
 # LLM (decision & root-cause analysis / regeneration / expand-scope / verification / lifecycle reasoning)
 google-genai>=1.0

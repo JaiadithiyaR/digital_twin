@@ -13,12 +13,28 @@ dist/
 .venv/
 venv/
 
-# Secrets
+# Secrets — .env holds the API key and machine-specific paths; .env.example is the template
 .env
 *.pem
 *.key
 
-# Data / artifacts (generated at runtime — schemas live in code, not the blobs)
+# Editor / assistant / OS
+.claude/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*:Zone.Identifier
+
+# ---------------------------------------------------------------------------------------------
+# Data. COMMITTED: data/processed/oai/ (the processed OAI testbed tables everything runs on).
+# NOT committed: the raw OAI CSV export (lives outside the repo, see OAI_ROOT in .env.example)
+# and all runtime state, which every run rebuilds.
+# ---------------------------------------------------------------------------------------------
+data/raw/
+/rankpi_kpi/
+data/processed/*
+!data/processed/oai/
 data/bootstrap/*
 data/telemetry/*
 data/evaluation/*
@@ -27,55 +43,38 @@ data/artifacts/*
 !data/telemetry/.gitkeep
 !data/evaluation/.gitkeep
 !data/artifacts/.gitkeep
-
-# RAG persistent vector store
-rag_data/chroma/
-rag_data/**/*.chroma
-
-# Model registry artifacts (large binaries — tracked via registry metadata, not git)
 data/models/
-
-# Standalone single-agent demo scripts' storage (scripts/demo_*.py) — wiped and rebuilt fresh on
-# every run, never checked in, never the main application's real storage paths.
 data/demo_recalibration/
 data/demo_regeneration/
 data/demo_expand_scope/
-
-# scripts/run_oai_e2e_smoke.py's own dedicated storage subtree (prompt2.md Step 7's required
-# smoke test) — same rationale as the demo_* dirs above and the retired e2e_ns3_demo subtree.
 data/e2e_oai_smoke/
+data/agent_tests/
+
+# RAG vector store — rebuilt in seconds by `python scripts/ingest_rag.py`
+rag_data/chroma/
+rag_data/**/*.chroma
 
 # Candidate sandbox workspaces
 sandbox_workspaces/
 /tmp_candidates/
 
-# RETIRED (OAI migration, prompt2.md): NS-3/5G-LENA is no longer part of the runtime — see
-# archive/ns3_sim/README.md. Vendored ns-3-dev + contrib/nr (5G-LENA) source trees were an
-# external build dependency fetched by the retired scripts/setup_ns3.sh, not project-authored
-# code — excluded the same way a compiler toolchain would be. Kept gitignored under archive/ for
-# historical reference only; never built or run as part of this project's runtime anymore.
-archive/ns3_sim/ns-3-dev/
+# ---------------------------------------------------------------------------------------------
+# Results. COMMITTED: baselines/results/ (events, timelines, stats, graphs, run logs, the model
+# versions each run produced), figures/, reports/. NOT committed: each run's D1 replay copies
+# (byte-for-byte replays of data/processed/oai/test.parquet) and the pre-2026-10-20 results,
+# which used a leaky protocol and must not be cited.
+# ---------------------------------------------------------------------------------------------
+baselines/results/**/d1_*.parquet
+baselines/results_archive_*/
 
-# OAI replay export data (read-only, outside the repo at /home/harie06/oai_db/) is never copied
-# into git. Processed model-ready tables derived from it are regenerable, local-only artifacts.
-data/processed/
-
-# Safety net: raw OAI export CSVs must never enter git even if a copy ends up inside the repo
-# root by accident (e.g. a manual download/extract into the wrong directory) — the real,
-# authoritative read-only export lives OUTSIDE this repo at config.data.oai_root
-# (/home/harie06/oai_db/data/rankpi_kpi/). See the user-facing note about an apparent duplicate
-# found at ./rankpi_kpi/ during the OAI migration's final review.
-/rankpi_kpi/
-
-# Logs
+# Logs of live runs (baseline run logs are kept under baselines/results/run_logs/)
 *.log
 logs/
+!baselines/results/run_logs/*.log
 
-# OS / editor
-.DS_Store
-.idea/
-.vscode/
-*.swp
+# Retired NS-3/5G-LENA toolchain and its pre-migration runtime state (historical only)
+archive/ns3_sim/ns-3-dev/
+archive/ns3_sim/pre_oai_migration_data/
 
-# Zone.Identifier files from Windows downloads
-*:Zone.Identifier
+# Unpublished manuscript draft (predates the OAI migration)
+docs/IEEE_Digital_Twin_Paper.docx

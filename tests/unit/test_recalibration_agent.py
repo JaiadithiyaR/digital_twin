@@ -15,7 +15,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from src.adaptation.recalibration_agent import RecalibrationAgent, RecalibrationError
@@ -124,10 +123,11 @@ def test_recalibrate_raises_recalibration_error_not_a_raw_valueerror_when_window
         quarantine_path=tmp_path / "quarantine.parquet",
         history_retention_rows=SETTINGS.storage.history_retention_rows,
     )
-    # Every row poisoned on the same required feature — enough rows to pass the count check,
-    # zero of them survive residual_base.py's dropna, exactly like a real NaN-poisoned window.
+    # Every row missing the y_{t-1} anchor — enough rows to pass the count check, but no row has a
+    # defined residual target (missing input features alone no longer make a row unusable:
+    # the regressor handles them natively).
     poisoned = [
-        _clean_record(i % 10 + 1, i % 2 + 1, now - timedelta(seconds=300 - i), features={**{c: 0.5 for c in ALL_FEATURES}, REQUIRED_FEATURES[0]: float("nan")})
+        _clean_record(i % 10 + 1, i % 2 + 1, now - timedelta(seconds=300 - i), features={**{c: 0.5 for c in ALL_FEATURES}, "dl_bler_lag1": float("nan")})
         for i in range(300)
     ]
     poisoned_store.append_history(poisoned)

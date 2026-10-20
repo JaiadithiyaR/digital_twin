@@ -1,21 +1,26 @@
 {
   "mode":"rule_based",
   "seed":1,
-  "cycles":15,
+  "window_seconds":60,
+  "n_windows":62,
   "run_ids":[
     8
   ],
-  "n_triggers":14,
-  "n_adaptations":9,
-  "n_accepted":1,
-  "n_rejected":8,
+  "n_triggers":3,
+  "n_attempts":7,
+  "n_adaptations":7,
+  "n_accepted":2,
+  "n_rejected":5,
+  "n_deployed_ungated":0,
+  "n_agent_failures":0,
   "n_decisions":0,
   "n_fallbacks":0,
   "fallback_rate":0.0,
   "invalid":false,
   "incomplete_reason":null,
-  "mean_unified_fidelity":0.7979686628,
-  "total_duration_seconds":227.937449787,
-  "budget_spent_usd":0.0093513,
-  "out_dir":"\/home\/harie06\/dt_adaptation\/baselines\/results\/rule_based"
+  "mean_unified_fidelity_runtime":0.7931974125,
+  "adaptation_wall_seconds":255.257915145,
+  "adaptation_cpu_seconds":148.61,
+  "budget_spent_usd":0.0163262,
+  "out_dir":"baselines\/results\/rule_based"
 }

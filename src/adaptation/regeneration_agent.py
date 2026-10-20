@@ -40,12 +40,13 @@ from src.adaptation.data_selection import (
     select_recent_window,
     time_split,
     with_dependency_ground_truth,
+    with_reference_data,
 )
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
-from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 from src.rag.rag_kb import RagUnavailableError
-from src.sandbox.executor import SandboxExecutor, SandboxResult
+from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
+from src.sandbox.executor import SAME_SECOND_MEASUREMENTS, SandboxExecutor, SandboxResult
 
 if TYPE_CHECKING:
     from src.common.config import Settings
@@ -160,6 +161,7 @@ class RegenerationAgent:
         drift_context: str | None = None,
         rag_knowledge_base: "RagKnowledgeBase | None" = None,
         cache_key: str | None = None,
+        reference_history: pd.DataFrame | None = None,
     ) -> RegenerationResult:
         """Rebuild `component_factory()`'s component's pipeline from scratch via LLM-generated,
         sandboxed code, and register the accepted result as a new candidate version.
@@ -200,6 +202,17 @@ class RegenerationAgent:
         except DataSelectionError as exc:
             raise RegenerationError(str(exc)) from exc
         train_df, held_out_df = time_split(window_df, held_out_fraction)
+        # Optional reference rows (the original TRAIN pool) on the TRAINING side only — the
+        # generated pipeline otherwise learns from a few hundred recent rows early in a run.
+        reference_rows = 0
+        if reference_history is not None and len(reference_history):
+            try:
+                reference = with_dependency_ground_truth(reference_history, current_instance.DEPENDENCIES, dependency_output_fields)
+            except DataSelectionError as exc:
+                raise RegenerationError(f"reference data unusable: {exc}") from exc
+            reference = reference[[c for c in train_df.columns if c in reference.columns]]
+            reference_rows = len(reference)
+            train_df, _ = with_reference_data(train_df, reference)
         train_target = train_df[target_column]
         held_out_target = held_out_df[target_column]
 
@@ -286,7 +299,8 @@ class RegenerationAgent:
             "end": iso(train_df["ts_1s"].max()) if len(train_df) else None,
             "n_rows": len(train_df),
             "window_hours": resolved_window_hours,
-            "provenance": "d1_history",
+            "provenance": "d1_history" if not reference_rows else "d1_history+reference",
+            "reference_rows": reference_rows,
             "ue_id": ue_id,
             "cell_id": cell_id,
         }
@@ -369,7 +383,11 @@ class RegenerationAgent:
         except (OSError, TypeError):
             current_source = "<source unavailable>"
 
-        available_columns = [c for c in history.columns if c not in _NON_FEATURE_COLUMNS]
+        # Exactly the columns the sandbox will hand the candidate: same-second measurements are
+        # stripped there (leakage), so they are never offered here either.
+        available_columns = [
+            c for c in history.columns if c not in _NON_FEATURE_COLUMNS and c not in SAME_SECOND_MEASUREMENTS
+        ]
         feature_statistics = history[available_columns].describe().to_dict()
 
         try:

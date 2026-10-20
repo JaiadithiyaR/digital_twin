@@ -34,8 +34,11 @@ downstream — its decision is advisory-but-binding on *which agent runs next*, 
 ### How it does it
 1. `decision_context.py:build_decision_context()` assembles a bounded, structured
    `DecisionContext` from five real sources — never synthetic numbers:
-   - the triggering `AdaptationTrigger` (component, severity, trigger type),
-   - every component's current `FidelityScore` plus the system-wide `UnifiedFidelityScore`,
+   - the triggering `AdaptationTrigger` (component, severity, trigger type) and that component's
+     own per-component policy threshold (fidelity triggers are decided per component — see
+     CLAUDE.md §5),
+   - every component's current `FidelityScore` plus the system-wide `UnifiedFidelityScore`
+     (a health summary only, not what triggered the adaptation),
    - a bounded (last-200-rows, 8-feature) summary of real D1 telemetry history,
    - the previous action taken for *this specific component* and its outcome (per-component
      state, not a single global scalar),

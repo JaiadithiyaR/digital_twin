@@ -227,7 +227,7 @@ class GoogleClient:
             kwargs["cached_content"] = cache_name
 
         # Phase 13 §3.7 — "flex" allowed only for speed=0 experiments, never live demos; the
-        # caller (e.g. scripts/run_baselines.py) is responsible for only ever configuring
+        # caller (e.g. baselines/run_all.py) is responsible for only ever configuring
         # service_tier="flex" in a non-live settings override, never in --mode live's own config.
         kwargs["service_tier"] = genai_types.ServiceTier(self._config.service_tier)
 
@@ -448,11 +448,13 @@ class GoogleClient:
             response, _ = self._call_with_retry(prompt, config)
             latency = time.monotonic() - start
             text = _extract_text(response)
+            usage = _extract_usage(response)
+            stop_reason = _extract_stop_reason(response)
             try:
                 parsed = schema.model_validate_json(text)
             except (ValidationError, ValueError, json.JSONDecodeError) as exc:
                 last_error = LLMStructuredOutputError(
-                    f"LLM response failed schema validation: {exc}", raw_text=text, original=exc
+                    f"LLM response failed schema validation (finish_reason={stop_reason}): {exc}", raw_text=text, original=exc
                 )
                 is_final_attempt = attempt == max_attempts
                 logger.warning(
@@ -462,15 +464,23 @@ class GoogleClient:
                         "attempt": attempt,
                         "max_attempts": max_attempts,
                         "schema": schema.__name__,
-                        "error": str(exc),
+                        # MAX_TOKENS here means the output (incl. thinking) hit config.llm.max_tokens.
+                        "finish_reason": stop_reason,
+                        "output_tokens": usage.output_tokens,
+                        "thinking_tokens": usage.thinking_tokens,
+                        "response_chars": len(text),
+                        "error": str(exc)[:500],
                     },
                 )
                 continue
             logger.info(
                 "LLM structured output validated",
-                extra={"component": "llm", "schema": schema.__name__, "attempt": attempt},
+                extra={
+                    "component": "llm", "schema": schema.__name__, "attempt": attempt, "finish_reason": stop_reason,
+                    "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
+                    "thinking_tokens": usage.thinking_tokens, "latency_seconds": round(latency, 2),
+                },
             )
-            usage = _extract_usage(response)
             llm_response = LLMResponse(
                 text=text, model=response.model_version or self._config.model, usage=usage,
                 stop_reason=_extract_stop_reason(response), attempts=attempt,

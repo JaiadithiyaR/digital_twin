@@ -22,7 +22,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from baselines._lib import MODES  # noqa: E402
+from baselines._lib import MODES
 
 BASELINES_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASELINES_DIR / "results"
@@ -62,17 +62,17 @@ def _recovery_time(timeline: pd.DataFrame, threshold: float) -> float | None:
     — None if the run never dipped below threshold (nothing to recover from), honestly, not 0."""
     if len(timeline) == 0 or "F_U" not in timeline.columns:
         return None
-    unified = timeline.drop_duplicates("cycle").sort_values("cycle")[["cycle", "F_U"]].dropna()
+    unified = timeline.drop_duplicates("window").sort_values("window")[["window", "F_U"]].dropna()
     if len(unified) == 0:
         return None
     below = unified["F_U"] < threshold
     recoveries: list[int] = []
     dip_start: int | None = None
-    for cycle, is_below in zip(unified["cycle"], below, strict=True):
+    for window, is_below in zip(unified["window"], below, strict=True):
         if is_below and dip_start is None:
-            dip_start = cycle
+            dip_start = window
         elif not is_below and dip_start is not None:
-            recoveries.append(cycle - dip_start)
+            recoveries.append(window - dip_start)
             dip_start = None
     if not recoveries:
         return None
@@ -89,11 +89,11 @@ def build_comparison(threshold: float = 0.5) -> pd.DataFrame:
         if not loaded:
             continue
 
-        mean_fus = [r["summary"].get("mean_unified_fidelity") for r in loaded if r["summary"].get("mean_unified_fidelity") is not None]
+        mean_fus = [r["summary"].get("mean_unified_fidelity_runtime") for r in loaded if r["summary"].get("mean_unified_fidelity_runtime") is not None]
         n_triggers = [r["summary"].get("n_triggers", 0) for r in loaded]
         n_accepted = [r["summary"].get("n_accepted", 0) for r in loaded]
         n_rejected = [r["summary"].get("n_rejected", 0) for r in loaded]
-        durations = [r["summary"].get("total_duration_seconds", 0.0) for r in loaded]
+        durations = [r["summary"].get("adaptation_wall_seconds", 0.0) for r in loaded]
         recov = [_recovery_time(r["timeline"], threshold) for r in loaded]
         recov_defined = [r for r in recov if r is not None]
         n_fallbacks = [r["summary"].get("n_fallbacks", 0) for r in loaded]
@@ -104,7 +104,7 @@ def build_comparison(threshold: float = 0.5) -> pd.DataFrame:
         pct_above_threshold = None
         all_timelines = pd.concat([r["timeline"] for r in loaded if len(r["timeline"])], ignore_index=True) if any(len(r["timeline"]) for r in loaded) else pd.DataFrame()
         if len(all_timelines) and "F_U" in all_timelines.columns:
-            fu = all_timelines.drop_duplicates(["cycle"])["F_U"].dropna()
+            fu = all_timelines.drop_duplicates(["window"])["F_U"].dropna()
             if len(fu):
                 pct_above_threshold = float((fu >= threshold).mean() * 100.0)
 
@@ -133,7 +133,7 @@ def build_comparison(threshold: float = 0.5) -> pd.DataFrame:
                 "mean_unified_fidelity": (sum(mean_fus) / len(mean_fus)) if mean_fus else None,
                 "mean_unified_fidelity_std": (pd.Series(mean_fus).std() if len(mean_fus) > 1 else 0.0),
                 "pct_time_above_threshold": pct_above_threshold,
-                "mean_recovery_time_cycles": (sum(recov_defined) / len(recov_defined)) if recov_defined else None,
+                "mean_recovery_time_windows": (sum(recov_defined) / len(recov_defined)) if recov_defined else None,
                 "n_triggers": sum(n_triggers), "n_adaptations": sum(n_accepted) + sum(n_rejected),
                 "n_accepted": sum(n_accepted), "n_rejected": sum(n_rejected),
                 "total_adaptation_duration_seconds": sum(durations),
@@ -160,15 +160,15 @@ def _plot_unified_fidelity_all_modes(out_dir: Path, threshold: float) -> None:
         loaded = [r for r in (_load_run(d) for d in run_dirs) if r is not None and len(r["timeline"])]
         if not loaded:
             continue
-        timeline = loaded[0]["timeline"].drop_duplicates("cycle").sort_values("cycle")
+        timeline = loaded[0]["timeline"].drop_duplicates("window").sort_values("window")
         if "F_U" not in timeline.columns or timeline["F_U"].dropna().empty:
             continue
-        ax.plot(timeline["cycle"], timeline["F_U"], label=mode, marker="o", markersize=3)
+        ax.plot(timeline["window"], timeline["F_U"], label=mode, marker="o", markersize=3)
         plotted_any = True
-        for _, row in timeline[["cycle", "F_U"]].iterrows():
-            plot_rows.append({"mode": mode, "cycle": row["cycle"], "F_U": row["F_U"]})
+        for _, row in timeline[["window", "F_U"]].iterrows():
+            plot_rows.append({"mode": mode, "window": row["window"], "F_U": row["F_U"]})
     ax.axhline(threshold, color="gray", linestyle=":", label=f"threshold ({threshold})")
-    ax.set_xlabel("cycle")
+    ax.set_xlabel("window (60 s of replayed data)")
     ax.set_ylabel("UnifiedFidelityScore (dimensionless, 0-1)")
     ax.set_title("Unified fidelity over time — all modes")
     if plotted_any:
@@ -199,9 +199,9 @@ def _plot_mean_fidelity_by_mode(df: pd.DataFrame, out_dir: Path) -> None:
 
 def _plot_recovery_time_by_mode(df: pd.DataFrame, out_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
-    valid = df[df["mean_recovery_time_cycles"].notna()]
-    ax.bar(valid["mode"], valid["mean_recovery_time_cycles"], color="tab:orange")
-    ax.set_ylabel("mean recovery time (cycles)")
+    valid = df[df["mean_recovery_time_windows"].notna()]
+    ax.bar(valid["mode"], valid["mean_recovery_time_windows"], color="tab:orange")
+    ax.set_ylabel("mean recovery time (60 s windows)")
     ax.set_title("Mean recovery time to above-threshold fidelity, by mode")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "recovery_time_by_mode.png"
@@ -209,7 +209,7 @@ def _plot_recovery_time_by_mode(df: pd.DataFrame, out_dir: Path) -> None:
     fig.savefig(out_path, dpi=300)
     fig.savefig(out_path.with_suffix(".pdf"))
     plt.close(fig)
-    valid[["mode", "mean_recovery_time_cycles"]].to_csv(out_path.with_suffix(".csv"), index=False)
+    valid[["mode", "mean_recovery_time_windows"]].to_csv(out_path.with_suffix(".csv"), index=False)
 
 
 def _plot_adaptations_by_mode(df: pd.DataFrame, out_dir: Path) -> None:
@@ -263,7 +263,13 @@ def _plot_strategy_distribution(out_dir: Path) -> None:
 
 
 def write_comparison_md(df: pd.DataFrame, path: Path) -> None:
-    lines = ["# Baseline comparison", "", "Built only from already-written `baselines/results/<mode>/` outputs — never re-run.", ""]
+    lines = [
+        "# Baseline comparison (operational counts)", "",
+        "Built only from already-written `baselines/results/<mode>/` outputs — never re-run.", "",
+        "**Fidelity columns here are each run's RUNTIME score, min-max normalized against that run's own "
+        "rolling history — they are not on a common scale across modes. Use `baselines/stats.py` "
+        "(frozen common normalization reference) for any cross-mode fidelity comparison.**", "",
+    ]
     try:
         lines.append(df.to_markdown(index=False))
     except ImportError:  # `tabulate` not installed — fall back to a plain aligned table, never crash

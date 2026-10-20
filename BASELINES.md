@@ -1,5 +1,8 @@
 # BASELINES.md — Baseline Comparison Framework
 
+> **Superseded (2026-10-20).** This describes the pre-audit baseline harness (15 cycles, runtime self-normalized scores, mock drift). The current protocol (60 s windows, no look-ahead, frozen common-scale scoring, Wilcoxon/bootstrap/Holm) is documented in [baselines/README.md](baselines/README.md).
+
+
 What `baselines/` compares, the exact formulas behind every number, and every graph produced.
 Code lives in `baselines/{run_all.py,_lib.py,_outputs.py,compare.py}`; run with
 `python baselines/run_all.py` then `python baselines/compare.py` (see `manual.md` §2).
@@ -138,7 +141,7 @@ run, RMSE/MAE of (a) the real trained model, (b) a **persistence** baseline (`ŷ
 
 | file | content |
 |---|---|
-| `metrics_timeline.csv` | `ts, cycle, component, actual, predicted, abs_error, F_c, F_U, trigger_fired, model_version` — one row per component per cycle, raw units |
+| `metrics_timeline.csv` | `ts, cycle, component, actual, predicted, abs_error, F_c, F_U, trigger_fired, model_version` — one row per component per cycle, raw units. `trigger_fired` is set by the per-component adaptation policy (CLAUDE.md §5) — several components can fire in the same cycle. Results produced before 2026-10-19 used the retired unified-score trigger (at most one component per cycle). |
 | `adaptation_events.jsonl` | one line per adaptation attempt: trigger, decision (strategy/confidence/root-cause), `gate_result`, `fidelity_before`/`after`, `candidate_version`, duration |
 | `report.md` | header (mode/run/seeds/model versions/fidelity config) + per-component summary table + one block per adaptation event |
 | `run_summary.json` | `n_triggers`/`n_accepted`/`n_rejected`/`mean_unified_fidelity`/`budget_spent_usd`/... |

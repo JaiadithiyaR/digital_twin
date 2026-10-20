@@ -8,7 +8,7 @@ testbed-measured O-RAN/OAI RAN-layer KPIs, not simulation output.
 ## 1. Data source
 
 Read-only, outside this repository: `config.data.oai_root`
-(`/home/harie06/oai_db/data/rankpi_kpi/` in this deployment). There is no database access
+(`/path/to/oai_db/data/rankpi_kpi/` in this deployment). There is no database access
 anywhere in this system — only the already-exported flat CSV files under this path. The CSVs are
 never copied into git and never modified by this project.
 

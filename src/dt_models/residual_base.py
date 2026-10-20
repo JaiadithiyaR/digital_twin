@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -65,30 +66,46 @@ class ResidualDTComponent(DTComponent):
             raise ValueError(f"{type(self).__name__} missing required input column(s): {missing}")
         return features[list(self._input_columns)]
 
-    def train(self, features: pd.DataFrame, targets: pd.Series) -> None:
+    def train(self, features: pd.DataFrame, targets: pd.Series, sample_weight: "np.ndarray | None" = None) -> None:
+        """Fit on the residual `y_t - y_{t-1}`. Only rows whose residual is undefined (missing
+        target or missing `y_{t-1}` anchor) are dropped: missing INPUT features are kept, because
+        the regressor (XGBoost / scikit-learn RandomForest) handles them natively and `predict()`
+        is served exactly such rows — dropping every row with any missing feature both starved
+        training (e.g. the first ~3.5 min of a run, before the controller's first action, has no
+        `requested_prb_ratio_lag1`) and made training inconsistent with serving.
+        `sample_weight` (optional, one per row) is passed to the regressor's `fit`."""
         X = self._select_features(features)
         if self._lag1_column not in X.columns:
             raise ValueError(
                 f"{type(self).__name__}.train requires its own lag1 column {self._lag1_column!r} "
                 "(in REQUIRED_FEATURES) to compute the residual target — missing"
             )
-        residual = targets - X[self._lag1_column]
-        combined = pd.concat([X, residual.rename("__residual__")], axis=1).dropna()
-        if combined.empty:
-            raise ValueError(f"{type(self).__name__}.train received no valid (non-NaN) rows")
-        dropped = len(X) - len(combined)
+        residual = (targets - X[self._lag1_column]).to_numpy(dtype=float)
+        usable = np.isfinite(residual)
+        if not usable.any():
+            raise ValueError(f"{type(self).__name__}.train received no rows with a defined residual target (y_t and y_t-1)")
+        dropped = int((~usable).sum())
         if dropped:
-            logger.warning(
-                "dropped rows with NaN before training", extra={"component": self.COMPONENT_NAME, "dropped_rows": dropped}
+            logger.info(
+                "skipped rows with undefined residual target before training",
+                extra={"component": self.COMPONENT_NAME, "dropped_rows": dropped},
             )
 
-        X_clean = combined[list(self._input_columns)]
-        residual_clean = combined["__residual__"]
-        self._model.fit(X_clean, residual_clean)
+        fit_kwargs: dict[str, Any] = {}
+        if sample_weight is not None:
+            weights = np.asarray(sample_weight, dtype=float)
+            if len(weights) != len(X):
+                raise ValueError(f"sample_weight has {len(weights)} entries for {len(X)} rows")
+            fit_kwargs["sample_weight"] = weights[usable]
+        X_clean = X.loc[usable, list(self._input_columns)]
+        self._model.fit(X_clean, residual[usable], **fit_kwargs)
         self._trained = True
         logger.info(
             "model trained on residual target (y_t - y_t-1)",
-            extra={"component": self.COMPONENT_NAME, "model_type": self._model_type, "rows": len(X_clean)},
+            extra={
+                "component": self.COMPONENT_NAME, "model_type": self._model_type, "rows": len(X_clean),
+                "weighted": sample_weight is not None,
+            },
         )
 
     def predict(self, features: pd.DataFrame) -> pd.Series:

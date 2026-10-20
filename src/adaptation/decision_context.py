@@ -65,6 +65,16 @@ class DecisionContext:
     previous_outcome: PreviousOutcome
     rag_context: list[str]  # already-retrieved, human-readable knowledge snippets — may be empty
     network_state_summary: dict[str, float] = field(default_factory=dict)
+    # The affected component's own adaptation-policy threshold (per-component policy) — None
+    # when the caller doesn't supply one.
+    component_threshold: float | None = None
+    # The component's FidelityScore_c when its policy fired (component_fidelity holds the latest).
+    fidelity_at_trigger: float | None = None
+    # Adaptation loop: which attempt this is, and one summary line per earlier attempt (strategy,
+    # outcome, verification numbers, failed checks / error) so the decision can learn from them.
+    attempt: int = 1
+    max_attempts: int = 1
+    previous_attempts: tuple[str, ...] = ()
 
 
 def summarize_network_state(history: pd.DataFrame, recent_rows: int = _NETWORK_STATE_RECENT_ROWS) -> dict[str, float]:
@@ -107,6 +117,12 @@ def build_decision_context(
     previous_outcome: PreviousOutcome,
     history: pd.DataFrame,
     rag_knowledge_base: "RagKnowledgeBase | None" = None,
+    *,
+    component_threshold: float | None = None,
+    fidelity_at_trigger: float | None = None,
+    attempt: int = 1,
+    max_attempts: int = 1,
+    previous_attempts: tuple[str, ...] = (),
 ) -> DecisionContext:
     """Assembles one `DecisionContext` from already-computed inputs. `trigger` may come from
     either canonical source (`trigger_type="external_drift"` or `"fidelity_degradation"` — see
@@ -121,4 +137,9 @@ def build_decision_context(
         previous_outcome=previous_outcome,
         rag_context=retrieve_rag_context(rag_knowledge_base, trigger.component, trigger.trigger_type),
         network_state_summary=summarize_network_state(history),
+        component_threshold=component_threshold,
+        fidelity_at_trigger=fidelity_at_trigger,
+        attempt=attempt,
+        max_attempts=max_attempts,
+        previous_attempts=tuple(previous_attempts),
     )

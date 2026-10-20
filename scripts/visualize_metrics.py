@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.adaptation.data_selection import with_dependency_ground_truth
 from src.adaptation.lifecycle_agent import LifecycleAgent, LifecycleRecord
+
 # Display-range clamp for the (theoretically unbounded-below) Module 12 fidelity score — a
 # cosmetic choice for readable charts only, never a change to the underlying data (the full
 # unclipped values are always written to the companion CSVs, see save_fidelity_csvs()). Previously

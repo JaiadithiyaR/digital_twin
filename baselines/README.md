@@ -1,72 +1,47 @@
-# Baseline comparison (phase13 §4)
+# Ablation ladder (baselines)
 
-Compares 4 adaptation strategies over the same real OAI TEST replay (run 8, speed=0), using the
-same bootstrap v2 (residual, CV-tuned) components:
+Four conditions, replayed over the real OAI TEST split (run 8, 61.5 min), all scored on the same
+62 fixed 60-second windows of replayed data:
 
-| mode | strategy source | LLM used for |
-|---|---|---|
-| `static` | none — every trigger is logged but never dispatched | nothing |
-| `periodic_retrain` | fixed schedule, recalibrates all 7 components every `interval_cycles` cycles | nothing |
-| `rule_based` | deterministic severity thresholds (`src/adaptation/baseline_policies.py`) | codegen (regenerate/expand_scope) + verification explanation only — never the decision itself |
-| `full_system` | the real knowledge-based LLM+RAG Decision & Root-Cause Analysis Agent (Module 13) | decision + codegen + verification explanation |
+| step | mode | what adapts, and how | LLM used for |
+|---|---|---|---|
+| 0 | `static` | nothing — per-component triggers are detected and logged, never dispatched | nothing |
+| 1 | `periodic_retrain` | all 7 components recalibrated every 10 min of data, **deployed without the verification gate** (blind) | nothing |
+| 2 | `rule_based` | per-component fidelity trigger → severity rule (≤0.3 recalibrate, ≤0.7 regenerate, else expand scope) → agents → sandbox → verification gate → hot swap, with the live retry loop | codegen + gate explanation only |
+| 3 | `full_system` | per-component fidelity trigger → LLM+RAG Decision Agent → agents → sandbox → verification gate → hot swap, with the live retry loop and rejection feedback; **3 runs** | decision + codegen + explanation |
 
-## Fairness rules (enforced in code, not just documented)
+## Controlled-ablation guarantees (enforced in `_lib.py` / `run_all.py`)
 
-- **Same bootstrap v2 models** — `baselines/_lib.py:bootstrap_components()` is the one shared
-  entry point every mode calls; no mode gets a different training recipe.
-- **Same real TEST replay** — `baselines/_lib.py:replay_test_split()` always replays
-  `config.data.splits.test` (run 8) at `speed=0`, in genuine chronological order. Run 8 is NEVER
-  used for training/tuning/debugging anywhere in this repository (see `claude_code_prompt_phase13.md`
-  §0) — only here, as the held-out comparison set, and in `scripts/run_baselines.py`'s own
-  existing `--mode full` baselines (a Phase-12 script; this folder is the phase13 redesign of
-  that same idea, built from scratch with real cost/caching/budget controls).
-- **Same fidelity config** — every mode constructs its `FidelityEvaluator` from the identical
-  `settings.fidelity` section; nothing here is mode-specific.
-- **Same seeds** — each mode's own `configs/<mode>.yaml` declares its seed(s); `full_system` is
-  the only mode run multiple times (3 seeds, mean ± std reported) per phase13 §4's own
-  instruction — the other three modes are deterministic given the shared bootstrap + replay, so
-  one run each is sufficient and does not spend LLM budget repeating a result with no variance.
-- **Fresh state per run** — `run_mode()` constructs a brand-new `ModelRegistry`/`D1Store`/
-  `DTModelRegistry` under its own `baselines/results/<mode>/` (or `.../seed_N/`) directory; no
-  mode or seed ever reads another's state.
-- **One shared "cycle" definition** — the fully-replayed TEST split (loaded once, in order) is
-  split into `config.baselines.cycles` equal chronological chunks; cycle `i` reveals chunks
-  `1..i` to the prediction+fidelity loop, simulating incremental arrival without needing a
-  real-time (`speed>0`) replay for every mode run.
+- **Same bootstrap models**: `bootstrap_components()` trains the 7 real components on the TRAIN pool once per run, identically for every mode.
+- **Same data and windows**: `replay_test_split()` replays run 8; `window_edges()` defines the fixed 60 s windows of data time. Every mode is scored on exactly these windows.
+- **No look-ahead**: run 8 is bulk-replayed up front, so agents read D1 through `CutoffD1View`. An adaptation started after window *k* only sees windows 1..*k*. (Before 2026-10-20 the agents saw all of run 8, including the windows they were later scored on.)
+- **Same fidelity config and trigger policy**: one `FidelityEvaluator` and one `ComponentAdaptationPolicy` from `settings.fidelity` per run; no mode-specific fidelity settings.
+- **Same adaptation inputs as the live system**: reference TRAIN data with ×5 recent weighting, retry loop up to `adaptation.max_adaptation_attempts` with rejection feedback, and the persistence baseline for expand-scope verification, all mirrored from `src/main.py`.
+- **No external drift**: the live system's per-component fidelity policy is the only trigger source. Mock drift events are no longer injected.
+- **Fresh state**: each run deletes and rebuilds its own `results/<mode>/` (or `seed_N/`) directory, so no registry, D1 or event state is shared.
+
+Data time is frozen while an adaptation runs (the harness is synchronous). Recovery latency is therefore measured in data minutes; wall-clock and CPU cost of each attempt are recorded separately.
+
+## Statistics (`stats.py`)
+
+Each run's runtime `F_c` is normalized against **that run's own** rolling history. That suits triggering, but the scores are not comparable across modes. `stats.py` therefore re-scores every window with the same fidelity formula (square → min-max normalize → sum → `1 − S/4`), using **one frozen reference**: the min/max of each squared metric, pooled over every window of every run. The runtime formula in `src/fidelity` is unchanged.
+
+- Window score = equal-weight mean over the 7 components, on windows every run scored.
+- Comparisons, paired per window: Proposed vs Static, vs Periodic, vs Rule-based; Rule-based vs Periodic. The 3 full-system runs are averaged per window before pairing.
+- Wilcoxon signed-rank test, two-sided. Effect size is the matched-pairs rank-biserial *r*.
+- 95% moving-block bootstrap CI of the mean difference (block = 5 windows, 10,000 resamples, seed 0).
+- Holm-Bonferroni adjustment across the 4 comparisons.
+- Caveat: consecutive windows are autocorrelated, so Wilcoxon p-values are optimistic. The block-bootstrap CI is the primary evidence.
 
 ## Running it
 
 ```bash
-# One real LLM smoke test (phase13 §3.8, run 7, never run 8) + all 4 modes, default cycles/seeds
-# from config/settings.yaml (cycles=15, full_system seeds=[1,2,3]):
-python baselines/run_all.py
-
-# Only the non-LLM modes, fast iteration, no pre-flight check needed:
-python baselines/run_all.py --modes static periodic_retrain --skip-preflight
-
-# Everything, with an explicit cycle count override (useful for a fast smoke run):
-python baselines/run_all.py --cycles 5 --skip-preflight
-
-# Build the comparison tables/graphs from whatever run_all.py has already written (never re-runs):
-python baselines/compare.py
+python baselines/run_all.py                                     # all 4 modes, full run 8 (~2-3 h; LLM cost ~$0.1-0.5)
+python baselines/run_all.py --modes static periodic_retrain --skip-preflight   # no LLM
+python baselines/run_all.py --max-windows 15 --seeds 99 --skip-preflight      # smoke run
+python baselines/stats.py                                       # -> results/stats/ (frozen-scale scores, tests, report.md)
+python baselines/compare.py                                     # -> results/comparison/ (operational counts)
+python scripts/generate_ieee_figures.py                         # -> figures/ (7 IEEE figures, PDF+PNG+CSV)
 ```
 
-Each mode run writes, under `baselines/results/<mode>/` (or `.../seed_N/` for `full_system`):
-`metrics_timeline.csv`, `adaptation_events.jsonl`, `report.md`, `run_summary.json`,
-`llm_calls.jsonl` (LLM-using modes only), and `graphs/` (phase13 §5 items 1-3 per component/run).
-`compare.py` then reads every mode's `run_summary.json`/`metrics_timeline.csv`/
-`adaptation_events.jsonl`/`llm_calls.jsonl` and writes `baselines/results/comparison/
-{comparison.md,comparison.csv}` plus `graphs/` (phase13 §5 items 4-8).
-
-## Cost controls (phase13 §3)
-
-`rule_based` and `full_system` share one `GoogleClient` wrapped in `src/llm/cost_tracking.py`'s
-`MeteredGoogleClient`, which enforces `config.llm.budget_usd` (default $20) via a `BudgetGuard`
-BEFORE every call and logs the REAL post-call usage/cost to that run's own `llm_calls.jsonl` —
-never a rough pre-call estimate. If the budget would be exceeded, the run stops immediately
-(an incomplete run is reported honestly in `run_summary.json`/the console, never silently
-degraded to the deterministic fallback strategy just because of cost). Every LLM call also uses
-one shared, explicit Gemini context cache per run (`config.llm.caching`, phase13 §3.3) holding
-the static prompt prefix (system instructions + adaptation policies + an OAI/DT documentation
-summary + `feature_schema.json`) — `baselines/_lib.py:build_static_prefix()` builds it once, and
-every agent call this run makes reuses the same cache key.
+`results_archive_pre_2026-10-20/` holds the previous results. They were produced with the leaky, self-normalized, mock-drift protocol and must not be used for publication.

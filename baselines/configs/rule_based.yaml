@@ -1,17 +1,15 @@
-# Baseline mode: rule_based — same triggers/adaptation agents/sandbox/verification gate as
-# full_system, but the STRATEGY decision itself is a fixed severity-threshold rule
-# (src/adaptation/baseline_policies.py:rule_based_strategy), never an LLM call. Regenerate/
-# expand_scope codegen and verification's optional LLM explanation DO still use the same
-# gemini-3.6-flash model full_system uses (phase13 §3.1: "rule_based ... shares LLM-requiring
-# roles like codegen with full_system").
+# Ablation step 2 — rule_based ("informed" heuristic): the SAME per-component fidelity trigger,
+# agents, sandbox, verification gate and retry loop as full_system; only the STRATEGY decision is
+# a fixed severity rule (src/adaptation/baseline_policies.py:rule_based_strategy), never an LLM call.
+# Regenerate/expand_scope codegen and verification's optional explanation still use the same LLM
+# as full_system. A rejected recalibration is not retried (the rule would pick the same,
+# deterministic recalibration again); regenerate/expand_scope retries get the rejection feedback.
 mode: rule_based
 description: >
-  Trigger -> deterministic severity-threshold strategy (recalibrate/regenerate/expand_scope) ->
-  the real Modules 14/15/16 agents -> the real Module 17 verification gate -> hot swap on ACCEPT.
-seeds: [1]  # one run — the strategy decision itself has no randomness; only genuinely
-            # LLM-authored code (regenerate/expand_scope) has any run-to-run variation, and that
-            # is reported honestly rather than smoothed over multiple paid LLM runs.
+  Trigger -> deterministic severity rule (minor -> recalibrate, moderate -> regenerate,
+  major -> expand_scope) -> the real agents -> the real verification gate -> hot swap on ACCEPT.
+seeds: [1]  # the rule itself has no randomness; LLM-authored code may vary run to run
 uses_llm: true  # codegen + verification-explanation roles only, never for the decision itself
-recalibrate_max_severity: 0.3
+recalibrate_max_severity: 0.3  # severity = (threshold - F_c) / threshold
 regenerate_max_severity: 0.7
 # severity > regenerate_max_severity -> expand_scope

@@ -1,0 +1,658 @@
+=== Pre-flight LLM smoke test (no run-8 data involved) ===
+  decision role OK: strategy='recalibrate' confidence=0.85
+  codegen role OK
+  explanation role OK: 'OK'
+  model=gemini-3.6-flash caching_active=True
+
+=== Running mode='static' seed=1 -> baselines/results/static ===
+[static-seed1] window 10/62  F_U=insufficient_history  lowest=-
+[static-seed1] window 20/62  F_U=0.8010  lowest=dl_bler
+[static-seed1] window 30/62  F_U=0.8249  lowest=ul_bler
+[static-seed1] window 40/62  F_U=0.8282  lowest=ul_bler
+[static-seed1] window 50/62  F_U=0.8202  lowest=ul_bler
+[static-seed1] window 60/62  F_U=0.8267  lowest=dl_prb
+[static-seed1] window 62/62  F_U=0.8284  lowest=ul_bler
+=== mode='static' seed=1 complete: 0 accepted, 0 rejected, 0 deployed ungated over 62 windows ===
+
+=== Running mode='periodic_retrain' seed=1 -> baselines/results/periodic_retrain ===
+[periodic_retrain-seed1] window 10/62  F_U=insufficient_history  lowest=-
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_bler
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_bler-v1 -> dl_bler-v2
+  duration_seconds=2.40
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_bler
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_bler-v1 -> ul_bler-v2
+  duration_seconds=2.44
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_prb
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_prb-v1 -> dl_prb-v2
+  duration_seconds=2.37
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_prb
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_prb-v1 -> ul_prb-v2
+  duration_seconds=3.35
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_throughput
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_throughput-v1 -> dl_throughput-v2
+  duration_seconds=2.43
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_throughput
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_throughput-v1 -> ul_throughput-v2
+  duration_seconds=2.42
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_rlc_delay
+  trigger_type=scheduled severity=0.0
+  window=10 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v2
+  duration_seconds=5.25
+────────────────────────────────────────────────────────────────────────────────
+[periodic_retrain-seed1] window 20/62  F_U=0.8077  lowest=dl_bler
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_bler
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_bler-v2 -> dl_bler-v3
+  duration_seconds=2.84
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_bler
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_bler-v2 -> ul_bler-v3
+  duration_seconds=2.52
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_prb
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_prb-v2 -> dl_prb-v3
+  duration_seconds=2.45
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_prb
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_prb-v2 -> ul_prb-v3
+  duration_seconds=3.00
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_throughput
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_throughput-v2 -> dl_throughput-v3
+  duration_seconds=2.33
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_throughput
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_throughput-v2 -> ul_throughput-v3
+  duration_seconds=2.67
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_rlc_delay
+  trigger_type=scheduled severity=0.0
+  window=20 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_rlc_delay-v2 -> dl_rlc_delay-v3
+  duration_seconds=2.46
+────────────────────────────────────────────────────────────────────────────────
+[periodic_retrain-seed1] window 30/62  F_U=0.8490  lowest=dl_rlc_delay
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_bler
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_bler-v3 -> dl_bler-v4
+  duration_seconds=2.62
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_bler
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_bler-v3 -> ul_bler-v4
+  duration_seconds=2.59
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_prb
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_prb-v3 -> dl_prb-v4
+  duration_seconds=8.90
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_prb
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_prb-v3 -> ul_prb-v4
+  duration_seconds=2.83
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_throughput
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_throughput-v3 -> dl_throughput-v4
+  duration_seconds=2.89
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_throughput
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_throughput-v3 -> ul_throughput-v4
+  duration_seconds=4.50
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_rlc_delay
+  trigger_type=scheduled severity=0.0
+  window=30 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_rlc_delay-v3 -> dl_rlc_delay-v4
+  duration_seconds=3.13
+────────────────────────────────────────────────────────────────────────────────
+[periodic_retrain-seed1] window 40/62  F_U=0.8430  lowest=dl_rlc_delay
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_bler
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_bler-v4 -> dl_bler-v5
+  duration_seconds=2.61
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_bler
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_bler-v4 -> ul_bler-v5
+  duration_seconds=3.06
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_prb
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_prb-v4 -> dl_prb-v5
+  duration_seconds=2.53
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_prb
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_prb-v4 -> ul_prb-v5
+  duration_seconds=3.39
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_throughput
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_throughput-v4 -> dl_throughput-v5
+  duration_seconds=6.14
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_throughput
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_throughput-v4 -> ul_throughput-v5
+  duration_seconds=6.73
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_rlc_delay
+  trigger_type=scheduled severity=0.0
+  window=40 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_rlc_delay-v4 -> dl_rlc_delay-v5
+  duration_seconds=6.29
+────────────────────────────────────────────────────────────────────────────────
+[periodic_retrain-seed1] window 50/62  F_U=0.8532  lowest=dl_rlc_delay
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_bler
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_bler-v5 -> dl_bler-v6
+  duration_seconds=4.67
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_bler
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_bler-v5 -> ul_bler-v6
+  duration_seconds=5.80
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_prb
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_prb-v5 -> dl_prb-v6
+  duration_seconds=6.43
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_prb
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_prb-v5 -> ul_prb-v6
+  duration_seconds=4.84
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_throughput
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_throughput-v5 -> dl_throughput-v6
+  duration_seconds=3.88
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_throughput
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_throughput-v5 -> ul_throughput-v6
+  duration_seconds=3.50
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_rlc_delay
+  trigger_type=scheduled severity=0.0
+  window=50 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_rlc_delay-v5 -> dl_rlc_delay-v6
+  duration_seconds=51.02
+────────────────────────────────────────────────────────────────────────────────
+[periodic_retrain-seed1] window 60/62  F_U=0.8553  lowest=dl_prb
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_bler
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_bler-v6 -> dl_bler-v7
+  duration_seconds=49.30
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_bler
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_bler-v6 -> ul_bler-v7
+  duration_seconds=48.95
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_prb
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_prb-v6 -> dl_prb-v7
+  duration_seconds=47.15
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_prb
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_prb-v6 -> ul_prb-v7
+  duration_seconds=56.49
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_throughput
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_throughput-v6 -> dl_throughput-v7
+  duration_seconds=51.51
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=ul_throughput
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version ul_throughput-v6 -> ul_throughput-v7
+  duration_seconds=40.41
+────────────────────────────────────────────────────────────────────────────────
+─────────────────── periodic_retrain-seed1 adaptation event ────────────────────
+ADAPTATION EVENT — mode=periodic_retrain-seed1 component=dl_rlc_delay
+  trigger_type=scheduled severity=0.0
+  window=60 attempt=1 strategy=recalibrate
+  gate_result=DEPLOYED_UNGATED  (None -> None)
+  version dl_rlc_delay-v6 -> dl_rlc_delay-v7
+  duration_seconds=47.49
+────────────────────────────────────────────────────────────────────────────────
+[periodic_retrain-seed1] window 62/62  F_U=0.8612  lowest=dl_rlc_delay
+=== mode='periodic_retrain' seed=1 complete: 0 accepted, 0 rejected, 42 deployed ungated over 62 windows ===
+
+=== Running mode='rule_based' seed=1 -> baselines/results/rule_based ===
+[rule_based-seed1] window 10/62  F_U=insufficient_history  lowest=-
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=dl_bler
+  trigger_type=fidelity_degradation severity=0.28922933461155886
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.4058032436210799 -> 0.434136365429445)
+  version dl_bler-v1 -> dl_bler-v2
+  duration_seconds=53.51
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=1 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.18628213304778085)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=32.72
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=2 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.123592375367654)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=38.95
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=3 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.03137190641737497)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=44.46
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=4 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.27979481215089586)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=50.24
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=5 strategy=regenerate
+  gate_result=REJECT  (0.31480542174319903 -> 0.18091047863926446)
+  version ul_bler-v1 -> ul_bler-v1
+  duration_seconds=33.86
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=1 strategy=regenerate
+  gate_result=REJECT  (0.35943147719976654 -> 0.36274075905612835)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v1
+  duration_seconds=29.46
+────────────────────────────────────────────────────────────────────────────────
+{"timestamp": "2026-10-20T10:58:48+0000", "level": "WARNING", "logger": "src.adaptation.regeneration_agent", "message": "regeneration candidate rejected by sandbox", "component": "regeneration_agent", "component_name": "dl_rlc_delay", "attempt": 1, "max_attempts": 2, "stage": "import", "error": "ModuleNotFoundError: No module named 'lightgbm'"}
+{"timestamp": "2026-10-20T10:59:09+0000", "level": "WARNING", "logger": "src.adaptation.regeneration_agent", "message": "regeneration candidate rejected by sandbox", "component": "regeneration_agent", "component_name": "dl_rlc_delay", "attempt": 2, "max_attempts": 2, "stage": "import", "error": "ImportError: cannot import name 'ALL_FEATURES' from 'src.dt_models.base' (src/dt_models/base.py)"}
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=2 strategy=regenerate
+  gate_result=None  (None -> None)
+  version dl_rlc_delay-v1 -> None
+  duration_seconds=46.31
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── rule_based-seed1 adaptation event ───────────────────────
+ADAPTATION EVENT — mode=rule_based-seed1 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=3 strategy=regenerate
+  gate_result=ACCEPT  (0.35943147719976654 -> 0.41373543828586257)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v3
+  duration_seconds=41.69
+────────────────────────────────────────────────────────────────────────────────
+{"timestamp": "2026-10-20T10:59:51+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 15, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:51+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 16, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:51+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 17, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:51+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 18, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 19, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 20, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+[rule_based-seed1] window 20/62  F_U=insufficient_history  lowest=-
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 21, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 22, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 23, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 24, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 25, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 26, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 27, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 28, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:52+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 29, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 30, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+[rule_based-seed1] window 30/62  F_U=insufficient_history  lowest=-
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 31, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 32, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 33, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 34, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 35, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 36, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 37, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 38, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 39, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 40, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+[rule_based-seed1] window 40/62  F_U=insufficient_history  lowest=-
+{"timestamp": "2026-10-20T10:59:53+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 41, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 42, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 43, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 44, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 45, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 46, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 47, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 48, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 49, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 50, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+[rule_based-seed1] window 50/62  F_U=insufficient_history  lowest=-
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 51, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 52, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:54+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 53, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 54, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 55, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 56, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 57, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 58, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 59, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 60, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+[rule_based-seed1] window 60/62  F_U=insufficient_history  lowest=-
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 61, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+{"timestamp": "2026-10-20T10:59:55+0000", "level": "WARNING", "logger": "baselines._lib", "message": "DT prediction failed for window", "component": "baselines", "window": 62, "error": "component 'dl_rlc_delay' requires feature(s) ['dl_throughput_pred', 'dl_bler_pred'] not present in the supplied features"}
+[rule_based-seed1] window 62/62  F_U=insufficient_history  lowest=-
+=== mode='rule_based' seed=1 complete: 2 accepted, 6 rejected, 0 deployed ungated over 62 windows ===
+
+=== Running mode='full_system' seed=1 -> baselines/results/full_system/seed_1 ===
+[full_system-seed1] window 10/62  F_U=insufficient_history  lowest=-
+────────────────────── full_system-seed1 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed1 component=dl_bler
+  trigger_type=fidelity_degradation severity=0.28922933461155886
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.4058032436210799 -> 0.434136365429445)
+  version dl_bler-v1 -> dl_bler-v2
+  duration_seconds=6.96
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed1 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed1 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.31480542174319903 -> 0.3281201997204777)
+  version ul_bler-v1 -> ul_bler-v2
+  duration_seconds=5.19
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed1 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed1 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=1 strategy=recalibrate
+  gate_result=REJECT  (0.35943147719976654 -> 0.3570404733849619)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v1
+  duration_seconds=5.55
+────────────────────────────────────────────────────────────────────────────────
+{"timestamp": "2026-10-20T11:03:05+0000", "level": "WARNING", "logger": "src.adaptation.regeneration_agent", "message": "regeneration candidate rejected by sandbox", "component": "regeneration_agent", "component_name": "dl_rlc_delay", "attempt": 1, "max_attempts": 2, "stage": "train", "error": "InvalidParameterError: The 'loss' parameter of HistGradientBoostingRegressor must be a str among {'quantile', 'absolute_error', 'poisson', 'gamma', 'squared_error'} or an instance of 'sklearn._loss.loss.BaseLoss'. Got 'huber' instead."}
+────────────────────── full_system-seed1 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed1 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=2 strategy=regenerate
+  gate_result=ACCEPT  (0.35943147719976654 -> 0.4498688840303865)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v3
+  duration_seconds=127.28
+────────────────────────────────────────────────────────────────────────────────
+[full_system-seed1] window 20/62  F_U=0.7980  lowest=dl_bler
+[full_system-seed1] window 30/62  F_U=0.8230  lowest=ul_bler
+[full_system-seed1] window 40/62  F_U=0.8263  lowest=ul_bler
+[full_system-seed1] window 50/62  F_U=0.8181  lowest=ul_bler
+[full_system-seed1] window 60/62  F_U=0.8246  lowest=dl_prb
+[full_system-seed1] window 62/62  F_U=0.8262  lowest=ul_bler
+=== mode='full_system' seed=1 complete: 3 accepted, 1 rejected, 0 deployed ungated over 62 windows ===
+
+=== Running mode='full_system' seed=2 -> baselines/results/full_system/seed_2 ===
+[full_system-seed2] window 10/62  F_U=insufficient_history  lowest=-
+────────────────────── full_system-seed2 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed2 component=dl_bler
+  trigger_type=fidelity_degradation severity=0.28922933461155886
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.4058032436210799 -> 0.434136365429445)
+  version dl_bler-v1 -> dl_bler-v2
+  duration_seconds=5.41
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed2 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed2 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.31480542174319903 -> 0.3281201997204777)
+  version ul_bler-v1 -> ul_bler-v2
+  duration_seconds=6.91
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed2 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed2 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=1 strategy=recalibrate
+  gate_result=REJECT  (0.35943147719976654 -> 0.3570404733849619)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v1
+  duration_seconds=5.47
+────────────────────────────────────────────────────────────────────────────────
+{"timestamp": "2026-10-20T11:06:43+0000", "level": "WARNING", "logger": "src.adaptation.regeneration_agent", "message": "regeneration candidate rejected by sandbox", "component": "regeneration_agent", "component_name": "dl_rlc_delay", "attempt": 1, "max_attempts": 2, "stage": "import", "error": "ImportError: cannot import name 'ALL_FEATURES' from 'src.dt_models.base' (src/dt_models/base.py)"}
+────────────────────── full_system-seed2 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed2 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=2 strategy=regenerate
+  gate_result=ACCEPT  (0.35943147719976654 -> 0.48879813141401174)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v3
+  duration_seconds=86.33
+────────────────────────────────────────────────────────────────────────────────
+[full_system-seed2] window 20/62  F_U=0.7988  lowest=dl_bler
+[full_system-seed2] window 30/62  F_U=0.8238  lowest=ul_bler
+[full_system-seed2] window 40/62  F_U=0.8271  lowest=ul_bler
+[full_system-seed2] window 50/62  F_U=0.8190  lowest=ul_bler
+[full_system-seed2] window 60/62  F_U=0.8255  lowest=dl_prb
+[full_system-seed2] window 62/62  F_U=0.8272  lowest=ul_bler
+=== mode='full_system' seed=2 complete: 3 accepted, 1 rejected, 0 deployed ungated over 62 windows ===
+
+=== Running mode='full_system' seed=3 -> baselines/results/full_system/seed_3 ===
+[full_system-seed3] window 10/62  F_U=insufficient_history  lowest=-
+────────────────────── full_system-seed3 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed3 component=dl_bler
+  trigger_type=fidelity_degradation severity=0.28922933461155886
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.4058032436210799 -> 0.434136365429445)
+  version dl_bler-v1 -> dl_bler-v2
+  duration_seconds=5.98
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed3 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed3 component=ul_bler
+  trigger_type=fidelity_degradation severity=0.3922715496916913
+  window=14 attempt=1 strategy=recalibrate
+  gate_result=ACCEPT  (0.31480542174319903 -> 0.3281201997204777)
+  version ul_bler-v1 -> ul_bler-v2
+  duration_seconds=6.91
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed3 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed3 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=1 strategy=recalibrate
+  gate_result=REJECT  (0.35943147719976654 -> 0.3570404733849619)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v1
+  duration_seconds=6.86
+────────────────────────────────────────────────────────────────────────────────
+────────────────────── full_system-seed3 adaptation event ──────────────────────
+ADAPTATION EVENT — mode=full_system-seed3 component=dl_rlc_delay
+  trigger_type=fidelity_degradation severity=0.308558682980381
+  window=15 attempt=2 strategy=regenerate
+  gate_result=ACCEPT  (0.35943147719976654 -> 0.5167600086050099)
+  version dl_rlc_delay-v1 -> dl_rlc_delay-v3
+  duration_seconds=80.32
+────────────────────────────────────────────────────────────────────────────────
+[full_system-seed3] window 20/62  F_U=0.7978  lowest=dl_bler
+[full_system-seed3] window 30/62  F_U=0.8228  lowest=ul_bler
+[full_system-seed3] window 40/62  F_U=0.8262  lowest=ul_bler
+[full_system-seed3] window 50/62  F_U=0.8181  lowest=ul_bler
+[full_system-seed3] window 60/62  F_U=0.8246  lowest=dl_prb
+[full_system-seed3] window 62/62  F_U=0.8262  lowest=ul_bler
+=== mode='full_system' seed=3 complete: 3 accepted, 1 rejected, 0 deployed ungated over 62 windows ===
+
+All requested modes complete. Summary: baselines/results/run_all_summary.csv
+EXIT 0
+# Ablation statistics (run 8, 60 s windows)
+
+- Runs: static/seed1, periodic_retrain/seed1, rule_based/seed1, full_system/seed1, full_system/seed2, full_system/seed3
+- Common windows scored by every run: 15
+- Frozen normalization reference: pooled min/max of squared metrics over all runs (`frozen_reference.json`), epsilon=1e-08
+- Moving-block bootstrap: block=5 windows, 10000 resamples, seed=0
+
+## Mean windowed fidelity (frozen scale)
+
+            mode  n_runs  n_windows  mean_F_frozen  ci95_low  ci95_high  sd_across_windows  sd_across_runs  mean_norm_rmse  sd_norm_rmse  mean_norm_mae  sd_norm_mae  mean_norm_wasserstein  sd_norm_wasserstein  mean_norm_mk_mmd  sd_norm_mk_mmd  adaptation_wall_seconds  adaptation_cpu_seconds    llm_tokens  llm_cost_usd  n_attempts  n_accepted  n_rejected  n_deployed_ungated  n_agent_failures  n_triggers
+          static       1         15       0.699309  0.639364   0.756365           0.118580             NaN        0.292331      0.172815       0.408818     0.268713               0.305716             0.188324          0.195899        0.170756                 0.000000                0.000000      0.000000      0.000000         0.0         0.0         0.0                 0.0               0.0         3.0
+periodic_retrain       1         15       0.697725  0.637779   0.758849           0.118945             NaN        0.290594      0.172232       0.409381     0.268955               0.315619             0.196917          0.193508        0.176151               518.584137             4779.260000      0.000000      0.000000        42.0         0.0         0.0                42.0               0.0         3.0
+      rule_based       1         15       0.699348  0.639403   0.757650           0.118571             NaN        0.292193      0.172773       0.408732     0.268695               0.305785             0.188345          0.195898        0.170756               371.197521              488.440000 214195.000000      0.019249         9.0         2.0         6.0                 0.0               1.0         3.0
+     full_system       3         15       0.699380  0.639434   0.756332           0.118564    1.359740e-16        0.291975      0.172711       0.408621     0.268672               0.305986             0.188410          0.195900        0.170756               116.387835              137.526667  92325.333333      0.008110         4.0         3.0         1.0                 0.0               0.0         3.0
+
+## Pairwise tests (Wilcoxon signed-rank, Holm-adjusted)
+
+     mode_a           mode_b  n_windows  mean_diff      ci95_low  ci95_high  n_nonzero    W        p     r_rb   p_holm  significant_0.05
+full_system           static         15   0.000070 -4.440892e-17   0.000070          5  NaN      NaN      NaN      NaN             False
+full_system periodic_retrain         15   0.001655 -1.631011e-03   0.002548          8 12.0 0.453125 0.333333 0.453125             False
+full_system       rule_based         15   0.000032 -4.440892e-17   0.000032          5  NaN      NaN      NaN      NaN             False
+ rule_based periodic_retrain         15   0.001623 -1.631011e-03   0.002516          5  NaN      NaN      NaN      NaN             False
+
+Caveat: the Wilcoxon test assumes independent pairs; consecutive 60 s windows are autocorrelated, so its p-values are optimistic. The block-bootstrap CI of the mean difference accounts for that dependence and should be read as the primary evidence.
+
+Wrote baselines/results/stats
+            mode  n_runs  mean_unified_fidelity  mean_unified_fidelity_std  pct_time_above_threshold mean_recovery_time_windows  n_triggers  n_adaptations  n_accepted  n_rejected  total_adaptation_duration_seconds  n_llm_decisions  n_llm_fallbacks  fallback_rate  run_invalid_fallback_rate_too_high  llm_input_tokens  llm_output_tokens  llm_cached_tokens  llm_cache_hit_share  llm_cost_usd  llm_time_seconds  budget_spent_usd
+          static       1               0.795090                   0.000000                     100.0                       None           3              0           0           0                           0.000000                0                0            0.0                               False                 0                  0                  0             0.000000      0.000000          0.000000          0.000000
+periodic_retrain       1               0.811263                   0.000000                     100.0                       None           3              0           0           0                         518.584137                0                0            0.0                               False                 0                  0                  0             0.000000      0.000000          0.000000          0.000000
+      rule_based       1               0.642756                   0.000000                     100.0                       None           3              8           2           6                         371.197521                0                0            0.0                               False            198045              16150              93534             0.472287      0.019249        281.016066          0.019249
+     full_system       3               0.793832                   0.000516                     100.0                       None           9             12           9           3                         349.163505               12                0            0.0                               False            248312              28664             159558             0.642571      0.024330        337.835432          0.024330
+
+Wrote baselines/results/comparison/comparison.md, baselines/results/comparison/comparison.csv, and graphs under baselines/results/comparison/graphs
+ALLDONE

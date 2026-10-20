@@ -40,9 +40,9 @@ class AdaptationTrigger(BaseModel):
 
 def trigger_from_drift_event(event: "DriftEvent") -> AdaptationTrigger:
     """Normalizes an already-validated external `DriftEvent` (Module 11) into the canonical
-    trigger shape. Never used for the fidelity-based trigger — `FidelityEvaluator.
-    check_fidelity_trigger()` constructs `AdaptationTrigger(trigger_type="fidelity_degradation")`
-    directly, since there is no separate raw/wire-format event to normalize from."""
+    trigger shape. Never used for the fidelity-based trigger — `ComponentAdaptationPolicy.
+    triggers()` (src/fidelity/component_policy.py) constructs `AdaptationTrigger(trigger_type=
+    "fidelity_degradation")` directly, one per component whose own policy fired."""
     return AdaptationTrigger(
         component=event.component,
         severity=event.severity,

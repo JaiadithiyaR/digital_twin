@@ -10,14 +10,18 @@ implementing only `complete_structured` (the one method this agent calls), exact
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
 import pytest
 
-from src.adaptation.decision_agent import _SYSTEM_PROMPT, DecisionAgent, DecisionAgentError, DecisionOutput, _build_prompt
+from src.adaptation.decision_agent import (
+    _SYSTEM_PROMPT,
+    DecisionAgent,
+    DecisionAgentError,
+    DecisionOutput,
+    _build_prompt,
+)
 from src.adaptation.decision_context import DecisionContext, PreviousOutcome
 from src.common.config import load_settings
-from src.fidelity.trigger import AdaptationTrigger
 from src.llm.google_client import LLMTransportError
 
 SETTINGS = load_settings()

@@ -1,20 +1,14 @@
-# Baseline mode: periodic_retrain — every component is recalibrated on a trailing window every
-# N prediction+fidelity cycles (one cycle = one replayed second of run 8), regardless of any
-# trigger. No decision agent, no LLM, no sandbox (recalibration never needs one) — see
-# config/settings.yaml's baselines.periodic_retrain for the config-driven interval/component
-# knobs this mode actually reads at runtime (this file only documents/mirrors them for the
-# baselines/ folder's own self-containedness per phase13 §4).
+# Ablation step 1 — periodic_retrain ("blind" adaptation): every component is recalibrated on a
+# fixed schedule of replayed DATA time, regardless of fidelity. No trigger, no decision agent, no
+# LLM, no sandbox (recalibration never needs one). By default the retrained model is deployed
+# WITHOUT the verification gate — that is what makes it blind (set use_verification_gate: true to
+# run the gated variant). Triggers are still detected and logged so every mode reports them.
 mode: periodic_retrain
 description: >
-  All 7 components recalibrated every `interval_cycles` cycles on a trailing window of the
-  live-replayed D1 history. External/fidelity triggers are still detected and logged (so
-  comparison.md can report "triggers" uniformly across modes) but never change this mode's own
-  fixed schedule.
-seeds: [1]  # deterministic — no LLM, no randomness beyond the shared drift-event seed
+  All 7 components recalibrated every `interval_seconds` of replayed data on the data seen so far
+  (+ the TRAIN pool, as in the live system), deployed unconditionally.
+seeds: [1]  # deterministic: no LLM, no randomness
 uses_llm: false
-# Overrides config/settings.yaml's baselines.periodic_retrain.interval_cycles (20) specifically
-# for this demonstration-scale experiment run (baselines.cycles defaults to 15 total) — with the
-# global default, periodic retraining would never fire even once within a 15-cycle run. 5 fires
-# this schedule 3 times (cycles 5/10/15) over a 15-cycle run, enough to show it actually happening.
-interval_cycles: 5
-components: [dl_bler, ul_bler, dl_prb, ul_prb, dl_throughput, ul_throughput, dl_rlc_delay]  # all 7, per phase13 §4
+interval_seconds: 600  # every 10 minutes of replayed data -> 6 retrains of all 7 components over run 8
+use_verification_gate: false
+components: [dl_bler, ul_bler, dl_prb, ul_prb, dl_throughput, ul_throughput, dl_rlc_delay]

@@ -14,7 +14,6 @@ import pytest
 
 from src.fidelity.metrics import FidelityComputationError, mae, mk_mmd, rmse, wasserstein
 
-
 # --- RMSE: hand-computed --------------------------------------------------------------------
 
 

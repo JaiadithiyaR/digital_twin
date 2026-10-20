@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
+from src.data.oai_dataset import OBSERVABLE_KPI_COLUMNS, TARGET_COLUMNS
+
 if TYPE_CHECKING:
     from src.common.config import Settings
 
@@ -46,6 +48,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _DRIVER_PATH = Path(__file__).resolve().parent / "_sandbox_driver.py"
 
 SandboxStage = Literal["syntax", "import", "conformance", "train", "evaluate", "save", "ok"]
+
+# Same-second measured values (the 7 targets + the observable MAC KPIs) are never handed to a
+# candidate as features: one could otherwise read its own label (or a sibling KPI measured in the
+# same second) and post a falsely perfect score. Its target arrives separately, as the label.
+SAME_SECOND_MEASUREMENTS = frozenset((*TARGET_COLUMNS, *OBSERVABLE_KPI_COLUMNS))
+
+
+def _without_same_second_measurements(features: pd.DataFrame) -> pd.DataFrame:
+    return features.drop(columns=[c for c in features.columns if c in SAME_SECOND_MEASUREMENTS])
 
 
 @dataclass(frozen=True)
@@ -141,9 +152,9 @@ class SandboxExecutor:
             "target_column": target_column,
         }
         (workspace / "manifest.json").write_text(json.dumps(manifest))
-        train_features.to_parquet(workspace / "train_features.parquet")
+        _without_same_second_measurements(train_features).to_parquet(workspace / "train_features.parquet")
         train_target.to_frame(name=target_column).to_parquet(workspace / "train_target.parquet")
-        eval_features.to_parquet(workspace / "eval_features.parquet")
+        _without_same_second_measurements(eval_features).to_parquet(workspace / "eval_features.parquet")
         eval_target.to_frame(name=target_column).to_parquet(workspace / "eval_target.parquet")
 
         # Deliberately minimal — see module docstring: secrets in the parent's environment are

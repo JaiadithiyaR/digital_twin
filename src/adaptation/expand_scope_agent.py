@@ -43,9 +43,9 @@ from src.adaptation.data_selection import (
 )
 from src.fidelity.evaluator import FidelityEvaluator
 from src.llm.google_client import LLMClientError
-from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
 from src.rag.rag_kb import RagUnavailableError
-from src.sandbox.executor import SandboxExecutor, SandboxResult
+from src.registry.model_registry import ModelRegistry, ModelVersionMetadata
+from src.sandbox.executor import SAME_SECOND_MEASUREMENTS, SandboxExecutor, SandboxResult
 
 if TYPE_CHECKING:
     from src.common.config import Settings
@@ -368,9 +368,14 @@ class ExpandScopeAgent:
             example_source = "<source unavailable>"
 
         available_columns = [c for c in history.columns if c not in _NON_FEATURE_COLUMNS]
-        feature_statistics = history[available_columns].describe().to_dict()
+        existing_output_fields = {c.OUTPUT_FIELD for c in existing_components}
+        candidate_targets = self._candidate_targets(history, existing_output_fields)
+        input_columns = [c for c in available_columns if c not in SAME_SECOND_MEASUREMENTS]
+        feature_statistics = history[candidate_targets].describe().to_dict() if candidate_targets else {}
 
         return {
+            "candidate_targets": candidate_targets,
+            "input_columns": input_columns,
             "existing_components": [
                 {
                     "component_name": c.COMPONENT_NAME,
@@ -386,6 +391,17 @@ class ExpandScopeAgent:
             "expand_scope_context": expand_scope_context or "not provided",
             "rag_context": self._retrieve_rag_context(expand_scope_context, rag_knowledge_base),
         }
+
+    def _candidate_targets(self, df: pd.DataFrame, existing_output_fields: set[str]) -> list[str]:
+        """Same-second measured KPIs present in `df` with enough real values to train on, that no
+        existing component already predicts — the only meaningful targets for a NEW component (a
+        lagged/rolling column is a past value already used as an input, not a new phenomenon)."""
+        min_rows = self._settings.adaptation.expand_scope.min_training_rows
+        return sorted(
+            c for c in SAME_SECOND_MEASUREMENTS
+            if c in df.columns and f"{c}_pred" not in existing_output_fields
+            and int(pd.to_numeric(df[c], errors="coerce").notna().sum()) >= min_rows
+        )
 
     def _retrieve_rag_context(self, expand_scope_context: str | None, rag_knowledge_base: "RagKnowledgeBase | None") -> str:
         """Read-only RAG retrieval, gracefully degrading to an honest 'not available'/'unavailable'
@@ -416,12 +432,20 @@ class ExpandScopeAgent:
     ) -> tuple[_ProposedComponentDesign, int]:
         max_attempts = self._settings.adaptation.expand_scope.max_llm_iterations
         available_columns = set(window_df.columns) - _NON_FEATURE_COLUMNS
+        existing_output_fields = {c.OUTPUT_FIELD for c in self._dt_model_registry.list_components()}
+        candidate_targets = set(self._candidate_targets(window_df, existing_output_fields))
+        if not candidate_targets:
+            raise ExpandScopeError(
+                "no unpredicted same-second KPI with enough data exists in the window — there is no new "
+                "phenomenon a new component could learn (observable KPIs: "
+                f"{sorted(SAME_SECOND_MEASUREMENTS - set(t.removesuffix('_pred') for t in existing_output_fields))})"
+            )
         previous_attempt: dict[str, Any] | None = None
         last_error: str | None = None
 
         for attempt in range(1, max_attempts + 1):
             design = self._propose_design(context, existing_component_names, previous_attempt, cache_key=cache_key)
-            error = self._validate_design(design, existing_component_names, available_columns)
+            error = self._validate_design(design, existing_component_names, available_columns, candidate_targets)
             if error is None:
                 return design, attempt
             last_error = error
@@ -434,7 +458,8 @@ class ExpandScopeAgent:
         raise ExpandScopeError(f"no valid component design produced after {max_attempts} attempt(s): {last_error}")
 
     def _validate_design(
-        self, design: _ProposedComponentDesign, existing_component_names: set[str], available_columns: set[str]
+        self, design: _ProposedComponentDesign, existing_component_names: set[str], available_columns: set[str],
+        candidate_targets: set[str] | None = None,
     ) -> str | None:
         if design.component_name in existing_component_names:
             return f"component_name {design.component_name!r} already exists — expand-scope must propose a NEW component"
@@ -442,6 +467,27 @@ class ExpandScopeAgent:
             return f"component_name {design.component_name!r} already has registered versions — not genuinely new"
         if design.target_column not in available_columns:
             return f"target_column {design.target_column!r} is not a real D1 telemetry column"
+        existing_output_fields = {c.OUTPUT_FIELD for c in self._dt_model_registry.list_components()}
+        if f"{design.target_column}_pred" in existing_output_fields:
+            return (
+                f"target_column {design.target_column!r} is already predicted by an existing component "
+                f"(output field {design.target_column + '_pred'!r} is taken) — not a new capability"
+            )
+        if candidate_targets is not None and design.target_column not in candidate_targets:
+            return (
+                f"target_column {design.target_column!r} is not a same-second measured KPI with enough data — "
+                f"choose one of {sorted(candidate_targets)} (lagged/rolling columns are past values, i.e. inputs)"
+            )
+        if design.target_column in design.required_features:
+            # Reading its own target as an input is pure leakage: a near-perfect FidelityScore
+            # that verification (which has no baseline for a new component) would ACCEPT.
+            return f"required_features must not include the target_column {design.target_column!r} itself (target leakage)"
+        same_second_inputs = sorted(set(design.required_features) & SAME_SECOND_MEASUREMENTS)
+        if same_second_inputs:
+            return (
+                f"required_features {same_second_inputs} are values measured in the SAME second as the target "
+                "(leakage) — use their _lag/_roll columns instead"
+            )
         unknown_deps = set(design.dependencies) - existing_component_names
         if unknown_deps:
             return f"dependencies {sorted(unknown_deps)} are not existing registered components"
@@ -467,16 +513,18 @@ class ExpandScopeAgent:
             f"{context['expand_scope_context']}\n\n"
             f"Existing components (do NOT propose one of these — propose something new): "
             f"{json.dumps(context['existing_components'])}\n"
-            f"Available raw/dependency columns you may use as target_column or required_features: "
-            f"{context['available_columns']}\n"
-            f"Recent feature statistics (pandas describe()): "
+            f"target_column MUST be exactly one of these same-second measured KPIs that no "
+            f"component predicts yet: {context['candidate_targets']}\n"
+            f"required_features MUST be chosen from these input columns (past-only lagged/rolling "
+            f"values, never a same-second measurement): {context['input_columns']}\n"
+            f"Recent statistics of the candidate targets (pandas describe()): "
             f"{json.dumps(context['feature_statistics'], default=str)[:4000]}\n"
             f"Relevant RAG context: {context['rag_context']}\n\n"
             "Propose: a NEW component_name (lowercase snake_case, not already used), a "
-            "target_column (an existing raw telemetry column not already predicted by an "
-            "existing component's output), optional dependencies (existing component names "
-            "whose predictions this new component may use as input), required_features (raw/"
-            "dependency columns this component reads directly), a one-sentence purpose, and "
+            "target_column (from the candidate-target list above), optional dependencies "
+            "(existing component names whose predictions this new component may use as input), "
+            "required_features (input columns this component reads directly — its target's own "
+            "_lag1 column is the natural persistence anchor), a one-sentence purpose, and "
             "feature_extraction_notes describing any derived features it should compute "
             "internally (e.g. aggregates) — mirroring how existing components already do this "
             "internally, not as a separate pipeline stage."
@@ -524,7 +572,13 @@ class ExpandScopeAgent:
             f"feature_extraction_notes={design.feature_extraction_notes!r}\n\n"
             f"Example of an existing component's implementation pattern to follow:\n"
             f"```python\n{context['example_component_source']}\n```\n\n"
-            f"Interface contract: {interface_contract}"
+            f"Interface contract: {interface_contract}\n\n"
+            f"Acceptance: verification ACCEPTs the new component only if its fidelity beats the naive "
+            f"persistence predictor y_t = {design.target_column}_lag1 on held-out data that comes AFTER "
+            f"the training data in time (levels can shift). A model of the absolute level that cannot "
+            f"extrapolate loses to persistence; predicting the one-second change (y_t - "
+            f"{design.target_column}_lag1) and adding it back to {design.target_column}_lag1 — as the "
+            f"existing components do — is strongly recommended. Handle missing input values (NaN)."
         )
         if previous_attempt is not None:
             prompt += (

@@ -1,21 +1,26 @@
 {
   "mode":"periodic_retrain",
   "seed":1,
-  "cycles":15,
+  "window_seconds":60,
+  "n_windows":62,
   "run_ids":[
     8
   ],
-  "n_triggers":21,
-  "n_adaptations":21,
-  "n_accepted":3,
-  "n_rejected":18,
+  "n_triggers":3,
+  "n_attempts":42,
+  "n_adaptations":0,
+  "n_accepted":0,
+  "n_rejected":0,
+  "n_deployed_ungated":42,
+  "n_agent_failures":0,
   "n_decisions":0,
   "n_fallbacks":0,
   "fallback_rate":0.0,
   "invalid":false,
   "incomplete_reason":null,
-  "mean_unified_fidelity":0.8328140018,
-  "total_duration_seconds":241.235371576,
+  "mean_unified_fidelity_runtime":0.8112634006,
+  "adaptation_wall_seconds":518.584137028,
+  "adaptation_cpu_seconds":4779.26,
   "budget_spent_usd":0.0,
-  "out_dir":"\/home\/harie06\/dt_adaptation\/baselines\/results\/periodic_retrain"
+  "out_dir":"baselines\/results\/periodic_retrain"
 }

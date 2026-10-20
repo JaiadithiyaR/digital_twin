@@ -1,5 +1,5 @@
 """Baseline experiment-mode policies (prompt2.md Step 6): deterministic stand-ins for Module 13
-(the Decision & Root-Cause Analysis Agent) used only by `scripts/run_baselines.py`'s
+(the Decision & Root-Cause Analysis Agent) used only by `baselines/run_all.py`'s
 `rule_based`/`periodic_retrain` modes — never used by the real system (`src/main.py`), which
 always makes a genuine LLM call. Kept here, not in `decision_agent.py`, so the real agent's own
 code path can never accidentally be bypassed by a baseline's deterministic rule.

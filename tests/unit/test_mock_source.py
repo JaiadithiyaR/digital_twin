@@ -6,7 +6,7 @@ the 7 raw targets, the 33 lagged features), never the retired NS-3-era field set
 from __future__ import annotations
 
 from src.common.config import MockTelemetryConfig
-from src.data.oai_dataset import ALL_FEATURES, TARGET_COLUMNS
+from src.data.oai_dataset import ALL_FEATURES, OBSERVABLE_KPI_COLUMNS, TARGET_COLUMNS
 from src.telemetry.mock_source import MockTelemetrySource
 
 IDENTITY_FIELDS = {"run_id", "cell_id", "session_id", "ue_id", "slice_id", "ts_1s"}
@@ -70,7 +70,9 @@ def test_missing_feature_rate_actually_drops_fields():
     config = _config(missing_feature_rate=1.0)
     source = MockTelemetrySource(config, max_records=10, realtime=False)
     records = list(source.records())
-    full_field_count = len(TARGET_COLUMNS) + len(ALL_FEATURES) + len(IDENTITY_FIELDS) + 1  # +source
+    full_field_count = (
+        len(TARGET_COLUMNS) + len(ALL_FEATURES) + len(OBSERVABLE_KPI_COLUMNS) + len(IDENTITY_FIELDS) + 1  # +source
+    )
     # With rate=1.0 every record has exactly one feature column removed.
     assert all(len(r) == full_field_count - 1 for r in records)
 

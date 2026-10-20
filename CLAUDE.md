@@ -46,7 +46,8 @@ A production-quality, modular AI-Driven Self-Adaptive Network Digital Twin (DT) 
 - Computes deterministic per-component fidelity (RMSE, MAE, Wasserstein, MK-MMD → composite
   score) AND a unified, system-wide fidelity score aggregating across components.
 - Reacts to adaptation triggers from two sources — externally-sourced drift events AND an
-  internal, deterministic fidelity-based trigger (unified score below threshold) — via a
+  internal, deterministic per-component fidelity policy (a component's own score below its
+  threshold; see §5) — via a
   knowledge-based LLM Decision & Root-Cause Analysis Agent that explains WHY the trigger fired
   and selects an adaptation *strategy* (Recalibrate / Regenerate / Expand Scope).
 - Executes that strategy through one of three LLM-capable adaptation agents, which produce an
@@ -74,7 +75,7 @@ comments, commit messages, and status tracking, not ad hoc names.
 | 5 | DT Functional Model | Common `train/predict/evaluate/save/load` interface + dependency-aware orchestrator | `src/dt_models/base.py`, `model_registry.py`, `orchestrator.py` |
 | 6-10 | 7 OAI KPI Models (retired: Throughput/Latency/Packet-Loss/PRB-Utilization/Jitter, see `archive/ns3_sim/`) | Predict `dl_bler`/`ul_bler`/`dl_prb`/`ul_prb` (roots) → `dl_throughput`/`ul_throughput` → `dl_rlc_delay` — **implemented** (prompt2.md Step 5; see `docs/oai_twin.md` for the full dependency graph + honest bootstrap-vs-persistence metrics) | `src/dt_models/{dl_bler,ul_bler,dl_prb,ul_prb,dl_throughput,ul_throughput,dl_rlc_delay}.py`, `regressors.py` |
 | 11 | Drift Detection Interface | External/partner drift event contract, validation, mock source — one of two trigger sources (see Module 12 for the other) | `src/drift/` |
-| 12 | Fidelity Evaluation Module | Deterministic RMSE/MAE/Wasserstein/MK-MMD → composite per-component score + unified fidelity score; owns the internal fidelity-based trigger — **implemented** | `src/fidelity/{metrics.py,evaluator.py}` |
+| 12 | Fidelity Evaluation Module | Deterministic RMSE/MAE/Wasserstein/MK-MMD → composite per-component score + unified fidelity score (reporting); owns the internal per-component fidelity adaptation policy — **implemented** | `src/fidelity/{metrics.py,evaluator.py,component_policy.py}` |
 | 13 | Knowledge-Based Decision & Root-Cause Analysis Agent (Agent 1) | LLM (grounded via RAG, Module 18) determines WHY a trigger fired and WHAT adaptation strategy to apply | `src/adaptation/decision_context.py`, `decision_agent.py` |
 | 14 | Recalibration Agent (Agent 2) | Retrain existing component on a recent window | `src/adaptation/recalibration_agent.py` |
 | 15 | Regeneration Agent (Agent 3) | LLM-driven rebuild of an inadequate component | `src/adaptation/regeneration_agent.py` |
@@ -88,8 +89,9 @@ Canonical flow (do not reorder or bypass stages):
 ```
 NS-3/5G-LENA → telemetry extraction → transport → validation → preprocessing
 → continuous synchronization → dynamic D1 state → dependency-aware DT prediction
-→ fidelity evaluation (per-component + unified) → adaptation trigger (external drift event OR
-internal fidelity-based trigger) → Knowledge-Based Decision & Root-Cause Analysis Agent (LLM +
+→ fidelity evaluation (per-component + unified) → adaptation trigger (internal per-component
+fidelity policy ONLY — external drift events are permanently disabled in the live system since
+2026-10-19) → Knowledge-Based Decision & Root-Cause Analysis Agent (LLM +
 RAG) → selected adaptation agent
 → candidate → sandbox → deterministic evaluation → agentic contextual verification
 → deterministic acceptance gate → promotion/rejection → lifecycle management
@@ -177,18 +179,36 @@ UnifiedFidelityScore = Σ_c (w_c * FidelityScore_c) / Σ_c w_c   # over componen
 - `None`/`status="insufficient_history"` if fewer than `config.fidelity.unified_min_components`
   components currently have a well-defined `FidelityScore_c` — same never-fabricate discipline as
   the per-component formula.
-- This is a system-health/trigger signal. It does NOT replace module 17's per-component
+- This is a system-health REPORTING signal only (since 2026-10-19 it no longer triggers
+  adaptation). It does NOT replace module 17's per-component
   `FidelityScore_new > FidelityScore_old + delta` acceptance gate.
-- **Fidelity-based trigger** (the second of two adaptation-trigger sources — see module 11 for
-  the first): fires when `UnifiedFidelityScore < config.fidelity.trigger_threshold` for
-  `config.fidelity.trigger_min_consecutive_evaluations` consecutive evaluation cycles (debounced
-  so ordinary sampling noise can never fire a spurious adaptation). `component` = the
-  worst-scoring component at trigger time (`argmin` over defined `FidelityScore_c`); `severity` =
-  `clip((trigger_threshold - UnifiedFidelityScore) / trigger_threshold, 0, 1)`. Fully deterministic
-  — never via the LLM. Normalized into the same canonical trigger shape
+- **Fidelity-based trigger — per-component policy** (`src/fidelity/component_policy.py`) — the
+  ONLY adaptation-trigger source of the live system: module 11's external drift events were
+  permanently removed from `ContinuousOrchestrator` on 2026-10-19 (no drift source, consumer
+  thread, constructor flag or CLI flag remains; module 11 is still used by `baselines/`). Each component c is
+  decided INDEPENDENTLY from its own `FidelityScore_c` (the formula above, unchanged — it is
+  per-component by definition): c fires when its FRESH `FidelityScore_c < threshold_c` for
+  `min_consecutive_c` consecutive evaluation cycles (debounced so ordinary sampling noise can never
+  fire a spurious adaptation). `threshold_c`/`min_consecutive_c` default to
+  `config.fidelity.trigger_threshold`/`trigger_min_consecutive_evaluations` and may be overridden
+  per component in `config.fidelity.component_policies`. Each component's counter resets on any
+  at-or-above cycle and immediately after firing; an `insufficient_history` score or a cycle with
+  no fresh measurement for c (no scorable rows) never fires and resets c's counter — missing data is
+  never read as good or bad fidelity. `component` = c itself; `severity` =
+  `clip((threshold_c - FidelityScore_c) / threshold_c, 0, 1)`. Several components may fire in the
+  same cycle — each is a separate trigger, adapted one component at a time under the
+  component-scoped lock (§8). No global threshold has to be crossed first, and a healthy component
+  is never adapted because another one degraded. Fully deterministic — never via the LLM.
+  Normalized into the same canonical trigger shape
   (`component`/`severity`/`timestamp`/`trigger_type`/`metadata`) as an external `DriftEvent`
   (`trigger_type="fidelity_degradation"` vs. `"external_drift"`), so module 13 consumes either
-  uniformly.
+  uniformly. *(Before 2026-10-19 this trigger was global: one counter on
+  `UnifiedFidelityScore < trigger_threshold`, blaming the `argmin` component — retired.)*
+- **After every adaptation** the orchestrator re-measures the component on the latest window
+  (read-only: `update_window=False`, same normalization reference) and records whether it now
+  meets its threshold (a component still below stays flagged and its own policy re-fires after
+  `min_consecutive_c` more cycles). After an ACCEPT + hot swap, every transitive downstream
+  dependent is re-measured the same way and reported — never auto-adapted.
 
 ## 6. Decision & Root-Cause Analysis Agent (module 13)
 
@@ -291,16 +311,21 @@ python scripts/build_oai_dataset.py      # writes data/processed/oai/{train,val,
 # Main application (Phase 11 — implemented; see §12's Phase 11 entry for a real validated run)
 python -m src.main --mode demo                   # OAI-schema-shaped mock telemetry, real continuous loop, runs forever (Ctrl-C to stop)
 python -m src.main --mode live                    # real OAI RAN KPI replay (Module 1), real continuous loop
-python -m src.main --mode demo --max-drift-events 1   # bounded run — stop after one adaptation cycle (demo/validation only)
+python -m src.main --mode demo --max-adaptations 1    # bounded run — stop after one adaptation cycle (demo/validation only)
 python scripts/run_orchestrator_demo.py           # permanent, real, unattended one-cycle validation script (mock telemetry) — see §12
 python scripts/run_oai_e2e_smoke.py               # permanent, real OAI run-8 replay + forced-trigger smoke test — see Phase 12's entry
-python scripts/run_baselines.py --mode full        # all 4 baseline experiment modes over real OAI TEST-split replay
+python baselines/run_all.py && python baselines/stats.py   # 4-mode ablation over the OAI TEST split (scripts/run_baselines.py retired to archive/legacy_scripts/)
 python scripts/demo_recalibration.py              # standalone Module 14 demo — see Module 14's entry
 python scripts/demo_regeneration.py               # standalone Module 15 demo — real GOOGLE_API_KEY required, see Module 15's entry
 python scripts/demo_expand_scope.py               # standalone Module 16 demo — real GOOGLE_API_KEY required, see Module 16's entry
 ```
 
 ## 11. Testing Commands
+
+**Current counts (2026-10-20): 583 unit + 35 integration/e2e, all passing** (run the two suites
+separately). Ablation: `baselines/run_all.py` → `baselines/stats.py` → `scripts/generate_ieee_figures.py`
+(protocol in `baselines/README.md`). The per-line counts in the block below are historical. Individual adaptation-agent
+check on real OAI data: `python scripts/test_adaptation_agents.py` (see `manual.md` §3.4).
 
 ```bash
 .venv/bin/python -m pytest tests/unit -v          # 473 collected this revision (OAI migration: -16 for the 5 retired-component/zmq test files deleted, +many new for oai_dataset/oai_replay_source/baseline_policies/no_archive_imports + the rewritten fixture-substitution pass across ~15 existing files). test_live_api_smoke_if_key_configured genuinely calls the live API (real GOOGLE_API_KEY configured) rather than auto-skipping — passes when the free tier's 20-request/model/day quota has headroom, genuinely FAILS (never silently skipped) if that day's quota is already exhausted by other real calls made the same day, e.g. by running the demo scripts below repeatedly — this is deliberate test design (prompt.md §0.24: never hide a genuine failure behind a skip), not a bug to "fix" by tolerating 429s. Confirmed clean this revision: 473 passed, 0 failures.
@@ -2416,5 +2441,122 @@ rationale, real KPI catalog, data-splits design, and per-component bootstrap met
   list): `docs/architecture_diagram.drawio`, `docs/FORMULAS.pdf`, and
   `docs/IEEE_Digital_Twin_Paper.docx` still depict the retired NS-3-era architecture/component set
   and have not been rebuilt for OAI in this phase — flagged, not silently left incorrect.
+
+**Bug-fix pass (2026-10-19) — line-by-line review of `src/`, prompted by stalling/erroring
+output.** Validated on a fresh Windows+WSL copy with NO OAI export available (`config.data.oai_root`
+points at another machine), so the real `--mode live` run could NOT be re-executed here — every
+OAI-data-dependent test now skips with an explicit reason instead of some failing and some
+skipping. Fixed:
+- `src/common/console_report.py`: rich parsed every `[fidelity]`/`[trigger]`/`[decision]`/
+  `[warning]` line prefix as markup and silently dropped it, and raised `MarkupError` (crashing the
+  loop from inside a warning print) on exception text containing e.g. `[/x]` — now `markup=False`.
+- `src/main.py`: (1) `setup_logging()` ran only AFTER `initialize()`, so all bootstrap/init logs
+  went to Python's unformatted last-resort stderr handler and never reached the log file; (2)
+  `run()` had no guard — one unexpected exception in a prediction/fidelity cycle or adaptation
+  cycle killed the whole continuous loop (now logged + skipped; `_handle_trigger` still
+  propagates, its lock is still released in `finally`); (3) `FidelityComputationError` (e.g. only
+  one scorable row, MK-MMD needs >= 2) raised straight out of the fidelity cycle; (4) a
+  verification exception left the candidate stranded in `"candidate"` status forever — now
+  rejected; (5) a restarted `--mode live` replay re-sent every tick D1 already persisted, so the
+  fidelity cycle saw "nothing new" for the whole replay (a silent stall at speed>0) — the replay
+  now seeks past D1's last persisted tick for those runs (`_resume_replay_after_persisted_history`;
+  delete `data/artifacts/d1_*.parquet` to replay from the start).
+- `src/dt_models/d1_model_store.py`: `append_history` now dedupes on `(run_id, session_id, ts_1s)`
+  (keep last) — a re-delivered tick previously duplicated history rows, corrupting every
+  downstream window.
+- `src/adaptation/verification_agent.py`: residual components legitimately predict NaN where
+  `y_{t-1}` is unknown, and held-out targets can be NaN — the old gate REJECTed every such
+  candidate (`no_invalid_output`) or crashed (unguarded candidate `evaluate()` on a NaN target).
+  Rows with no ground truth or no production prediction are now excluded for BOTH models alike
+  (same masking as the live fidelity cycle); the candidate must still be finite on every scored
+  row; >= 2 scorable rows required.
+- `src/adaptation/expand_scope_agent.py`: design validation now rejects target leakage
+  (`required_features` containing `target_column`, which would score near-perfect fidelity and be
+  auto-ACCEPTed — no baseline exists for a new component) and a `target_column` already predicted
+  by an existing component (`<target>_pred` output-field collision).
+- `src/drift/mock_drift_source.py`: inter-event wait is now interruptible — `stop()` previously
+  had to wait out a full 30s sleep and reported a thread-join timeout.
+- `baselines/_lib.py`: same `FidelityComputationError` guard as `main.py`.
+Tests: 527 unit passed / 1 skipped, 26 integration+e2e passed / 9 skipped (all skips = OAI data
+not built), 0 failures; the 4 orchestrator-level integration tests (`test_main_orchestrator.py`,
+`test_hot_swap.py`) were additionally run and passed against a scratch MOCK-bootstrap table
+(never written into the repo), since they otherwise skip here.
+
+**Live OAI validation of the bug-fix pass (2026-10-19).** With the real export available
+(`data.oai_root` = WSL path), `scripts/build_oai_dataset.py` (train 60,858 / test 25,865 rows, 0%
+target NaN) and `scripts/ingest_rag.py` (47 chunks) were run and the live system exercised for
+real. One further stall was found and fixed live: D1 rewrote the whole history Parquet every
+20-row batch (~1 s per rewrite on `/mnt/c`), capping ingestion at ~16 rows/s — now rate-limited
+via `storage.persist_min_interval_seconds` (~58–65 rows/s observed).
+
+**Per-component fidelity adaptation policy (2026-10-19) — replaces the unified-score trigger.**
+See §5 for the policy definition and CHANGELOG.md for the per-file change list. The fidelity
+formula is untouched (it was already per-component). Validation:
+- Tests: 555 unit + 35 integration/e2e passed, 0 skipped (new: `test_component_policy.py`,
+  `test_per_component_orchestration.py`).
+- Live, policy only (`--mode live --replay-speed 10`, 15 min): 85 fidelity cycles, all 25,865 rows,
+  one trigger — `ul_bler` (`F_c` 0.3616 < 0.5 for 3 cycles) adapted while `F_U` was 0.7175, i.e. a
+  case the unified policy could never have triggered; REJECT, post-check 0.3488 → still flagged.
+- Live, with external drift (final run on final code, 15 min): 20 triggers (19 external, 1
+  per-component), 19 LLM decisions (0 fallbacks), 17 verified adaptations (2 ACCEPT — both
+  LLM-regenerated `dl_prb` models hot-swapped, each followed by `dl_throughput`/`dl_rlc_delay`
+  revalidation: ok), 2 `agent_failed` and 1 `interrupted` attempt recorded in
+  `logs/adaptation_decisions.jsonl`, 0 errors.
+- Found and fixed during that validation: an attempt interrupted by Ctrl-C left no decision-log
+  entry — `_handle_trigger` now records `interrupted`/`error` for any abnormal end.
+Known limitations (IMPLEMENTATION_STATUS item 11): fidelity cycles pause during an adaptation
+(single loop); `ResidualDTComponent.train()` drops any row with a NaN feature, so early-run
+recalibration windows can be empty (`agent_failed`); `baselines/results/` predate this policy.
+(The first two were fixed on 2026-10-20 — next entry.)
+
+**Adaptation loop, multithreading, reject root causes, expand-scope (2026-10-20).** Full per-file
+list and measured root causes in CHANGELOG.md; operator view in `manual.md` §3/§3.4. Design
+points a future session must keep:
+- **Loop** (`ContinuousOrchestrator._run_adaptation_loop`): one trigger → up to
+  `adaptation.max_adaptation_attempts` attempts of decision → agent → sandbox → verification. Stops
+  on ACCEPT, on recovery (`still_below_threshold is False`), on a non-retryable outcome (unknown
+  component, no LLM client, "rows available"/"no unpredicted same-second KPI" agent errors), on
+  stop, or on exhaustion. Each attempt's summary goes to the next attempt's
+  `DecisionContext.previous_attempts` and the agents' drift context. One decision-log line per
+  attempt (`attempt`/`max_attempts`). A fidelity trigger whose component was measured `ok` after
+  the trigger fired is skipped (`skipped_recovered`); `metadata.forced` triggers never are.
+- **Threads**: `_dispatch_pending` starts one daemon worker (`dt-adapt-<component>`) per pending
+  trigger up to `_max_workers`; `_active_components` (under `_pending_lock`) guarantees one
+  adaptation per component. `_serving_lock` wraps `run_predictions` and the hot-swap registry
+  mutation; `FidelityEvaluator` has its own `RLock` (formula untouched); `_finish_decision_entry`
+  is idempotent; `stop()` waits `adaptation.shutdown_wait_seconds`, then logs unfinished workers
+  as `interrupted`.
+- **Data**: residual training drops only undefined-residual rows; recalibration/regeneration add
+  the TRAIN pool (`_reference_history()`, cached) on the training side only.
+- **Expand-scope**: `oai_dataset.OBSERVABLE_KPI_COLUMNS` (8 same-second MAC `_avg` KPIs) flow
+  dataset → replay → `CleanTelemetryRecord.observables` → D1; they are never features
+  (`feature_columns()` excludes them; `sandbox/executor.SAME_SECOND_MEASUREMENTS` strips them and
+  the 7 targets from every candidate's inputs). A component with no production version is verified
+  against persistence `{target}_lag1` via `VerificationAgent(..., baseline_predictions=...)` /
+  `_score_against_reference` — same `new > old + delta` gate, isolated shared normalization
+  reference, Module 12 formula unchanged.
+- **Validation**: 576 unit + 35 integration/e2e passed. `scripts/test_adaptation_agents.py`
+  (strategy pinned, `decision_source: pinned`, real run 7): all three agents produced and verified
+  real candidates; expand-scope went from 0 candidates (10/10 designs invalid) to a sandboxed,
+  verified `dl_curr_tbs` component. Final live run (15 min, fresh D1): 25,865 rows, 89 cycles,
+  7 triggers, 5 attempts → 2 ACCEPT + hot swap, 3 REJECT, 2 stale skips; one loop retried and
+  switched strategy on feedback; concurrent adaptations observed; 0 warnings/errors (previous run:
+  0/5 accepted). Ctrl-C mid-adaptation shuts down cleanly — scripted runs must use
+  `timeout --foreground -s INT` (plain `timeout -s INT` from a non-interactive WSL script never
+  delivers SIGINT, even to a trivial script).
+- Open items: IMPLEMENTATION_STATUS item 14.
+
+**Ablation harness audit + IEEE figures (2026-10-20).** Details: CHANGELOG.md and
+`baselines/README.md`. A future session must keep these invariants:
+- **No look-ahead**: agents get `CutoffD1View`, never the bulk-replayed `D1Store`.
+- **Same windows for every mode**: fixed 60 s windows of data time.
+- **No mock drift injected.**
+- **Same adaptation inputs as the live system**: retry loop, reference data, persistence baseline.
+- **Cross-mode fidelity only via `stats.py`**: frozen pooled reference, runtime formula untouched. The runtime `F_c` is self-normalized per run and not comparable across modes.
+- **Synthetic figures are always watermarked** and are never for publication.
+
+`DTOrchestrator` now wires a dependency's `OUTPUT_FIELD` even when a candidate also lists it in
+`REQUIRED_FEATURES`; before, that broke all later predictions after a hot swap. Measured result
+and its limitation (run 8 is idle after minute ~18): IMPLEMENTATION_STATUS items 15–16.
 
 See `IMPLEMENTATION_STATUS.md` for the full module-by-module table and the exact next task.

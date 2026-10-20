@@ -1739,3 +1739,60 @@ remains:
 8. **New, from Phase 12**: rebuild `docs/architecture_diagram.drawio` (highest priority — see
    Phase 12's own entry) and, lower priority, `docs/FORMULAS.pdf`/`docs/IEEE_Digital_Twin_Paper.docx`
    for the OAI architecture — all three still depict the retired NS-3-era system.
+9. ~~Re-run the live system on real OAI data after the 2026-10-19 bug-fix pass~~ **DONE
+   (2026-10-19)** — dataset built, RAG ingested, multiple real `--mode live` runs (see CLAUDE.md
+   §12's last entries).
+10. **[x] Per-component fidelity adaptation policy (2026-10-19)** — the unified-score trigger was
+   replaced by `src/fidelity/component_policy.py` (independent per-component decisions,
+   per-component threshold overrides, post-adaptation re-check, dependency revalidation, component
+   fidelity + adaptation decision logs). Formula unchanged. 555 unit + 35 integration/e2e passing;
+   validated in real live runs. Full writeup: CLAUDE.md §12 + CHANGELOG.md.
+11. Found during that work:
+   (a) ~~adaptations run on the single orchestration loop~~ **FIXED (2026-10-20)** — worker thread
+   per adaptation, `adaptation.max_concurrent_adaptations` (2); see item 13.
+   (b) ~~`ResidualDTComponent.train()` drops every row with ANY NaN feature~~ **FIXED
+   (2026-10-20)** — only rows with an undefined residual target are dropped; see item 13.
+   (c) **Open:** `baselines/results/` predate the per-component policy and the adaptation loop —
+   re-run before comparing.
+12. **[x] External drift permanently disabled in the live system (2026-10-19)** — the internal
+   per-component fidelity policy is the only trigger source of `ContinuousOrchestrator`; the drift
+   consumer, its constructor parameters and the `--enable-external-drift` flag were removed.
+   Module 11 remains for `baselines/`. See CHANGELOG.md.
+13. **[x] Adaptation loop + multithreading + reject root causes + expand-scope (2026-10-20)** —
+   retry-until-fixed loop with rejection feedback (`adaptation.max_adaptation_attempts`), worker
+   threads (`max_concurrent_adaptations`), stale-trigger skip, NaN-tolerant residual training,
+   TRAIN-pool reference data for recalibration/regeneration, `llm.max_tokens` 32768, expand-scope
+   observable KPI targets + persistence-baseline verification, same-second columns stripped from
+   sandbox inputs, `scripts/test_adaptation_agents.py`. 576 unit + 35 integration/e2e passing; all
+   three agents verified individually on real OAI data; final live run 2 ACCEPT / 3 REJECT (was
+   0/5). Full writeup: CLAUDE.md §12 + CHANGELOG.md.
+14. **Open, found during that work**:
+   (a) A loop ends on ACCEPT even if the post-check still shows the component below threshold
+   (e.g. `dl_bler-v13`, post-check 0.2029 on one 200-row window); the policy re-triggers it after N
+   more low cycles. Continuing the loop past an ACCEPT is a policy choice, not made here.
+   (b) Expand-scope on run 7/8 is hard to win: the data has traffic regime shifts (KPI levels
+   collapse when a link idles), where persistence is near-optimal. Expected, not a defect.
+   (c) Recalibrating an LLM-regenerated production class (e.g. `dl_prb-v10`'s `DLPRBComponent`)
+   trains unweighted when that class's `train()` has no `sample_weight` parameter.
+15. **DONE (2026-10-20) — ablation harness audit + IEEE figures.** Fixed in `baselines/`:
+   - **Look-ahead leakage**: agents read all of run 8, including windows later scored. Now `CutoffD1View`.
+   - **Non-comparable scores**: each mode's fidelity was self-normalized. `stats.py` now re-scores on one frozen pooled reference.
+   - **Mock drift**: external drift events were still injected into every mode. Removed.
+   - **Not matching the live system**: no retry loop, no reference TRAIN data, no persistence baseline for expand-scope. All added.
+   - **Periodic mode**: was gated and cycle-based. Now blind deploy every 600 s of data.
+   - **No 60 s windowing and no statistics pipeline**: both added.
+   - **Units bug**: per-run graphs divided Mbps/ms by 1000.
+
+   Also fixed a real `DTOrchestrator` bug that would hit the live system after a hot swap: a candidate listing a
+   dependency's `_pred` column in `REQUIRED_FEATURES` failed every later prediction cycle. It killed
+   47/62 windows of the first rule_based run, which was re-run.
+
+   Added: `baselines/stats.py`, `scripts/generate_ieee_figures.py`, `tests/unit/test_baselines_harness.py`,
+   and an orchestrator regression test. 583 unit tests pass.
+16. **Open — the ablation cannot show an adaptation benefit on run 8 as-is.**
+   - Run 8 has traffic only in minutes ~0–18. The other 44 of 62 windows are idle, with all KPIs about 0.
+   - All triggers fired at minutes 14–15.
+   - Result on the frozen scale: Static 0.8196 > Rule-based 0.8174 > Proposed 0.8155 > Periodic 0.8122 (differences < 0.006).
+   - Candidates the gate accepted during the burst generalised slightly worse afterwards. The gate validates on the last 20% of the window seen so far, not on future data.
+   - Options, all decisions for the author: score only active-traffic windows (pre-registered, not chosen post hoc); test on more/longer runs (e.g. a complete run 10); or add a forward-validation criterion to the gate.
+   - `scripts/run_baselines.py` (Phase 12) is superseded by `baselines/run_all.py`, and its periodic mode references a config key that no longer exists.

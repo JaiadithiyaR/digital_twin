@@ -20,7 +20,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from src.common.config import OaiPreprocessingConfig
-from src.data.oai_dataset import ALL_FEATURES
+from src.data.oai_dataset import ALL_FEATURES, OBSERVABLE_KPI_COLUMNS
 from src.telemetry.schema import (
     ALLOWED_SOURCES,
     TARGET_COLUMNS,
@@ -132,11 +132,13 @@ class TelemetryPreprocessor:
                 missing.append(name)
 
         quality = RecordQuality(missing_fields=sorted(missing), imputed_fields=[], out_of_range_fields=[])
+        observables = {name: _as_finite_float_or_none(raw.get(name)) for name in OBSERVABLE_KPI_COLUMNS}
 
         try:
             clean = CleanTelemetryRecord(
                 run_id=run_id, cell_id=cell_id, session_id=session_id, ue_id=ue_id, slice_id=slice_id,
                 ts_1s=ts_1s, features=features, targets=targets, source=source, quality=quality,
+                observables=observables,
             )
         except ValidationError as exc:
             logger.warning(

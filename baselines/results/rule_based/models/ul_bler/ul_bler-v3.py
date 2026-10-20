@@ -2,17 +2,17 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import ClassVar
+from typing import Optional, Dict, Any
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 from src.dt_models.base import DTComponent
 
 class UlBlerModel(DTComponent):
-    COMPONENT_NAME: ClassVar[str] = "ul_bler"
-    DEPENDENCIES: ClassVar[tuple[str, ...]] = ()
-    REQUIRED_FEATURES: ClassVar[tuple[str, ...]] = (
+    COMPONENT_NAME = "ul_bler"
+    DEPENDENCIES: tuple[str, ...] = ()
+    OUTPUT_FIELD = "ul_bler_pred"
+    REQUIRED_FEATURES: tuple[str, ...] = (
         "ul_bler_lag1",
         "ul_bler_lag2",
         "ul_bler_lag3",
@@ -24,64 +24,111 @@ class UlBlerModel(DTComponent):
         "ul_bler_roll_std_10s",
         "ul_bler_avg_lag1",
         "ul_bler_std_lag1",
+        "ul_bler_avg_lag2",
+        "ul_bler_std_lag2",
+        "ul_bler_avg_roll_mean_5s",
+        "ul_bler_avg_roll_mean_10s",
+        "ul_bler_std_roll_mean_5s",
         "pusch_snr_avg_lag1",
+        "pusch_snr_avg_lag2",
+        "pusch_snr_avg_roll_mean_5s",
         "pusch_snr_std_lag1",
         "pucch_snr_avg_lag1",
-        "pucch_snr_std_lag1",
+        "pucch_snr_avg_roll_mean_5s",
         "ul_mcs1_avg_lag1",
+        "ul_mcs1_avg_lag2",
+        "ul_mcs1_avg_roll_mean_5s",
         "ul_mcs1_std_lag1",
-        "ul_prb_lag1",
         "ul_throughput_lag1",
+        "ul_throughput_roll_mean_5s",
+        "ul_prb_lag1",
+        "ul_prb_roll_mean_5s",
         "phr_avg_lag1",
+        "phr_avg_roll_mean_5s",
+        "bsr_avg_lag1",
+        "requested_prb_ratio_lag1"
     )
-    OUTPUT_FIELD: ClassVar[str] = "ul_bler_pred"
 
-    def __init__(self, max_iter: int = 100, learning_rate: float = 0.05, max_depth: int = 6):
-        self.max_iter = max_iter
-        self.learning_rate = learning_rate
-        self.max_depth = max_depth
-        self.model = HistGradientBoostingRegressor(
-            max_iter=self.max_iter,
-            learning_rate=self.learning_rate,
-            max_depth=self.max_depth,
-            random_state=42
-        )
+    def __init__(self, model_type: str = "hist_gb", params: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.model_type = model_type
+        self.params = params or {
+            "max_iter": 250,
+            "learning_rate": 0.03,
+            "max_depth": 6,
+            "min_samples_leaf": 15,
+            "l2_regularization": 0.05,
+            "random_state": 42
+        }
+        self._model = None
         self._is_trained = False
+
+    @classmethod
+    def from_settings(cls, settings: Any = None) -> "UlBlerModel":
+        if settings is not None and hasattr(settings, "dt_models") and hasattr(settings.dt_models, "ul_bler"):
+            spec = settings.dt_models.ul_bler
+            model_type = getattr(spec, "model_type", "hist_gb")
+            params = getattr(spec, "params", {})
+            return cls(model_type=model_type, params=params)
+        return cls()
 
     @property
     def is_trained(self) -> bool:
         return self._is_trained
 
     def train(self, features: pd.DataFrame, targets: pd.Series) -> None:
-        feat_cols = [c for c in self.REQUIRED_FEATURES if c in features.columns]
-        X = features[feat_cols].copy().fillna(0.0)
-        y = targets.copy().fillna(0.0)
-        self.model.fit(X, y)
+        cols = [c for c in self.REQUIRED_FEATURES if c in features.columns]
+        if not cols:
+            X = features.select_dtypes(include=[np.number]).fillna(0.0)
+        else:
+            X = features[cols].fillna(0.0)
+        y = targets.fillna(0.0)
+
+        model = HistGradientBoostingRegressor(**self.params)
+        model.fit(X, y)
+        self._model = model
         self._is_trained = True
 
     def predict(self, features: pd.DataFrame) -> pd.Series:
-        if not self._is_trained:
-            raise RuntimeError("Model is not trained yet.")
-        feat_cols = [c for c in self.REQUIRED_FEATURES if c in features.columns]
-        X = features[feat_cols].copy().fillna(0.0)
-        preds = self.model.predict(X)
-        preds = np.clip(preds, 0.0, 1.0)
-        return pd.Series(preds, index=features.index, name=self.OUTPUT_FIELD)
+        if not self._is_trained or self._model is None:
+            if "ul_bler_lag1" in features.columns:
+                preds = features["ul_bler_lag1"].fillna(0.0)
+            else:
+                preds = pd.Series(0.0, index=features.index)
+            return pd.Series(np.clip(preds.values, 0.0, 1.0), index=features.index, name=self.OUTPUT_FIELD)
+
+        cols = [c for c in self.REQUIRED_FEATURES if c in features.columns]
+        if not cols:
+            X = features.select_dtypes(include=[np.number]).fillna(0.0)
+        else:
+            X = features[cols].fillna(0.0)
+
+        raw_preds = self._model.predict(X)
+        clipped_preds = np.clip(raw_preds, 0.0, 1.0)
+        return pd.Series(clipped_preds, index=features.index, name=self.OUTPUT_FIELD)
 
     def evaluate(self, features: pd.DataFrame, targets: pd.Series) -> dict[str, float]:
         preds = self.predict(features)
         y_true = targets.fillna(0.0)
-        rmse = float(np.sqrt(mean_squared_error(y_true, preds)))
+        mse = mean_squared_error(y_true, preds)
+        rmse = float(np.sqrt(mse))
         mae = float(mean_absolute_error(y_true, preds))
         return {"rmse": rmse, "mae": mae}
 
-    def save(self, path: str | Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({"model": self.model, "is_trained": self._is_trained}, path)
+    def save(self, path: str) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        data = {
+            "model": self._model,
+            "is_trained": self._is_trained,
+            "model_type": self.model_type,
+            "params": self.params,
+            "required_features": self.REQUIRED_FEATURES
+        }
+        joblib.dump(data, path)
 
-    def load(self, path: str | Path) -> None:
-        path = Path(path)
+    def load(self, path: str) -> None:
         data = joblib.load(path)
-        self.model = data["model"]
-        self._is_trained = data["is_trained"]
+        self._model = data.get("model")
+        self._is_trained = data.get("is_trained", False)
+        self.model_type = data.get("model_type", self.model_type)
+        self.params = data.get("params", self.params)

@@ -25,7 +25,11 @@ from src.data.oai_dataset import build_dataset, write_outputs  # noqa: E402
 
 def main() -> int:
     settings = load_settings()
-    oai_root = Path(settings.data.oai_root)
+    oai_root = settings.resolve_path(settings.data.oai_root)  # absolute paths pass through unchanged
+    if not oai_root.is_dir():
+        print(f"[build_oai_dataset] raw OAI export not found at {oai_root} — set OAI_ROOT in .env. "
+              "(Not needed to run the system: data/processed/oai/ ships with the repository.)")
+        return 1
     splits = {
         "train": settings.data.splits.train,
         "test": settings.data.splits.test,

@@ -46,12 +46,6 @@ def test_all_seven_components_train_predict_save_load_round_trip(real_oai_split,
         "dl_bler": DlBlerModel, "ul_bler": UlBlerModel, "dl_prb": DlPrbModel, "ul_prb": UlPrbModel,
         "dl_throughput": DlThroughputModel, "ul_throughput": UlThroughputModel, "dl_rlc_delay": DlRlcDelayModel,
     }
-    dep_cols = {
-        "dl_throughput": {"dl_bler": "dl_bler", "dl_prb": "dl_prb"},
-        "ul_throughput": {"ul_bler": "ul_bler", "ul_prb": "ul_prb"},
-        "dl_rlc_delay": {"dl_throughput": "dl_throughput", "dl_bler": "dl_bler"},
-    }
-
     train_with_deps = train.copy()
     for name, cls in components.items():
         model = cls.from_settings(SETTINGS)

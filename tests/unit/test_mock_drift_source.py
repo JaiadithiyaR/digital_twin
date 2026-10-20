@@ -87,3 +87,22 @@ def test_close_stops_generation():
     # Generator loop checks `_closed` at the top of each iteration — draining it must terminate.
     remaining = list(it)
     assert len(remaining) <= 1  # at most one more in flight before the closed-check fires
+
+
+def test_close_wakes_a_consumer_waiting_between_realtime_events_promptly():
+    """The orchestrator's bounded stop() join must not wait out a full emit interval (30s by
+    default) for a drift thread parked between events."""
+    import threading
+    import time
+
+    source = MockDriftSource(_config(emit_interval_seconds=60.0), VALID_COMPONENTS, SEVERITY_RANGE, max_events=None, realtime=True)
+    consumer = threading.Thread(target=lambda: list(source.events()), daemon=True)
+    consumer.start()
+    time.sleep(0.2)  # first event emitted, now parked in the 60s inter-event wait
+
+    started = time.monotonic()
+    source.close()
+    consumer.join(timeout=5.0)
+
+    assert not consumer.is_alive()
+    assert time.monotonic() - started < 2.0

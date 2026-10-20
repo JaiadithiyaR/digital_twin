@@ -81,17 +81,23 @@ class DTOrchestrator:
                     "explicitly rather than silently producing incorrect predictions)"
                 )
 
-            missing_features = [f for f in component.REQUIRED_FEATURES if f not in features.columns]
+            # A component may also list a dependency's OUTPUT_FIELD in REQUIRED_FEATURES (LLM-
+            # generated candidates do). That column is wired from the dependency's prediction, so
+            # it must not be demanded from the raw features — doing so failed every prediction
+            # cycle after such a candidate was hot-swapped in.
+            dependency_fields = {self._registry.get(d).OUTPUT_FIELD: d for d in component.DEPENDENCIES}
+            raw_features = [f for f in component.REQUIRED_FEATURES if f not in dependency_fields]
+            missing_features = [f for f in raw_features if f not in features.columns]
             if missing_features:
                 raise OrchestratorError(
                     f"component '{name}' requires feature(s) {missing_features} not present in "
                     "the supplied features"
                 )
 
-            component_input = features[list(component.REQUIRED_FEATURES)].copy()
-            for dependency_name in component.DEPENDENCIES:
-                dependency_component = self._registry.get(dependency_name)
-                component_input[dependency_component.OUTPUT_FIELD] = predictions[dependency_name]
+            component_input = features[raw_features].copy()
+            for output_field, dependency_name in dependency_fields.items():
+                component_input[output_field] = predictions[dependency_name]
+            component_input = component_input[list(dict.fromkeys([*component.REQUIRED_FEATURES, *dependency_fields]))]
 
             logger.info(
                 "running DT component prediction",

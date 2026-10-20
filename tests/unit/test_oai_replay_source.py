@@ -8,7 +8,6 @@ import threading
 import time
 
 import pandas as pd
-import pytest
 
 from src.telemetry.oai_replay_source import OaiReplaySource
 

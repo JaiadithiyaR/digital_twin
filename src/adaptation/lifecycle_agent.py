@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from src.llm.google_client import LLMClientError
 from src.rag.rag_kb import RagUnavailableError
 
 if TYPE_CHECKING:
@@ -92,6 +91,20 @@ class LifecycleRecord(BaseModel):
     telemetry_source: str
     replayed_run_ids: list[int] | None
     replay_speed: float | None
+    # Per-component adaptation policy outcome (supplied by the orchestrator; defaults keep records
+    # written before this policy existed readable). `post_adaptation_fidelity` is the component's
+    # FidelityScore_c re-measured on the latest window with whatever model is serving after the
+    # event; `dependency_revalidation` lists downstream components re-measured after a hot swap.
+    component_threshold: float | None = None
+    fidelity_at_trigger: float | None = None
+    production_version_after: str | None = None
+    post_adaptation_fidelity: float | None = None
+    remaining_fidelity_gap: float | None = None
+    still_below_threshold: bool | None = None
+    dependency_revalidation: list[dict[str, Any]] = []
+    # Adaptation loop: which attempt (1-based) of how many allowed this event was.
+    adaptation_attempt: int | None = None
+    max_adaptation_attempts: int | None = None
 
 
 def _summarize_agent_action(agent_result: Any) -> dict[str, Any]:
@@ -183,6 +196,7 @@ class LifecycleAgent:
         telemetry_source: str = "MOCK",
         replayed_run_ids: list[int] | None = None,
         replay_speed: float | None = None,
+        component_policy_outcome: dict[str, Any] | None = None,
     ) -> LifecycleRecord:
         """Build and durably append exactly one `LifecycleRecord` for one full adaptation event.
         Every argument is a real object a real upstream module (11/12/13/14-16/17) already
@@ -226,6 +240,7 @@ class LifecycleAgent:
             telemetry_source=telemetry_source,
             replayed_run_ids=replayed_run_ids,
             replay_speed=replay_speed,
+            **(component_policy_outcome or {}),
         )
         self._append_record(record)
         logger.info(
@@ -362,6 +377,19 @@ class LifecycleAgent:
             "",
             "## Fidelity",
             f"before = {record.fidelity_before}, after = {record.fidelity_after}",
+            "",
+            "## Component fidelity policy",
+            f"threshold = {record.component_threshold}, fidelity at trigger = {record.fidelity_at_trigger}, "
+            f"post-adaptation fidelity = {record.post_adaptation_fidelity}, remaining gap = "
+            f"{record.remaining_fidelity_gap}, still below threshold = {record.still_below_threshold}, "
+            f"production version after = {record.production_version_after}, adaptation attempt = "
+            f"{record.adaptation_attempt} of {record.max_adaptation_attempts}",
+            "",
+            "## Dependency revalidation",
+            "\n".join(
+                f"- `{d.get('component')}`: F_c = {d.get('fidelity_score')}, threshold = {d.get('threshold')} — {d.get('status')}"
+                for d in record.dependency_revalidation
+            ) or "none required (production unchanged, or no downstream components)",
             "",
             "## Verification result",
             f"**{record.verification_result}** — {outcome}",

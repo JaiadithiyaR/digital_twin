@@ -17,18 +17,21 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-TIMELINE_COLUMNS = ["ts", "cycle", "component", "actual", "predicted", "abs_error", "F_c", "F_U", "trigger_fired", "model_version"]
+TIMELINE_COLUMNS = [
+    "ts", "window", "component", "n", "actual", "predicted", "abs_error", "rmse", "mae", "wasserstein", "mk_mmd",
+    "F_c", "F_U", "trigger_fired", "model_version",
+]
 
 # Display-unit conversion (phase13 §0: "pick ONE display unit per KPI ... convert in one place,
-# state units everywhere"). Raw OAI columns are kbps (throughput) / microseconds (RLC delay) /
-# unitless ratios (BLER, PRB) — see docs/oai_twin.md. This is the ONLY place a raw stored value
-# is converted for display; metrics_timeline.csv itself stores RAW units (so it stays consistent
-# with everything else in this codebase that reads D1/model predictions directly) and graphs
-# apply this conversion at plot time only.
+# state units everywhere"). Target columns are already Mbps (throughput) / ms (RLC delay) /
+# unitless ratios (BLER, PRB) — see docs/oai_twin.md. metrics_timeline.csv stores those units;
+# graphs apply any display conversion here, at plot time only.
 DISPLAY_UNITS: dict[str, tuple[float, str]] = {
-    "dl_throughput": (1.0 / 1000.0, "Mbps"),  # stored kbps -> displayed Mbps
-    "ul_throughput": (1.0 / 1000.0, "Mbps"),
-    "dl_rlc_delay": (1.0 / 1000.0, "ms"),  # stored microseconds -> displayed ms
+    # build_oai_dataset already converts kbps -> Mbps and microseconds -> ms (docs/oai_twin.md
+    # §2); dividing by 1000 again here mislabelled every throughput/delay graph by 1000x.
+    "dl_throughput": (1.0, "Mbps"),
+    "ul_throughput": (1.0, "Mbps"),
+    "dl_rlc_delay": (1.0, "ms"),
     "dl_prb": (1.0, "ratio"),
     "ul_prb": (1.0, "ratio"),
     "dl_bler": (1.0, "ratio"),
@@ -55,11 +58,11 @@ def _save_plotted_csv(path_png: Path, df: pd.DataFrame) -> None:
 
 def plot_actual_vs_predicted(component: str, timeline_df: pd.DataFrame, out_dir: Path) -> Path:
     scale, unit = display_unit(component)
-    sub = timeline_df[timeline_df["component"] == component].sort_values("cycle")
+    sub = timeline_df[timeline_df["component"] == component].sort_values("window")
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(sub["cycle"], sub["actual"] * scale, label="actual", color="tab:blue")
-    ax.plot(sub["cycle"], sub["predicted"] * scale, label="predicted", color="tab:orange", linestyle="--")
-    ax.set_xlabel("cycle (1 per replayed second, run 8)")
+    ax.plot(sub["window"], sub["actual"] * scale, label="actual", color="tab:blue")
+    ax.plot(sub["window"], sub["predicted"] * scale, label="predicted", color="tab:orange", linestyle="--")
+    ax.set_xlabel("window (60 s of replayed data)")
     ax.set_ylabel(f"{component} ({unit})")
     ax.set_title(f"Actual vs predicted — {component}")
     ax.legend()
@@ -69,24 +72,24 @@ def plot_actual_vs_predicted(component: str, timeline_df: pd.DataFrame, out_dir:
     fig.savefig(out_path, dpi=300)
     fig.savefig(out_path.with_suffix(".pdf"))
     plt.close(fig)
-    _save_plotted_csv(out_path, sub[["cycle", "actual", "predicted"]])
+    _save_plotted_csv(out_path, sub[["window", "actual", "predicted"]])
     return out_path
 
 
 def plot_fidelity_component(component: str, timeline_df: pd.DataFrame, events: list[dict[str, Any]], threshold: float, out_dir: Path) -> Path:
-    sub = timeline_df[timeline_df["component"] == component].sort_values("cycle")
+    sub = timeline_df[timeline_df["component"] == component].sort_values("window")
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(sub["cycle"], sub["F_c"], label="F_c", color="tab:green")
+    ax.plot(sub["window"], sub["F_c"], label="F_c", color="tab:green")
     ax.axhline(threshold, color="gray", linestyle=":", label=f"threshold ({threshold})")
     trig = sub[sub["trigger_fired"].astype(bool)]
     if len(trig) > 0:
-        ax.scatter(trig["cycle"], trig["F_c"], color="black", marker="x", s=60, label="trigger", zorder=5)
+        ax.scatter(trig["window"], trig["F_c"], color="black", marker="x", s=60, label="trigger", zorder=5)
     for ev in events:
         if ev.get("component") != component:
             continue
         color = "green" if ev.get("gate_result") == "ACCEPT" else ("red" if ev.get("gate_result") == "REJECT" else "gray")
-        ax.axvline(ev.get("cycle", -1), color=color, linestyle="--", alpha=0.6)
-    ax.set_xlabel("cycle (1 per replayed second, run 8)")
+        ax.axvline(ev.get("window", -1), color=color, linestyle="--", alpha=0.6)
+    ax.set_xlabel("window (60 s of replayed data)")
     ax.set_ylabel("FidelityScore_c (dimensionless, 0-1)")
     ax.set_title(f"Fidelity over time — {component}")
     ax.legend()
@@ -96,19 +99,19 @@ def plot_fidelity_component(component: str, timeline_df: pd.DataFrame, events: l
     fig.savefig(out_path, dpi=300)
     fig.savefig(out_path.with_suffix(".pdf"))
     plt.close(fig)
-    _save_plotted_csv(out_path, sub[["cycle", "F_c", "trigger_fired"]])
+    _save_plotted_csv(out_path, sub[["window", "F_c", "trigger_fired"]])
     return out_path
 
 
 def plot_unified_fidelity(timeline_df: pd.DataFrame, events: list[dict[str, Any]], threshold: float, out_dir: Path) -> Path:
-    sub = timeline_df.drop_duplicates(subset=["cycle"]).sort_values("cycle")
+    sub = timeline_df.drop_duplicates(subset=["window"]).sort_values("window")
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(sub["cycle"], sub["F_U"], label="F_U (unified fidelity)", color="tab:purple")
+    ax.plot(sub["window"], sub["F_U"], label="F_U (unified fidelity)", color="tab:purple")
     ax.axhline(threshold, color="gray", linestyle=":", label=f"threshold ({threshold})")
     for ev in events:
         color = "green" if ev.get("gate_result") == "ACCEPT" else ("red" if ev.get("gate_result") == "REJECT" else "gray")
-        ax.axvline(ev.get("cycle", -1), color=color, linestyle="--", alpha=0.6)
-    ax.set_xlabel("cycle (1 per replayed second, run 8)")
+        ax.axvline(ev.get("window", -1), color=color, linestyle="--", alpha=0.6)
+    ax.set_xlabel("window (60 s of replayed data)")
     ax.set_ylabel("UnifiedFidelityScore (dimensionless, 0-1)")
     ax.set_title("Unified fidelity over time")
     ax.legend()
@@ -118,7 +121,7 @@ def plot_unified_fidelity(timeline_df: pd.DataFrame, events: list[dict[str, Any]
     fig.savefig(out_path, dpi=300)
     fig.savefig(out_path.with_suffix(".pdf"))
     plt.close(fig)
-    _save_plotted_csv(out_path, sub[["cycle", "F_U"]])
+    _save_plotted_csv(out_path, sub[["window", "F_U"]])
     return out_path
 
 

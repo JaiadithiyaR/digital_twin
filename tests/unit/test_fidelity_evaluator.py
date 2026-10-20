@@ -230,72 +230,28 @@ def test_unified_score_insufficient_history_when_too_few_components_defined():
     assert result.worst_component is None
 
 
-# --- Fidelity-based trigger + debounce (prompt.md §16a) ---------------------------------------
+# --- Adaptation policy moved out of the evaluator --------------------------------------------
+# The unified-score trigger was replaced by the per-component policy
+# (src/fidelity/component_policy.py — tests in test_component_policy.py). The evaluator only
+# measures; these pin that the measurement itself is unaffected by that move.
 
 
-def _scores(unified_target: float) -> dict[str, float | None]:
-    """Two components at the same value -> unified score (equal weighting) == that value exactly,
-    keeping these trigger tests' arithmetic hand-verifiable."""
-    return {"dl_throughput": unified_target, "dl_rlc_delay": unified_target}
+def test_evaluator_no_longer_owns_an_adaptation_trigger():
+    evaluator = FidelityEvaluator(_config())
+    assert not hasattr(evaluator, "check_fidelity_trigger")
 
 
-def test_trigger_does_not_fire_on_a_single_below_threshold_cycle():
-    evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=3))
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1st below-threshold cycle
-
-
-def test_trigger_fires_exactly_at_min_consecutive_evaluations():
-    evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=3))
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 2
-    trigger = evaluator.check_fidelity_trigger(_scores(0.2))  # 3 -> fires
-    assert trigger is not None
-    assert trigger.trigger_type == "fidelity_degradation"
-    assert trigger.component in ("dl_throughput", "dl_rlc_delay")
-    # severity = clip((threshold - unified)/threshold, 0, 1) = (0.5-0.2)/0.5 = 0.6
-    assert trigger.severity == pytest.approx(0.6)
-
-
-def test_trigger_resets_on_any_at_or_above_threshold_cycle():
-    evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=3))
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 2
-    assert evaluator.check_fidelity_trigger(_scores(0.9)) is None  # recovers -> resets counter
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # back to 1, not 3 -> must not fire yet
-
-
-def test_trigger_resets_after_firing_and_can_fire_again_later():
-    evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=2))
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1
-    first = evaluator.check_fidelity_trigger(_scores(0.2))  # 2 -> fires
-    assert first is not None
-    # Immediately still-degraded cycles must NOT re-fire until a fresh run accumulates again.
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1 (post-reset)
-    second = evaluator.check_fidelity_trigger(_scores(0.2))  # 2 -> fires again
-    assert second is not None
-
-
-def test_trigger_never_fires_from_insufficient_history_and_resets_counter():
-    evaluator = FidelityEvaluator(
-        _config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=2, unified_min_components=2)
-    )
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None  # 1 below-threshold cycle
-    # A cycle with too few defined components can't be evaluated at all -> must reset, not fire.
-    assert evaluator.check_fidelity_trigger({"dl_throughput": 0.2, "dl_rlc_delay": None}) is None
-    # Counter was reset, so one more below-threshold cycle must NOT fire (would need 2 fresh ones).
-    assert evaluator.check_fidelity_trigger(_scores(0.2)) is None
-
-
-def test_trigger_severity_is_clipped_to_zero_one():
-    evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=1))
-    # unified score far below zero -> (threshold - unified)/threshold would exceed 1.0 unclipped
-    trigger = evaluator.check_fidelity_trigger(_scores(-3.0))
-    assert trigger is not None
-    assert trigger.severity == 1.0
-
-
-def test_trigger_component_is_the_worst_scoring_one():
-    evaluator = FidelityEvaluator(_config(trigger_threshold=0.5, trigger_min_consecutive_evaluations=1))
-    trigger = evaluator.check_fidelity_trigger({"dl_throughput": 0.3, "dl_rlc_delay": 0.1, "ul_bler": 0.9})
-    assert trigger is not None
-    assert trigger.component == "dl_rlc_delay"  # argmin, matches compute_unified_score's own worst_component
+def test_per_component_scores_feed_the_unified_report_unchanged():
+    """Each component's FidelityScore_c comes from its own rolling windows (the original
+    per-component definition); the unified score is still exactly their equal-weight mean."""
+    evaluator = FidelityEvaluator(_config(min_history_for_normalization=2))
+    scores = {}
+    for component, offset in (("comp_x", 0.0), ("comp_y", 5.0)):
+        for a in (1.0, 2.0, 3.0):
+            result = evaluator.evaluate(component, [offset, offset + 1.0], [offset + a, offset + 1.0 + a])
+        scores[component] = result.fidelity_score
+    assert all(s is not None for s in scores.values())
+    # identical error pattern per component -> identical per-component scores (no cross-talk)
+    assert scores["comp_x"] == pytest.approx(scores["comp_y"], rel=1e-12)
+    unified = evaluator.compute_unified_score(scores)
+    assert unified.unified_score == pytest.approx(sum(scores.values()) / 2)
